@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  index,
   inet,
   pgTable,
   text,
@@ -37,5 +38,7 @@ export const waitlistEntries = pgTable(
     uniqueIndex("waitlist_entries_email_active_uniq")
       .on(t.email)
       .where(sql`${t.deletedAt} is null`),
+    // Admin "newest signups" listing.
+    index("waitlist_entries_created_idx").on(t.createdAt),
   ],
 );

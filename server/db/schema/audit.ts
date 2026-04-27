@@ -9,6 +9,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { eventActorTypeEnum } from "./enums";
 import { users } from "./auth";
+import type { AuditDetails } from "./zod";
 
 /**
  * Append-only audit trail. Renamed from the original plan's
@@ -37,7 +38,7 @@ export const auditLog = pgTable(
     action: text("action").notNull(),
     targetType: text("target_type").notNull(),
     targetId: uuid("target_id"),
-    details: jsonb("details"),
+    details: jsonb("details").$type<AuditDetails>(),
     ipAddress: inet("ip_address"),
     userAgent: text("user_agent"),
     createdAt: timestamp("created_at", { withTimezone: true })

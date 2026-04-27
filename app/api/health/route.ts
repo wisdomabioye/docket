@@ -1,35 +1,53 @@
+import { sql } from "drizzle-orm";
 import { env } from "@/config/env";
 import { APP_INFO } from "@/config";
 
 /**
  * Liveness/readiness probe. Path is centralized in `config/api.routes.ts`
- * as `API_ROUTES.health` — keep this file's location aligned with that
- * constant.
+ * as `API_ROUTES.health`.
  *
- * Each integration field upgrades from `"not_configured"` → `"connected"`
- * as its env var arrives in a later stage.
+ * `database`: actually pings via `select 1` when `DATABASE_URL` is present.
+ * Other integrations: env-presence only until their owning stage activates them.
  */
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function status(present: boolean): "connected" | "not_configured" {
-  return present ? "connected" : "not_configured";
+type IntegrationStatus = "connected" | "error" | "not_configured";
+
+function presence(value: string | undefined): IntegrationStatus {
+  return value ? "connected" : "not_configured";
+}
+
+async function pingDatabase(): Promise<IntegrationStatus> {
+  if (!env.DATABASE_URL) return "not_configured";
+  try {
+    // Lazy import — avoids importing the DB client (and its `server-only`
+    // marker) at module load time when the env isn't set.
+    const { db } = await import("@/server/db/client");
+    await db.execute(sql`select 1`);
+    return "connected";
+  } catch {
+    return "error";
+  }
 }
 
 export async function GET() {
+  const database = await pingDatabase();
+  const overall = database === "error" ? "degraded" : "ok";
+
   return Response.json({
-    status: "ok",
+    status: overall,
     app: APP_INFO.name,
     env: env.NODE_ENV,
     integrations: {
-      database: status(Boolean(env.DATABASE_URL)),
-      auth: status(Boolean(env.AUTH_SECRET)),
-      computer: status(Boolean(env.PERPLEXITY_COMPUTER_API_KEY)),
-      stripe: status(Boolean(env.STRIPE_SECRET_KEY)),
-      postmark: status(Boolean(env.POSTMARK_API_KEY)),
-      inngest: status(Boolean(env.INNGEST_EVENT_KEY)),
-      redis: status(Boolean(env.UPSTASH_REDIS_REST_URL)),
+      database,
+      auth: presence(env.AUTH_SECRET),
+      computer: presence(env.PERPLEXITY_COMPUTER_API_KEY),
+      stripe: presence(env.STRIPE_SECRET_KEY),
+      postmark: presence(env.POSTMARK_API_KEY),
+      inngest: presence(env.INNGEST_EVENT_KEY),
+      redis: presence(env.UPSTASH_REDIS_REST_URL),
     },
     timestamp: new Date().toISOString(),
   });

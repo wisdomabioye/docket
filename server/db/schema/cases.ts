@@ -26,6 +26,14 @@ import {
 } from "./enums";
 import { users } from "./auth";
 import { organizations } from "./organizations";
+import type {
+  AuditDetails,
+  BeneficiaryData,
+  CriteriaAnalysis,
+  DocumentChecklist,
+  EvidencePlan,
+  OutputMetadata,
+} from "./zod";
 
 /**
  * Top-level case row. Owner is the organization (multi-attorney firms are
@@ -59,12 +67,14 @@ export const cases = pgTable(
     beneficiaryUserId: uuid("beneficiary_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
-    beneficiaryData: jsonb("beneficiary_data"),
+    beneficiaryData: jsonb("beneficiary_data").$type<BeneficiaryData>(),
 
-    // AI work products (Zod-typed at the service boundary)
-    evidencePlan: jsonb("evidence_plan"),
-    criteriaAnalysis: jsonb("criteria_analysis"),
-    documentChecklist: jsonb("document_checklist"),
+    // AI work products. `.$type<>()` links the column to its Zod schema
+    // (`server/db/schema/zod/`) so Drizzle's inferred row type stays in
+    // sync with the source-of-truth Zod definition.
+    evidencePlan: jsonb("evidence_plan").$type<EvidencePlan>(),
+    criteriaAnalysis: jsonb("criteria_analysis").$type<CriteriaAnalysis>(),
+    documentChecklist: jsonb("document_checklist").$type<DocumentChecklist>(),
 
     // Money
     caseFeeCents: bigint("case_fee_cents", { mode: "bigint" }),
@@ -93,7 +103,17 @@ export const cases = pgTable(
     index("cases_org_status_idx")
       .on(t.organizationId, t.status)
       .where(sql`${t.deletedAt} is null`),
-    index("cases_visa_type_idx").on(t.visaType).where(sql`${t.deletedAt} is null`),
+    index("cases_visa_type_idx")
+      .on(t.visaType)
+      .where(sql`${t.deletedAt} is null`),
+    // Billing queries: "list all cases pending invoice / paid this month".
+    index("cases_revenue_status_idx")
+      .on(t.revenueStatus)
+      .where(sql`${t.deletedAt} is null`),
+    // Reverse-lookup from an invoice to its cases (Stage 10).
+    index("cases_invoice_idx")
+      .on(t.invoiceId)
+      .where(sql`${t.invoiceId} is not null`),
   ],
 );
 
@@ -192,6 +212,13 @@ export const caseDocuments = pgTable(
     uniqueIndex("case_documents_case_sha_uniq")
       .on(t.caseId, t.sha256)
       .where(sql`${t.deletedAt} is null`),
+    // Inngest job dispatch: "what's waiting to be extracted?" Partial keeps
+    // the index small — most rows will be in terminal states (completed/failed).
+    index("case_documents_extraction_pending_idx")
+      .on(t.extractionStatus)
+      .where(sql`${t.extractionStatus} in ('pending', 'processing')`),
+    // Admin "what did this user upload" investigation.
+    index("case_documents_uploaded_by_idx").on(t.uploadedBy),
   ],
 );
 
@@ -222,7 +249,7 @@ export const caseOutputs = pgTable(
 
     title: text("title"),
     content: text("content"), // markdown / rich text. Move to object storage if > 1MB.
-    metadata: jsonb("metadata"), // output-type-specific (recommender_name, etc.)
+    metadata: jsonb("metadata").$type<OutputMetadata>(),
 
     // Computer attribution
     author: outputAuthorEnum("author").notNull().default("computer"),
@@ -276,7 +303,7 @@ export const caseEvents = pgTable(
       onDelete: "set null",
     }),
     eventType: text("event_type").notNull(),
-    details: jsonb("details"),
+    details: jsonb("details").$type<AuditDetails>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -284,6 +311,10 @@ export const caseEvents = pgTable(
   (t) => [
     index("case_events_case_created_idx").on(t.caseId, t.createdAt),
     index("case_events_type_idx").on(t.eventType),
+    // "What did this user do across all cases" — audit + activity feed.
+    index("case_events_actor_idx")
+      .on(t.actorUserId, t.createdAt)
+      .where(sql`${t.actorUserId} is not null`),
   ],
 );
 
@@ -314,7 +345,10 @@ export const caseComputeLedger = pgTable(
       .defaultNow(),
   },
   (t) => [
-    index("case_compute_ledger_case_idx").on(t.caseId),
+    // Composite covers per-case time-bounded sums (current spend, daily
+    // burndown). Leading column also serves "all entries for case" lookups.
+    index("case_compute_ledger_case_occurred_idx").on(t.caseId, t.occurredAt),
+    // Cross-case time-range queries (system-wide spend per day).
     index("case_compute_ledger_occurred_idx").on(t.occurredAt),
   ],
 );

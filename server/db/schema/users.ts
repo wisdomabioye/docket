@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  index,
   pgTable,
   primaryKey,
   text,
@@ -29,7 +30,11 @@ export const userRoles = pgTable(
       onDelete: "set null",
     }),
   },
-  (t) => [primaryKey({ columns: [t.userId, t.role] })],
+  (t) => [
+    primaryKey({ columns: [t.userId, t.role] }),
+    // Reverse-lookup: "list every admin" / "list every attorney".
+    index("user_roles_role_idx").on(t.role),
+  ],
 );
 
 /**
@@ -73,6 +78,10 @@ export const attorneyProfiles = pgTable(
     // versioned profiles — for now, single row.
     uniqueIndex("attorney_profiles_user_uniq")
       .on(t.userId)
+      .where(sql`${t.deletedAt} is null`),
+    // Admin "list pending attorneys" query.
+    index("attorney_profiles_status_idx")
+      .on(t.status)
       .where(sql`${t.deletedAt} is null`),
   ],
 );

@@ -10,3 +10,4 @@ export * from "./organizations";
 export * from "./cases";
 export * from "./audit";
 export * from "./marketing";
+export * from "./relations";

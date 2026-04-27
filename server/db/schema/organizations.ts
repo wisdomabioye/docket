@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  index,
   integer,
   pgTable,
   text,
@@ -41,6 +42,11 @@ export const organizations = pgTable(
     uniqueIndex("organizations_slug_active_uniq")
       .on(t.slug)
       .where(sql`${t.deletedAt} is null`),
+    // Stripe webhook lookup: customer.subscription.* → org. Partial because
+    // most orgs may never have a Stripe customer.
+    uniqueIndex("organizations_stripe_customer_uniq")
+      .on(t.stripeCustomerId)
+      .where(sql`${t.stripeCustomerId} is not null`),
   ],
 );
 
@@ -79,6 +85,11 @@ export const organizationMembers = pgTable(
   (t) => [
     uniqueIndex("organization_members_org_user_active_uniq")
       .on(t.organizationId, t.userId)
+      .where(sql`${t.removedAt} is null`),
+    // Reverse-lookup: "what orgs is this user in?" The composite above is
+    // (org_id, user_id) so user_id alone needs its own index.
+    index("organization_members_user_idx")
+      .on(t.userId)
       .where(sql`${t.removedAt} is null`),
   ],
 );
