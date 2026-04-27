@@ -1,0 +1,1 @@
+ALTER TABLE "attorney_profiles" ADD COLUMN "submitted_at" timestamp with time zone;

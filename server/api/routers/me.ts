@@ -65,6 +65,7 @@ export const meRouter = router({
         status: attorneyProfiles.status,
         barNumber: attorneyProfiles.barNumber,
         barStates: attorneyProfiles.barStates,
+        submittedAt: attorneyProfiles.submittedAt,
         agreementSignedAt: attorneyProfiles.agreementSignedAt,
       })
       .from(attorneyProfiles)

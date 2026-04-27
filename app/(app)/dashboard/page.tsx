@@ -19,8 +19,10 @@ export default async function DashboardPage() {
   if (!me) redirect(APP_ROUTES.authError + "?error=session-mismatch");
 
   // Treat null profile the same as pending — both mean "not yet activated."
+  // Send the user to /onboarding instead of just showing a banner.
   const needsOnboarding =
     !me.attorneyProfile || me.attorneyProfile.status !== "active";
+  if (needsOnboarding) redirect(APP_ROUTES.onboarding);
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12 space-y-8">
@@ -35,13 +37,6 @@ export default async function DashboardPage() {
           Welcome, {me.user.name ?? me.user.email}
         </h1>
       </header>
-
-      {needsOnboarding && (
-        <p className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Your attorney profile is pending admin activation. We&rsquo;ll email
-          you when you&rsquo;re cleared to start cases.
-        </p>
-      )}
 
       <section className="space-y-2 text-sm">
         <h2 className="text-base font-medium">Account</h2>

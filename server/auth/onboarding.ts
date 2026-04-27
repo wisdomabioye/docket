@@ -33,6 +33,15 @@ export async function onSignIn(args: {
   const { userId } = args;
 
   await db.transaction(async (tx) => {
+    // Serialize concurrent sign-ins for the same user. Without this, two
+    // sign-ins racing the "is the user already a member?" check both see
+    // empty, both create a new org, both succeed → duplicate orgs.
+    // `pg_advisory_xact_lock` releases at transaction end (commit OR
+    // rollback). Key derived from user id via `hashtextextended` (bigint).
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`onsignin:${userId}`}, 0))`,
+    );
+
     const [user] = await tx
       .select({ id: users.id, name: users.name, email: users.email })
       .from(users)

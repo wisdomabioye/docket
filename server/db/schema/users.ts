@@ -61,6 +61,12 @@ export const attorneyProfiles = pgTable(
 
     status: attorneyStatusEnum("status").notNull().default("pending"),
 
+    // Set when the attorney completes the onboarding form. Distinct from
+    // `created_at` (auto-provisioned at first sign-in) so admin can see
+    // who's actually waiting for activation vs. who just signed up but
+    // hasn't filled out the form.
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+
     agreementSignedAt: timestamp("agreement_signed_at", { withTimezone: true }),
     agreementStoragePath: text("agreement_storage_path"),
     acceptedTermsVersion: text("accepted_terms_version"),

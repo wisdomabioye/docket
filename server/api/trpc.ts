@@ -2,8 +2,9 @@ import "server-only";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { ZodError } from "zod";
 import superjson from "superjson";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db, type Db } from "@/server/db/client";
+import { userRoles } from "@/server/db/schema";
 import { auth } from "@/server/auth/config";
 import { isAppError, type AppError } from "@/lib/errors";
 
@@ -90,6 +91,33 @@ export const publicProcedure = t.procedure;
 
 /** Protected procedure — requires session, DB wrapped in user-scoped tx. */
 export const protectedProcedure = t.procedure.use(requireAuthAndDb);
+
+/**
+ * Admin procedure — extends protectedProcedure with a global-role check.
+ * Reads `user_roles` via the SECURITY DEFINER `is_admin()` SQL helper so
+ * the lookup itself bypasses RLS (otherwise the user_roles RLS policy
+ * would only return the caller's own row).
+ *
+ * Throws FORBIDDEN if the caller is authenticated but lacks the admin role.
+ */
+const requireAdmin = t.middleware(async ({ ctx, next }) => {
+  // ctx is already enriched by requireAuthAndDb at this point.
+  const c = ctx as typeof ctx & { db: Db; userId: string };
+  const [row] = await c.db
+    .select({ role: userRoles.role })
+    .from(userRoles)
+    .where(eq(userRoles.userId, c.userId));
+  // The user_roles RLS policy returns the caller's own rows; we filter to admin.
+  const isAdmin = await c.db.execute<{ ok: boolean }>(
+    sql`select is_admin() as ok`,
+  );
+  if (!isAdmin[0]?.ok) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "admin role required" });
+  }
+  return next({ ctx: { ...c, role: row?.role ?? "admin" } });
+});
+
+export const adminProcedure = protectedProcedure.use(requireAdmin);
 
 /**
  * Map service-layer errors to tRPC errors at the boundary. tRPC's middleware
