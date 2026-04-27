@@ -79,6 +79,33 @@ config addition.
 
 ---
 
+### #12 — Stage 04 deferred (waitlist + marketing)
+
+Status: Documented; functional but not polished.
+Surfaced: 2026-04-27 (Stage 04 review)
+
+1. **No rate limiting on `marketing.joinWaitlist`** — Upstash Redis is in
+   the env schema but not wired. A bot (or a typing visitor) could spam
+   the endpoint. Honeypot defeats simple bots; still want per-IP cap
+   (e.g. 5/min) once Upstash is live.
+2. **No CAPTCHA / Turnstile** — honeypot only. Phase 2 if abuse appears.
+3. **No PostHog `waitlist_signup` event** — env keys not configured;
+   `lib/posthog.ts` stubs no-op when missing. Wire in Stage 11
+   (notifications/polish) after PostHog account exists.
+4. **`/terms` and `/privacy` are Phase-1 placeholders** — founder must
+   replace with legal-reviewed copy before launch. Bumping
+   `TERMS_VERSION` (in `server/auth/terms.ts`) re-prompts every attorney
+   to re-accept.
+5. **Robots.txt uses `NODE_ENV === 'production'`** — but Vercel preview
+   deploys also set `NODE_ENV=production` and would `allow:"/"`. Should
+   gate on `VERCEL_ENV === 'production'` once the env var is added.
+   Until fixed, preview deploys risk SEO indexing.
+6. **No tests for landing page rendering** — `app/page.tsx` and
+   `WaitlistForm` are exercised manually only. The procedure underneath
+   is well-covered.
+
+---
+
 ### #10 — Performance optimizations (measured pre-empt)
 
 Status: All deferred until measured. Listed so we don't lose them.
