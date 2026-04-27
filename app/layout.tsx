@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { DM_Sans, DM_Serif_Display, JetBrains_Mono } from "next/font/google";
 import { APP_INFO, pageTitle } from "@/config";
+import { TRPCReactProvider } from "@/lib/trpc/react";
 import "./globals.css";
 
 const sans = DM_Sans({
@@ -36,7 +37,9 @@ export default function RootLayout({
       lang="en"
       className={`${sans.variable} ${serif.variable} ${mono.variable}`}
     >
-      <body>{children}</body>
+      <body>
+        <TRPCReactProvider>{children}</TRPCReactProvider>
+      </body>
     </html>
   );
 }

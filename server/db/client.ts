@@ -9,15 +9,23 @@ if (!env.DATABASE_URL) {
 }
 
 /**
- * `prepare: false` is required when connecting through a transaction-mode
- * pooler (PgBouncer, Supavisor). It's harmless on a direct connection.
+ * Pool sizing notes:
  *
- * `max: 1` keeps the connection count bounded in serverless environments —
- * each request gets its own short-lived connection from the pooler.
+ * - `prepare: false` — required for transaction-mode poolers (PgBouncer,
+ *   Supavisor). Harmless on a direct connection.
+ * - `max: 10` — every Auth.js `auth()`, every tRPC procedure, and every
+ *   server-component `api.X.Y()` opens a connection. Keeping max:1 (the
+ *   old setting) serializes all of those across every request, so a single
+ *   page render that calls `auth()` then `me.current()` waits on itself.
+ *   10 is comfortable for one Next.js dev process; production values come
+ *   from the deploy-time deduction (Vercel functions vs. self-host).
+ * - `idle_timeout: 20` — close idle connections after 20s. Lets serverless
+ *   environments scale down without holding sockets.
  */
 const queryClient = postgres(env.DATABASE_URL, {
   prepare: false,
-  max: 1,
+  max: 10,
+  idle_timeout: 20,
 });
 
 export const db = drizzle(queryClient, { schema, casing: "snake_case" });
