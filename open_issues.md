@@ -79,6 +79,91 @@ config addition.
 
 ---
 
+### #14 — Stage 05 review backlog
+
+Status: Documented; everything else from the careful review pass on Stage 05.
+Surfaced: 2026-04-27 (Stage 05 review)
+
+1. **`appErrorCode` helper duplicated** — `server/api/trpc.ts` (full
+   mapping) + `server/api/routers/case.ts` (subset). Move to
+   `lib/errors.ts` once a third caller appears.
+2. **"Authz via ctx.db, then write via ownerDb" pattern repeated** in
+   4 case procedures (create / archive / updateBeneficiary /
+   completeIntake). Extract `withCaseAuthz(caseId, fn)` helper if a
+   fifth procedure adopts it.
+3. **Status string formatter** — `s.replace(/_/g, " ")` written
+   inline in dashboard + case detail. Move to a `formatStatus()`
+   helper in `lib/case-status.ts` when a third caller appears.
+4. **Beneficiary jsonb casts in pages are redundant** —
+   `(data.beneficiaryData as { fullName?: string } | null) ?? {}` in
+   case detail / intake / dashboard. Drizzle's `.$type<>()` already
+   infers `BeneficiaryData | null`. Direct field access with optional
+   chain works without the cast. Cosmetic.
+5. **No test for `case.create` PRECONDITION_FAILED** path (user with
+   no organization). Hard to construct in current seed; add when seed
+   has a user-without-org fixture.
+6. **No test for `case.archive` from a non-participant** — RLS would
+   deny via the authzCheck read, returning NOT_FOUND. Worth a test.
+7. **`reviewSlaHours` is stored but unenforced** — no reminder email,
+   no overdue UI. Phase 1 acceptable; Stage 11 (notifications) wires
+   it.
+8. **`case.list` returns full beneficiaryData jsonb in every row** —
+   for a 25-item page that's potentially 25 KB. Could project just
+   the fullName on the list endpoint and require `case.get` for full
+   data. Pre-optimization; phase 2 if measured.
+
+---
+
+### #13 — Stage 05 RLS bypass pattern + deferred items
+
+Status: Documented; functional but expanding the RLS bypass pattern.
+Surfaced: 2026-04-27 (Stage 05 implementation)
+
+1. **Several `case` procedures use the owner connection (RLS bypass) for
+   writes** because the policies block the operation. Specifically:
+   - `case.create` — bootstrap problem: `cases.WITH CHECK` requires
+     `user_in_case(id)` but no participant exists yet on a fresh case.
+   - `case.archive` — sets `deleted_at`, which flips the policy's
+     `deleted_at is null` predicate to false → UPDATE rejected.
+   - `case.updateBeneficiary` — writes to `case_events`, which has no
+     participant INSERT policy.
+   - `case.completeIntake` — same (writes case_events via transitionCase).
+
+   In all four, **app-layer auth runs first** via the RLS-engaged
+   `ctx.db` (membership check or case visibility read), and only then
+   does the actual mutation run on `ownerDb.transaction()`. Documented
+   in each procedure. Pattern is correct but more bypasses than I'd like.
+
+   **Phase-2 fix:** add proper INSERT policies so participants can write
+   case_events / cases via their own role:
+   - `case_events_participant_insert`: allow when `user_in_case(case_id)`
+   - `cases_member_insert`: allow on insert when `user_in_org(organization_id)`
+   - Don't gate `cases` UPDATE on `deleted_at is null` in WITH CHECK
+     (only USING) so soft-delete works.
+   Then drop the owner-bypass paths in the case router.
+
+2. **No tests for the case detail / intake / dashboard pages** — only
+   the procedures underneath. Manual smoke after sign-in.
+
+3. **`case.list` cursor pagination uses `createdAt < cursor.createdAt`
+   only** — the `id` tiebreaker in the cursor object is captured but
+   not used in the WHERE. Two cases with identical timestamps could
+   both fall on the page boundary. Vanishingly rare; document.
+
+4. **Beneficiary jsonb merge is shallow** — `{ ...existing, ...patch }`.
+   Nested objects in patch overwrite nested objects in existing entirely.
+   Phase 1 BeneficiaryDataSchema is flat; harmless. Stage 06+ may add
+   nested fields where this matters.
+
+5. **`appErrorCode` helper duplicated** between trpc.ts (full) and
+   case.ts (subset). Could DRY when more routers throw AppError.
+
+6. **No participants-management procedures yet** — adding/removing
+   paralegals from a case (case_participants_primary_insert RLS policy
+   exists but no tRPC procedure exposes it). Stage 09 admin work.
+
+---
+
 ### #12 — Stage 04 deferred (waitlist + marketing)
 
 Status: Documented; functional but not polished.
