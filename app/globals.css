@@ -1,26 +1,27 @@
 @import "tailwindcss";
 
+/*
+ * Stage 00 minimum: brand background, ink text, and the three font variables
+ * wired in `app/layout.tsx`. The full design-token block (palette, spacing,
+ * radii, dark theme via `data-theme="dark"`) lands in Stage 00b via Tailwind 4's
+ * `@theme` directive.
+ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-cream: #f5f1e8;
+  --color-ink: #0b1221;
+  --color-ink-muted: #5a6173;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-cream);
+  color: var(--color-ink);
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
