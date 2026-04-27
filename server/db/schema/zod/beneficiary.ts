@@ -14,7 +14,7 @@ import { z } from "zod";
 export const BeneficiaryDataSchema = z
   .object({
     fullName: z.string().min(1).max(200),
-    dateOfBirth: z.string().date(), // ISO 8601
+    dateOfBirth: z.iso.date(), // ISO 8601 YYYY-MM-DD
     nationality: z.string().min(2).max(100),
     currentLocation: z.string().max(200),
     occupation: z.string().max(200),
