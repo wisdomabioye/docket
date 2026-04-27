@@ -1,5 +1,5 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db, type Db } from "@/server/db/client";
 import {
   attorneyProfiles,
@@ -8,6 +8,7 @@ import {
   userRoles,
   users,
 } from "@/server/db/schema";
+import { randomSuffix, slugBase } from "./slug";
 
 /**
  * One-time provisioning for a brand-new user.
@@ -42,6 +43,9 @@ export async function onSignIn(args: {
     const orgId = await ensureOrganization(tx as unknown as Db, user);
     if (!orgId) return; // unrecoverable slug-generation failure; logged below
 
+    // The membership / profile unique indexes are PARTIAL (WHERE
+    // removed_at/deleted_at IS NULL). Postgres requires the same predicate
+    // in the ON CONFLICT clause to match the partial index.
     await tx
       .insert(organizationMembers)
       .values({
@@ -51,8 +55,12 @@ export async function onSignIn(args: {
         status: "active",
         acceptedAt: new Date(),
       })
-      .onConflictDoNothing();
+      .onConflictDoNothing({
+        target: [organizationMembers.organizationId, organizationMembers.userId],
+        where: sql`${organizationMembers.removedAt} is null`,
+      });
 
+    // user_roles PK is `(user_id, role)` — non-partial — bare conflict OK.
     await tx
       .insert(userRoles)
       .values({ userId, role: "attorney" })
@@ -61,7 +69,10 @@ export async function onSignIn(args: {
     await tx
       .insert(attorneyProfiles)
       .values({ userId, status: "pending" })
-      .onConflictDoNothing();
+      .onConflictDoNothing({
+        target: attorneyProfiles.userId,
+        where: sql`${attorneyProfiles.deletedAt} is null`,
+      });
   });
 }
 
@@ -87,10 +98,15 @@ async function ensureOrganization(
 
   for (let attempt = 0; attempt < MAX_SLUG_ATTEMPTS; attempt++) {
     const slug = `${base}-${randomSuffix()}`;
+    // Partial unique index — must repeat the WHERE clause for ON CONFLICT
+    // to find the correct constraint.
     const [created] = await tx
       .insert(organizations)
       .values({ name: orgName, slug })
-      .onConflictDoNothing({ target: organizations.slug })
+      .onConflictDoNothing({
+        target: organizations.slug,
+        where: sql`${organizations.deletedAt} is null`,
+      })
       .returning({ id: organizations.id });
     if (created) return created.id;
   }
@@ -102,18 +118,4 @@ async function ensureOrganization(
 }
 
 const MAX_SLUG_ATTEMPTS = 5;
-
-/** Email-username, sanitized. TODO(stage-03): reserved-word slug blocklist. */
-function slugBase(email: string): string {
-  const local = (email.split("@")[0] ?? "user")
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 32);
-  return local || "user";
-}
-
-function randomSuffix(): string {
-  return Math.random().toString(36).slice(2, 8);
-}
+// TODO(stage-03): reserved-word slug blocklist.

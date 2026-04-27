@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { auth } from "@/server/auth/config";
-import { APP_ROUTES, PUBLIC_ROUTES } from "@/config";
+import { APP_ROUTES } from "@/config";
+import { isPublicRoute } from "@/server/auth/route-classifier";
 
 /**
  * Next 16 proxy (was `middleware.ts`). Runs on every matched request.
@@ -38,17 +39,6 @@ export async function proxy(request: NextRequest) {
   }
 
   return NextResponse.next();
-}
-
-function isPublicRoute(pathname: string): boolean {
-  if (PUBLIC_ROUTES.includes(pathname)) return true;
-  // Treat /api/auth/* and /auth/* as public (Auth.js callback paths).
-  return (
-    pathname.startsWith("/api/auth") ||
-    pathname.startsWith("/auth/") ||
-    pathname.startsWith("/_next/") ||
-    pathname === "/favicon.ico"
-  );
 }
 
 export const config = {

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth, signIn } from "@/server/auth/config";
+import { safeCallbackUrl } from "@/server/auth/callback-url";
 import { APP_INFO, APP_ROUTES } from "@/config";
 import { env } from "@/config/env";
 
@@ -23,13 +24,7 @@ export default async function LoginPage({ searchParams }: Props) {
   if (session?.user) redirect(APP_ROUTES.dashboard);
 
   const params = await searchParams;
-  // Same-origin only — block open-redirect via `?callbackUrl=https://evil.com`.
-  // Must start with `/`, must not start with `//` (protocol-relative URL).
-  const requested = params.callbackUrl ?? "";
-  const callbackUrl =
-    requested.startsWith("/") && !requested.startsWith("//")
-      ? requested
-      : APP_ROUTES.dashboard;
+  const callbackUrl = safeCallbackUrl(params.callbackUrl);
 
   return (
     <main className="flex min-h-screen items-center justify-center px-6">
