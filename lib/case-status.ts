@@ -67,3 +67,27 @@ export function canTransition(from: CaseStatus, to: CaseStatus): boolean {
 export function legalNextStatuses(from: CaseStatus): readonly CaseStatus[] {
   return TRANSITIONS[from];
 }
+
+/**
+ * Statuses where the attorney is allowed to upload new evidence files.
+ * `build_failed` is included — the attorney typically adds/replaces a
+ * missing document and retries the build.
+ */
+export const UPLOADABLE_STATUSES = [
+  "intake",
+  "documents_pending",
+  "extracting",
+  "ready_to_build",
+  "build_failed",
+  "needs_revision",
+] as const satisfies readonly CaseStatus[];
+
+export function canUploadInStatus(s: CaseStatus): boolean {
+  return (UPLOADABLE_STATUSES as readonly CaseStatus[]).includes(s);
+}
+
+/** Human-friendly status label (`needs_revision` → `Needs revision`). */
+export function formatStatus(s: CaseStatus): string {
+  const spaced = s.replace(/_/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}

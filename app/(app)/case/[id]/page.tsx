@@ -59,9 +59,12 @@ export default async function CaseDetailPage({ params }: Props) {
         >
           Intake
         </Link>
-        <span className="py-2 text-[var(--color-ink-muted)]/50" title="Stage 06">
+        <Link
+          href={APP_ROUTES.caseDocuments(data.id)}
+          className="py-2 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+        >
           Documents
-        </span>
+        </Link>
         <span className="py-2 text-[var(--color-ink-muted)]/50" title="Stage 08">
           Outputs
         </span>

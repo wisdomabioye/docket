@@ -23,3 +23,34 @@ export const VISA_TYPES = [
 ] as const;
 
 export type VisaType = (typeof VISA_TYPES)[number];
+
+export const DOCUMENT_TYPES = [
+  "cv_resume",
+  "publication",
+  "patent",
+  "press",
+  "award",
+  "membership",
+  "recommendation_letter",
+  "employment_letter",
+  "salary_evidence",
+  "other",
+] as const;
+
+export type DocumentType = (typeof DOCUMENT_TYPES)[number];
+
+export const DOCUMENT_TYPE_LABELS: Record<DocumentType, string> = {
+  cv_resume: "CV / résumé",
+  publication: "Publication",
+  patent: "Patent",
+  press: "Press / media",
+  award: "Award",
+  membership: "Membership",
+  recommendation_letter: "Recommendation letter",
+  employment_letter: "Employment letter",
+  salary_evidence: "Salary evidence",
+  other: "Other",
+};
+
+/** Cents columns are bigint at the DB; this is the per-file upload cap. */
+export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;

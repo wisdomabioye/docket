@@ -79,6 +79,72 @@ config addition.
 
 ---
 
+### #16 — Stage 06 review backlog
+
+Status: Documented; remaining low-priority items from the Stage 06 review.
+Surfaced: 2026-04-27 (Stage 06 review)
+
+1. **Storage `put` happens inside the DB transaction** in
+   `uploadAndExtract`. If the surrounding tx rolls back AFTER `put`
+   succeeded, an orphan file remains on disk. Phase-2 fix: do `put`
+   first, capture the key, then insert the row referencing it; on row
+   insert failure, `delete` the file (best-effort).
+2. **`DocumentsPanel`'s local `Doc` type duplicates the router output
+   shape** — could derive from `RouterOutputs['document']['list'][number]`
+   to stay in sync. Cosmetic.
+3. **No download UI on uploaded documents** — `getDownloadUrl` exists
+   in the router but DocumentsPanel doesn't expose a "Download" link.
+4. **DocumentsPanel uploads files sequentially** (`for...of`). For a
+   multi-file drop, parallel `Promise.all` would be faster. Not a bug.
+5. **`randomToken` exported from `local.ts` is unused** — leave for
+   when future flows need an unguessable token.
+6. **No direct test for `verifySignedUrl`** — it's exercised indirectly
+   by `getDownloadUrl` returning a valid URL, but unit coverage of the
+   HMAC + expiry logic would catch regressions.
+7. **No active-tab indicator on the Documents page** — the case detail
+   nav shows "Overview" highlighted; the documents page doesn't have a
+   sub-nav at all. UX polish for Stage 00b/00c (design system).
+
+---
+
+### #15 — Stage 06 deferred (document management)
+
+Status: Documented; functional but several deliberate Phase-1 cuts.
+Surfaced: 2026-04-27 (Stage 06 implementation)
+
+1. **Storage backend is local-fs only** — `LocalStorage` writes under
+   `./storage/`. No production backend yet (S3/R2/Supabase Storage).
+   Stage 12 implements `S3Storage` against the same `Storage` interface
+   and switches via env (`STORAGE_BACKEND=s3`). Until then prod can't
+   ship.
+2. **Synchronous extraction in the upload procedure** — pdf-parse runs
+   inline. For large PDFs the upload response can take 5–10s. Stage 07
+   moves extraction to an Inngest function that reuses the same
+   `extractAndPersist()` service.
+3. **Server proxies all file bytes** — `document.upload` accepts
+   base64-encoded content via tRPC. Phase 2 swaps to direct-to-bucket
+   presigned uploads.
+4. **No magic-byte MIME validation** — we trust the declared `mimeType`.
+   CLAUDE.md §8 mandates server-side magic-byte sniff. Add when uploads
+   come from less-trusted sources than authenticated attorneys.
+5. **No image OCR** — image MIMEs are in the allowlist but `extract()`
+   returns "unsupported" for them. Tesseract.js adds 50MB; defer.
+6. **No per-case 500 MB cap** — per-file 25 MB is enforced. Spec §13.3
+   wants the per-case ceiling too.
+7. **No virus scanning** — Phase 2 if adversarial uploads appear.
+8. **`/api/files/[token]` returns `application/octet-stream`** — sniff
+   by extension and set the right content-type for inline preview.
+9. **Extraction triggers no case status transition** — Stage 07 adds
+   `case.markDocumentsComplete` to flip `documents_pending` →
+   `extracting` → `ready_to_build`.
+10. **No tests for the Documents page UI** (`DocumentsPanel.tsx`) —
+    procedures are well-covered (10 tests).
+11. **Base64 path isn't validated** — `Buffer.from(garbage, "base64")`
+    returns whatever; failures surface in pdf-parse with a useful
+    error.
+
+---
+
 ### #14 — Stage 05 review backlog
 
 Status: Documented; everything else from the careful review pass on Stage 05.

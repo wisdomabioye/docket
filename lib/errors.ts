@@ -45,3 +45,39 @@ export function httpStatusForCode(code: AppErrorCode): number {
 export function isAppError(err: unknown): err is AppError {
   return err instanceof AppError;
 }
+
+/**
+ * Map an `AppErrorCode` to a tRPC error code. Stays in this file (not
+ * `server/api/trpc.ts`) so it can be imported by router files without
+ * circular deps.
+ *
+ * `RATE_LIMITED` → tRPC's `TOO_MANY_REQUESTS`; `INTERNAL` → `INTERNAL_SERVER_ERROR`;
+ * everything else maps 1:1.
+ */
+export function appErrorToTrpcCode(
+  code: AppErrorCode,
+):
+  | "BAD_REQUEST"
+  | "UNAUTHORIZED"
+  | "FORBIDDEN"
+  | "NOT_FOUND"
+  | "CONFLICT"
+  | "TOO_MANY_REQUESTS"
+  | "INTERNAL_SERVER_ERROR" {
+  switch (code) {
+    case "BAD_REQUEST":
+      return "BAD_REQUEST";
+    case "UNAUTHORIZED":
+      return "UNAUTHORIZED";
+    case "FORBIDDEN":
+      return "FORBIDDEN";
+    case "NOT_FOUND":
+      return "NOT_FOUND";
+    case "CONFLICT":
+      return "CONFLICT";
+    case "RATE_LIMITED":
+      return "TOO_MANY_REQUESTS";
+    case "INTERNAL":
+      return "INTERNAL_SERVER_ERROR";
+  }
+}

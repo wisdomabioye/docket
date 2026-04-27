@@ -24,6 +24,8 @@ export const APP_ROUTES = {
   case: (id: string) => `/case/${id}`,
   caseIntake: (id: string) => `/case/${id}/intake`,
   caseDocuments: (id: string) => `/case/${id}/documents`,
+  caseDocument: (caseId: string, documentId: string) =>
+    `/case/${caseId}/documents/${documentId}`,
   caseBuild: (id: string) => `/case/${id}/build`,
   caseOutputs: (id: string) => `/case/${id}/outputs`,
   output: (caseId: string, outputId: string) =>

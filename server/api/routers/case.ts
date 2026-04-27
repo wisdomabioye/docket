@@ -20,7 +20,7 @@ import { BeneficiaryDataSchema } from "@/server/db/schema/zod";
 import { db as ownerDb, type Db } from "@/server/db/client";
 import { protectedProcedure, router } from "@/server/api/trpc";
 import { transitionCase } from "@/server/services/cases/transition";
-import { AppError } from "@/lib/errors";
+import { AppError, appErrorToTrpcCode } from "@/lib/errors";
 
 /**
  * Case management — Stage 05. Status transitions go through
@@ -320,7 +320,7 @@ export const caseRouter = router({
         return { ok: true as const, ...result };
       } catch (err) {
         if (err instanceof AppError) {
-          throw new TRPCError({ code: appErrorCode(err.code), message: err.message });
+          throw new TRPCError({ code: appErrorToTrpcCode(err.code), message: err.message });
         }
         throw err;
       }
@@ -363,16 +363,10 @@ export const caseRouter = router({
         return { ok: true as const };
       } catch (err) {
         if (err instanceof AppError) {
-          throw new TRPCError({ code: appErrorCode(err.code), message: err.message });
+          throw new TRPCError({ code: appErrorToTrpcCode(err.code), message: err.message });
         }
         throw err;
       }
     }),
 });
 
-function appErrorCode(c: string): "CONFLICT" | "NOT_FOUND" | "BAD_REQUEST" | "INTERNAL_SERVER_ERROR" {
-  if (c === "CONFLICT") return "CONFLICT";
-  if (c === "NOT_FOUND") return "NOT_FOUND";
-  if (c === "BAD_REQUEST") return "BAD_REQUEST";
-  return "INTERNAL_SERVER_ERROR";
-}

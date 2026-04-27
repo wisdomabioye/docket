@@ -2,11 +2,10 @@ import "server-only";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { ZodError } from "zod";
 import superjson from "superjson";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db, type Db } from "@/server/db/client";
-import { userRoles } from "@/server/db/schema";
 import { auth } from "@/server/auth/config";
-import { isAppError, type AppError } from "@/lib/errors";
+import { appErrorToTrpcCode, isAppError } from "@/lib/errors";
 
 /**
  * tRPC v11 server. Two layers of context:
@@ -54,13 +53,10 @@ export const router = t.router;
 export const createCallerFactory = t.createCallerFactory;
 
 /**
- * `requireAuthAndDb` runs after the session is resolved. It throws
- * UNAUTHORIZED if there's no user, then opens a transaction with
- * `set local role app_user` and the per-request `app.current_user_id`
- * GUC so RLS engages on every query inside the procedure body.
- *
- * The narrowed `ctx.user` and `ctx.userId` are non-null inside protected
- * procedures.
+ * `requireAuthAndDb` — UNAUTHORIZED if no session, otherwise opens a
+ * transaction with `set local role app_user` + per-request
+ * `app.current_user_id` GUC. RLS engages on every query inside the
+ * procedure body.
  */
 const requireAuthAndDb = t.middleware(async ({ ctx, next }) => {
   if (!ctx.user) {
@@ -86,70 +82,45 @@ const requireAuthAndDb = t.middleware(async ({ ctx, next }) => {
     .catch((err: unknown) => mapError(err));
 });
 
+/**
+ * Admin procedure — extends protectedProcedure with a global-role check.
+ * `is_admin()` is SECURITY DEFINER, so it bypasses RLS to read user_roles.
+ * Throws FORBIDDEN if the caller lacks the admin role.
+ */
+const requireAdmin = t.middleware(async ({ ctx, next }) => {
+  // requireAuthAndDb has already enriched ctx with db + userId.
+  const c = ctx as typeof ctx & { db: Db; userId: string };
+  const [row] = await c.db.execute<{ ok: boolean }>(
+    sql`select is_admin() as ok`,
+  );
+  if (!row?.ok) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "admin role required" });
+  }
+  return next();
+});
+
 /** Public procedure — no auth, no DB transaction. */
 export const publicProcedure = t.procedure;
 
 /** Protected procedure — requires session, DB wrapped in user-scoped tx. */
 export const protectedProcedure = t.procedure.use(requireAuthAndDb);
 
-/**
- * Admin procedure — extends protectedProcedure with a global-role check.
- * Reads `user_roles` via the SECURITY DEFINER `is_admin()` SQL helper so
- * the lookup itself bypasses RLS (otherwise the user_roles RLS policy
- * would only return the caller's own row).
- *
- * Throws FORBIDDEN if the caller is authenticated but lacks the admin role.
- */
-const requireAdmin = t.middleware(async ({ ctx, next }) => {
-  // ctx is already enriched by requireAuthAndDb at this point.
-  const c = ctx as typeof ctx & { db: Db; userId: string };
-  const [row] = await c.db
-    .select({ role: userRoles.role })
-    .from(userRoles)
-    .where(eq(userRoles.userId, c.userId));
-  // The user_roles RLS policy returns the caller's own rows; we filter to admin.
-  const isAdmin = await c.db.execute<{ ok: boolean }>(
-    sql`select is_admin() as ok`,
-  );
-  if (!isAdmin[0]?.ok) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "admin role required" });
-  }
-  return next({ ctx: { ...c, role: row?.role ?? "admin" } });
-});
-
+/** Admin procedure — protected + admin role check. */
 export const adminProcedure = protectedProcedure.use(requireAdmin);
 
 /**
- * Map service-layer errors to tRPC errors at the boundary. tRPC's middleware
- * promise rejects through transactions, so we re-wrap here.
+ * Map service-layer errors to tRPC errors at the boundary. tRPC's
+ * middleware promise rejects through transactions, so we re-wrap here.
+ * `AppError` → matching TRPCError code per `lib/errors.appErrorToTrpcCode`.
  */
 function mapError(err: unknown): never {
   if (err instanceof TRPCError) throw err;
   if (isAppError(err)) {
     throw new TRPCError({
-      code: appErrorToTrpc(err),
+      code: appErrorToTrpcCode(err.code),
       message: err.message,
       cause: err,
     });
   }
   throw err;
-}
-
-function appErrorToTrpc(err: AppError): TRPCError["code"] {
-  switch (err.code) {
-    case "BAD_REQUEST":
-      return "BAD_REQUEST";
-    case "UNAUTHORIZED":
-      return "UNAUTHORIZED";
-    case "FORBIDDEN":
-      return "FORBIDDEN";
-    case "NOT_FOUND":
-      return "NOT_FOUND";
-    case "CONFLICT":
-      return "CONFLICT";
-    case "RATE_LIMITED":
-      return "TOO_MANY_REQUESTS";
-    case "INTERNAL":
-      return "INTERNAL_SERVER_ERROR";
-  }
 }
