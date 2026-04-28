@@ -1,99 +1,187 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { TRPCError } from "@trpc/server";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
+import { PageHeader } from "@/components/admin/PageHeader";
+import { Badge } from "@/components/ui";
+import { DataTable, Filters, type Chip, type Column } from "@/components/table";
 import { ActivateButton } from "./ActivateButton";
 
-export const metadata = { title: pageTitle("Pending attorneys") };
+export const metadata = { title: pageTitle("Attorneys") };
 
-/**
- * Stage 03 minimum admin view: list pending attorneys + one-click activate.
- * Stage 09 expands into the polished `/admin/*` dashboard suite.
- */
-export default async function AdminAttorneysPage() {
+const STATUS_CHIPS: ReadonlyArray<{
+  label: string;
+  status: "all" | "active" | "pending" | "suspended" | "inactive";
+}> = [
+  { label: "All", status: "all" },
+  { label: "Active", status: "active" },
+  { label: "Pending", status: "pending" },
+  { label: "Suspended", status: "suspended" },
+  { label: "Inactive", status: "inactive" },
+];
+
+const COLUMNS: readonly Column[] = [
+  { key: "name", label: "Attorney" },
+  { key: "bar", label: "Bar / States", hideBelow: "md" },
+  { key: "status", label: "Status" },
+  { key: "joined", label: "Joined", hideBelow: "lg" },
+  { key: "actions", label: "", align: "right" },
+];
+
+const STATUS_VARIANT = {
+  active: "success",
+  pending: "warning",
+  suspended: "error",
+  inactive: "neutral",
+} as const;
+
+export default async function AdminAttorneysPage(props: {
+  searchParams: Promise<{
+    status?: string;
+    cursor_at?: string;
+    cursor_id?: string;
+  }>;
+}): Promise<React.ReactElement> {
   const session = await auth();
   if (!session?.user) redirect(APP_ROUTES.login);
 
-  // FORBIDDEN → not an admin, bounce to dashboard. Anything else (DB
-  // error, network blip) propagates so we don't silently swallow it.
-  let pending: Awaited<
-    ReturnType<typeof api.admin.listPendingAttorneys>
-  >;
+  const params = await props.searchParams;
+  const status = parseStatus(params.status);
+  const cursor =
+    params.cursor_at && params.cursor_id
+      ? { createdAt: params.cursor_at, id: params.cursor_id }
+      : undefined;
+
+  const data = await callOrBounce(() =>
+    api.admin.listAttorneys({
+      ...(status ? { status } : {}),
+      ...(cursor ? { cursor } : {}),
+    }),
+  );
+
+  const chips: Chip[] = STATUS_CHIPS.map((c) => ({
+    label: c.label,
+    count: c.status === "all" ? data.totals.all : data.totals[c.status],
+    href:
+      c.status === "all"
+        ? APP_ROUTES.adminAttorneys
+        : `${APP_ROUTES.adminAttorneys}?status=${c.status}`,
+    active: (status ?? "all") === c.status,
+  }));
+
+  const lastRow = data.items[data.items.length - 1];
+  const nextHref =
+    data.nextCursor && lastRow
+      ? buildHref(APP_ROUTES.adminAttorneys, {
+          status,
+          cursor_at: data.nextCursor.createdAt,
+          cursor_id: data.nextCursor.id,
+        })
+      : undefined;
+
+  return (
+    <>
+      <PageHeader
+        breadcrumb={["Admin", "Attorneys"]}
+        title="Attorneys"
+        subtitle={`${data.totals.active} active · ${data.totals.pending} pending · ${data.totals.suspended} suspended`}
+      />
+
+      <Filters chips={chips} right={`${data.items.length} on this page`} />
+
+      <DataTable
+        columns={COLUMNS}
+        rows={data.items}
+        rowKey={(r) => r.userId}
+        empty={
+          status === "pending"
+            ? {
+                title: "Nobody waiting for activation.",
+                subtitle:
+                  "When attorneys submit onboarding, they'll appear here.",
+              }
+            : { title: "No attorneys to show." }
+        }
+        pagination={{
+          ...(nextHref ? { nextHref } : {}),
+        }}
+        renderCell={(row, col) => {
+          switch (col.key) {
+            case "name":
+              return (
+                <div>
+                  <div className="font-medium">{row.name ?? "—"}</div>
+                  <div className="mono text-xs text-[var(--ink-muted)]">
+                    {row.email}
+                  </div>
+                </div>
+              );
+            case "bar":
+              return (
+                <div className="text-xs">
+                  <div className="mono">{row.barNumber ?? "—"}</div>
+                  <div className="text-[var(--ink-muted)]">
+                    {row.barStates.length > 0 ? row.barStates.join(", ") : "—"}
+                  </div>
+                </div>
+              );
+            case "status":
+              return (
+                <Badge variant={STATUS_VARIANT[row.status]}>{row.status}</Badge>
+              );
+            case "joined":
+              return (
+                <span className="mono text-xs">
+                  {new Date(row.joinedAt).toLocaleDateString()}
+                </span>
+              );
+            case "actions":
+              return row.status === "pending" && row.submittedAt ? (
+                <ActivateButton userId={row.userId} />
+              ) : null;
+            default:
+              return null;
+          }
+        }}
+      />
+    </>
+  );
+}
+
+function parseStatus(
+  raw: string | undefined,
+): "active" | "pending" | "suspended" | "inactive" | undefined {
+  if (
+    raw === "active" ||
+    raw === "pending" ||
+    raw === "suspended" ||
+    raw === "inactive"
+  ) {
+    return raw;
+  }
+  return undefined;
+}
+
+function buildHref(
+  base: string,
+  params: Record<string, string | undefined>,
+): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v) sp.set(k, v);
+  }
+  const qs = sp.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
+async function callOrBounce<T>(fn: () => Promise<T>): Promise<T> {
   try {
-    pending = await api.admin.listPendingAttorneys();
+    return await fn();
   } catch (err) {
     if (err instanceof TRPCError && err.code === "FORBIDDEN") {
       redirect(APP_ROUTES.dashboard);
     }
     throw err;
   }
-
-  return (
-    <main className="mx-auto max-w-4xl px-6 py-12 space-y-8">
-      <header>
-        <p className="text-xs uppercase tracking-[0.3em] text-[var(--color-ink-muted)]">
-          Admin
-        </p>
-        <h1
-          className="mt-2 text-3xl tracking-tight"
-          style={{ fontFamily: "var(--font-serif)" }}
-        >
-          Pending attorneys
-        </h1>
-        <p className="mt-2 text-sm text-[var(--color-ink-muted)]">
-          {pending.length === 0
-            ? "Nobody waiting."
-            : `${pending.length} awaiting activation.`}
-        </p>
-        <nav className="mt-4 flex gap-4 text-xs">
-          <Link
-            href={APP_ROUTES.adminWaitlist}
-            className="text-[var(--color-ink-muted)] underline"
-          >
-            ← Waitlist
-          </Link>
-        </nav>
-      </header>
-
-      {pending.length > 0 && (
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs uppercase tracking-wide text-[var(--color-ink-muted)]">
-            <tr>
-              <th className="pb-2 font-medium">Name</th>
-              <th className="pb-2 font-medium">Bar #</th>
-              <th className="pb-2 font-medium">States</th>
-              <th className="pb-2 font-medium">Submitted</th>
-              <th className="pb-2 font-medium" />
-            </tr>
-          </thead>
-          <tbody>
-            {pending.map((p) => (
-              <tr key={p.userId} className="border-t border-[var(--color-ink)]/10">
-                <td className="py-3">
-                  <div>{p.name ?? "—"}</div>
-                  <div className="text-xs text-[var(--color-ink-muted)]">
-                    {p.email}
-                  </div>
-                </td>
-                <td className="py-3 font-mono text-xs">{p.barNumber ?? "—"}</td>
-                <td className="py-3 text-xs">
-                  {p.barStates.join(", ") || "—"}
-                </td>
-                <td className="py-3 text-xs">
-                  {p.submittedAt
-                    ? new Date(p.submittedAt).toLocaleDateString()
-                    : "—"}
-                </td>
-                <td className="py-3 text-right">
-                  <ActivateButton userId={p.userId} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </main>
-  );
 }
