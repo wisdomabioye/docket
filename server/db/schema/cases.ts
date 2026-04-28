@@ -90,6 +90,23 @@ export const cases = pgTable(
     filedAt: timestamp("filed_at", { withTimezone: true }),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
 
+    // Compute tracking (Stage 07). `bigint` matches the other money
+    // columns — int4 would hit the $21M ceiling at scale; cents always
+    // bigint by convention. Defaults: $50 budget per spec §10.5; $0
+    // spent. `build_started_at` / `build_completed_at` bracket each
+    // Inngest pipeline run for the watchdog + admin metrics.
+    // `default(<bigint>)` would crash drizzle-kit's snapshot JSON encoder
+    // (no serializer for bigint literals); `sql\`<n>\`` is the canonical
+    // workaround and produces the correct DEFAULT in the generated SQL.
+    computeBudgetCents: bigint("compute_budget_cents", { mode: "bigint" })
+      .notNull()
+      .default(sql`5000`),
+    computeSpentCents: bigint("compute_spent_cents", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    buildStartedAt: timestamp("build_started_at", { withTimezone: true }),
+    buildCompletedAt: timestamp("build_completed_at", { withTimezone: true }),
+
     rowRevision: integer("row_revision").notNull().default(1),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -114,6 +131,14 @@ export const cases = pgTable(
     index("cases_invoice_idx")
       .on(t.invoiceId)
       .where(sql`${t.invoiceId} is not null`),
+    // Stage 07: build-monitoring queries — "all cases currently in flight".
+    // Used by the watchdog (cases stuck in `building` >30min) and the
+    // admin overview's case-pipeline rail.
+    index("cases_build_status_idx")
+      .on(t.status)
+      .where(
+        sql`${t.status} in ('building', 'draft_ready', 'needs_revision') and ${t.deletedAt} is null`,
+      ),
   ],
 );
 
@@ -278,6 +303,13 @@ export const caseOutputs = pgTable(
       t.outputType,
       t.outputVersion,
     ),
+    // Stage 07: idempotency safety net for the Inngest sub-functions.
+    // A retried `step.run("generate-X")` must NOT produce two rows; the
+    // service-layer `saveOutputVersion()` is the gate, this index is the
+    // catch — partial so soft-deleted versions don't block a fresh write.
+    uniqueIndex("case_outputs_case_type_version_uniq")
+      .on(t.caseId, t.outputType, t.outputVersion)
+      .where(sql`${t.deletedAt} is null`),
   ],
 );
 
