@@ -21,19 +21,14 @@ export function ProgressBar(props: {
   /** 0..100. Clamped on render. */
   value: number;
   tone?: ProgressTone;
-  /** Total bar width — pixels or any CSS length. Defaults to "100%". */
-  width?: string;
   className?: string;
 }): React.ReactElement {
   const value = Math.max(0, Math.min(100, props.value));
   const tone = props.tone ?? "accent";
   return (
     <div
-      className={`h-1.5 overflow-hidden rounded-full ${props.className ?? ""}`}
-      style={{
-        background: "var(--surface-deep)",
-        width: props.width ?? "100%",
-      }}
+      className={`h-1.5 w-full overflow-hidden rounded-full ${props.className ?? ""}`}
+      style={{ background: "var(--surface-deep)" }}
       role="progressbar"
       aria-valuenow={value}
       aria-valuemin={0}

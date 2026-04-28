@@ -1,13 +1,18 @@
-import Link from "next/link";
-import { redirect } from "next/navigation";
-import { TRPCError } from "@trpc/server";
-import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { AuditRow } from "@/components/admin/AuditRow";
 import { Card, EmptyState } from "@/components/ui";
-import { Filters, type Chip } from "@/components/table";
+import { Filters, PageLink, type Chip } from "@/components/table";
+import {
+  buildNextHref,
+  buildPrevHref,
+  buildResetHref,
+  formatRange,
+  parsePaginationParams,
+} from "@/lib/keyset-pagination";
+
+const PAGE_SIZE = 25;
 
 export const metadata = { title: pageTitle("Audit log") };
 
@@ -20,63 +25,67 @@ const PREFIX_CHIPS: ReadonlyArray<{ label: string; prefix: string | null }> = [
 ];
 
 export default async function AdminAuditLogPage(props: {
-  searchParams: Promise<{ prefix?: string; cursor_at?: string; cursor_id?: string }>;
+  searchParams: Promise<{
+    prefix?: string;
+    cursor_at?: string;
+    cursor_id?: string;
+    stack?: string;
+  }>;
 }): Promise<React.ReactElement> {
-  const session = await auth();
-  if (!session?.user) redirect(APP_ROUTES.login);
-
   const params = await props.searchParams;
   const prefix = params.prefix ?? null;
-  const cursor =
-    params.cursor_at && params.cursor_id
-      ? { createdAt: params.cursor_at, id: params.cursor_id }
-      : undefined;
+  const pagination = parsePaginationParams(params);
 
-  let data: Awaited<ReturnType<typeof api.admin.listAuditEvents>>;
-  try {
-    data = await api.admin.listAuditEvents({
-      ...(prefix ? { actionPrefix: `${prefix}.` } : {}),
-      ...(cursor ? { cursor } : {}),
-    });
-  } catch (err) {
-    if (err instanceof TRPCError && err.code === "FORBIDDEN") {
-      redirect(APP_ROUTES.dashboard);
-    }
-    throw err;
-  }
+  const data = await api.admin.listAuditEvents({
+    ...(prefix ? { actionPrefix: `${prefix}.` } : {}),
+    ...(pagination.cursor ? { cursor: pagination.cursor } : {}),
+  });
 
   const chips: Chip[] = PREFIX_CHIPS.map((c) => ({
     label: c.label,
-    count: c.prefix ? data.byPrefix[c.prefix] ?? 0 : Object.values(data.byPrefix).reduce((a, b) => a + b, 0),
-    href: c.prefix
-      ? `${APP_ROUTES.adminAuditLog}?prefix=${c.prefix}`
-      : APP_ROUTES.adminAuditLog,
+    count: c.prefix
+      ? data.byPrefix[c.prefix] ?? 0
+      : Object.values(data.byPrefix).reduce((a, b) => a + b, 0),
+    href: buildResetHref(
+      APP_ROUTES.adminAuditLog,
+      c.prefix ? { prefix: c.prefix } : {},
+    ),
     active: prefix === c.prefix,
   }));
 
-  const lastRow = data.items[data.items.length - 1];
-  const nextHref =
-    data.nextCursor && lastRow
-      ? buildHref(APP_ROUTES.adminAuditLog, {
-          ...(prefix ? { prefix } : {}),
-          cursor_at: data.nextCursor.createdAt,
-          cursor_id: data.nextCursor.id,
-        })
-      : undefined;
+  const filterExtras = prefix ? { prefix } : {};
+  const nextHref = data.nextCursor
+    ? buildNextHref(
+        APP_ROUTES.adminAuditLog,
+        pagination,
+        data.nextCursor,
+        filterExtras,
+      )
+    : undefined;
+  const prevHref = buildPrevHref(
+    APP_ROUTES.adminAuditLog,
+    pagination,
+    filterExtras,
+  );
+  const range = formatRange({
+    pageIndex: pagination.stack.length,
+    pageSize: PAGE_SIZE,
+    itemsOnPage: data.items.length,
+  });
 
   return (
     <>
       <PageHeader
         breadcrumb={["Admin", "Audit log"]}
         title="Audit log"
-        subtitle="Append-only record of every admin and attorney mutation. Retained 7 years."
+        subtitle={`${data.total24h.toLocaleString()} events in the last 24h. Append-only, retained 7 years.`}
       />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_240px]">
         <div>
           <Filters
             chips={chips}
-            right={`${data.items.length} on this page`}
+            right={`${data.total24h.toLocaleString()} matching · 24h window`}
           />
           <Card flush>
             {data.items.length === 0 ? (
@@ -93,19 +102,12 @@ export default async function AdminAuditLogPage(props: {
                 ))}
               </ul>
             )}
-            {nextHref ? (
-              <div
-                className="border-t px-4 py-2.5 text-right"
-                style={{ borderColor: "var(--border)" }}
-              >
-                <Link
-                  href={nextHref}
-                  className="text-xs uppercase tracking-[0.14em] text-[var(--ink-muted)] hover:text-[var(--ink)]"
-                >
-                  Load more ↓
-                </Link>
-              </div>
-            ) : null}
+            <AuditPagination
+              {...(prevHref ? { prevHref } : {})}
+              {...(nextHref ? { nextHref } : {})}
+              {...(range ? { range } : {})}
+              total={data.total24h}
+            />
           </Card>
         </div>
 
@@ -142,14 +144,32 @@ export default async function AdminAuditLogPage(props: {
   );
 }
 
-function buildHref(
-  base: string,
-  params: Record<string, string | undefined>,
-): string {
-  const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v) sp.set(k, v);
-  }
-  const qs = sp.toString();
-  return qs ? `${base}?${qs}` : base;
+/** Tiny pagination footer that mirrors `DataTable`'s built-in chrome
+ *  but inside the Card boundary instead of below it. The audit log
+ *  doesn't use DataTable (it's an unordered list of color-coded rows),
+ *  so we render the same shape here for consistency. */
+function AuditPagination(props: {
+  prevHref?: string;
+  nextHref?: string;
+  range?: string;
+  total: number;
+}): React.ReactElement | null {
+  if (!props.prevHref && !props.nextHref && !props.range) return null;
+  const summary =
+    props.range && props.total !== undefined
+      ? `Showing ${props.range} of ${props.total.toLocaleString()}`
+      : null;
+  return (
+    <div
+      className="flex items-center justify-between border-t px-4 py-2.5 text-[11px] uppercase tracking-[0.14em] text-[var(--ink-muted)]"
+      style={{ borderColor: "var(--border)" }}
+    >
+      <span>{summary}</span>
+      <span className="flex items-center gap-2">
+        <PageLink {...(props.prevHref ? { href: props.prevHref } : {})} label="← Prev" />
+        <PageLink {...(props.nextHref ? { href: props.nextHref } : {})} label="Next →" />
+      </span>
+    </div>
+  );
 }
+

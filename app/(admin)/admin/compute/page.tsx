@@ -1,6 +1,3 @@
-import { redirect } from "next/navigation";
-import { TRPCError } from "@trpc/server";
-import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { PageHeader } from "@/components/admin/PageHeader";
@@ -8,13 +5,14 @@ import { KpiCard, KpiGrid } from "@/components/kpi";
 import { Card, EmptyState } from "@/components/ui";
 import { Filters, type Chip } from "@/components/table";
 import { formatCents } from "@/lib/utils";
+import { parseEnum } from "@/lib/url-params";
 
 export const metadata = { title: pageTitle("Compute & models") };
 
-const PERIOD_CHIPS: ReadonlyArray<{
-  label: string;
-  period: "7d" | "30d" | "MTD" | "QTD";
-}> = [
+const PERIODS = ["7d", "30d", "MTD", "QTD"] as const;
+type Period = (typeof PERIODS)[number];
+
+const PERIOD_CHIPS: ReadonlyArray<{ label: string; period: Period }> = [
   { label: "7d", period: "7d" },
   { label: "30d", period: "30d" },
   { label: "MTD", period: "MTD" },
@@ -24,21 +22,9 @@ const PERIOD_CHIPS: ReadonlyArray<{
 export default async function AdminComputePage(props: {
   searchParams: Promise<{ period?: string }>;
 }): Promise<React.ReactElement> {
-  const session = await auth();
-  if (!session?.user) redirect(APP_ROUTES.login);
-
   const params = await props.searchParams;
-  const period = parsePeriod(params.period) ?? "MTD";
-
-  let data: Awaited<ReturnType<typeof api.admin.getComputeMetrics>>;
-  try {
-    data = await api.admin.getComputeMetrics({ period });
-  } catch (err) {
-    if (err instanceof TRPCError && err.code === "FORBIDDEN") {
-      redirect(APP_ROUTES.dashboard);
-    }
-    throw err;
-  }
+  const period = parseEnum<Period>(params.period, PERIODS) ?? "MTD";
+  const data = await api.admin.getComputeMetrics({ period });
 
   const empty = data.totals.entries === 0;
   const chips: Chip[] = PERIOD_CHIPS.map((c) => ({
@@ -61,7 +47,7 @@ export default async function AdminComputePage(props: {
         <KpiCard
           label={`Total spend · ${period}`}
           value={formatCents(data.totals.totalCents)}
-          empty={empty}
+          dim={empty}
           sub={empty ? "Awaiting first build" : `${data.totals.entries} ledger entries`}
         />
         <KpiCard
@@ -71,7 +57,7 @@ export default async function AdminComputePage(props: {
               ? formatCents(data.totals.totalCents / BigInt(data.totals.entries))
               : "—"
           }
-          empty={empty}
+          dim={empty}
           sub={empty ? "—" : "Across all model calls"}
         />
       </KpiGrid>
@@ -88,8 +74,3 @@ export default async function AdminComputePage(props: {
   );
 }
 
-function parsePeriod(raw: string | undefined): "7d" | "30d" | "MTD" | "QTD" | undefined {
-  return raw === "7d" || raw === "30d" || raw === "MTD" || raw === "QTD"
-    ? raw
-    : undefined;
-}

@@ -33,23 +33,42 @@ export function Filters(props: {
       }}
     >
       <div className="flex flex-wrap items-center gap-1.5">
-        {props.chips.map((chip) => (
-          <Link
-            key={chip.href}
-            href={chip.href}
-            className={cn(
-              "rounded-sm border px-2.5 py-1 text-xs transition",
-              chip.active
-                ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
-                : "border-[var(--border)] text-[var(--ink-muted)] hover:bg-[var(--surface-sunken)] hover:text-[var(--ink)]",
-            )}
-          >
-            {chip.label}
-            {chip.count !== undefined ? (
-              <span className="ml-1 text-[10px] opacity-70">{chip.count}</span>
-            ) : null}
-          </Link>
-        ))}
+        {props.chips.map((chip) => {
+          const inner = (
+            <>
+              {chip.label}
+              {chip.count !== undefined ? (
+                <span className="ml-1 text-[10px] opacity-70">{chip.count}</span>
+              ) : null}
+            </>
+          );
+          // Active chip: render as `<span>` with `aria-current="page"`.
+          // Skips the no-op nav (no need to round-trip when you're
+          // already on the page) and signals state to assistive tech.
+          if (chip.active) {
+            return (
+              <span
+                key={chip.href}
+                aria-current="page"
+                className="rounded-sm border border-[var(--accent)] bg-[var(--accent-soft)] px-2.5 py-1 text-xs text-[var(--accent)]"
+              >
+                {inner}
+              </span>
+            );
+          }
+          return (
+            <Link
+              key={chip.href}
+              href={chip.href}
+              className={cn(
+                "rounded-sm border px-2.5 py-1 text-xs transition",
+                "border-[var(--border)] text-[var(--ink-muted)] hover:bg-[var(--surface-sunken)] hover:text-[var(--ink)]",
+              )}
+            >
+              {inner}
+            </Link>
+          );
+        })}
       </div>
       {props.right ? (
         <div className="text-xs text-[var(--ink-muted)]">{props.right}</div>

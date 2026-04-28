@@ -24,6 +24,15 @@ export const VISA_TYPES = [
 
 export type VisaType = (typeof VISA_TYPES)[number];
 
+export const ATTORNEY_STATUSES = [
+  "pending",
+  "active",
+  "suspended",
+  "inactive",
+] as const;
+
+export type AttorneyStatus = (typeof ATTORNEY_STATUSES)[number];
+
 export const DOCUMENT_TYPES = [
   "cv_resume",
   "publication",

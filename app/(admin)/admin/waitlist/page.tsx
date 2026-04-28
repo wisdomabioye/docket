@@ -1,12 +1,18 @@
-import { redirect } from "next/navigation";
-import { TRPCError } from "@trpc/server";
-import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { Badge } from "@/components/ui";
 import { DataTable, type Column } from "@/components/table";
+import { waitlistApprovalVariant } from "@/lib/status-style";
+import {
+  buildNextHref,
+  buildPrevHref,
+  formatRange,
+  parsePaginationParams,
+} from "@/lib/keyset-pagination";
 import { ApproveButton } from "./ApproveButton";
+
+const PAGE_SIZE = 25;
 
 export const metadata = { title: pageTitle("Waitlist") };
 
@@ -24,21 +30,25 @@ const COLUMNS: readonly Column[] = [
  * sign-in. Rows stay listed even after approval so admins can audit who
  * approved whom and when.
  */
-export default async function AdminWaitlistPage(): Promise<React.ReactElement> {
-  const session = await auth();
-  if (!session?.user) redirect(APP_ROUTES.login);
+export default async function AdminWaitlistPage(props: {
+  searchParams: Promise<{ cursor_at?: string; cursor_id?: string; stack?: string }>;
+}): Promise<React.ReactElement> {
+  const params = await props.searchParams;
+  const pagination = parsePaginationParams(params);
+  const data = await api.admin.listWaitlist(
+    pagination.cursor ? { cursor: pagination.cursor } : {},
+  );
 
-  let entries: Awaited<ReturnType<typeof api.admin.listWaitlist>>;
-  try {
-    entries = await api.admin.listWaitlist();
-  } catch (err) {
-    if (err instanceof TRPCError && err.code === "FORBIDDEN") {
-      redirect(APP_ROUTES.dashboard);
-    }
-    throw err;
-  }
-
-  const pendingCount = entries.filter((e) => !e.approvedAt).length;
+  const entries = data.items;
+  const nextHref = data.nextCursor
+    ? buildNextHref(APP_ROUTES.adminWaitlist, pagination, data.nextCursor)
+    : undefined;
+  const prevHref = buildPrevHref(APP_ROUTES.adminWaitlist, pagination);
+  const range = formatRange({
+    pageIndex: pagination.stack.length,
+    pageSize: PAGE_SIZE,
+    itemsOnPage: entries.length,
+  });
 
   return (
     <>
@@ -46,9 +56,9 @@ export default async function AdminWaitlistPage(): Promise<React.ReactElement> {
         breadcrumb={["Admin", "Waitlist"]}
         title="Waitlist"
         subtitle={
-          entries.length === 0
+          data.totals.total === 0
             ? "Nobody on the waitlist yet."
-            : `${entries.length} total · ${pendingCount} awaiting approval`
+            : `${data.totals.total.toLocaleString()} total · ${data.totals.pending.toLocaleString()} awaiting approval`
         }
       />
 
@@ -60,6 +70,12 @@ export default async function AdminWaitlistPage(): Promise<React.ReactElement> {
           title: "No waitlist entries yet.",
           subtitle:
             "Sign-ups from the landing page will appear here, awaiting approval.",
+        }}
+        pagination={{
+          total: data.totals.total,
+          ...(range ? { range } : {}),
+          ...(nextHref ? { nextHref } : {}),
+          ...(prevHref ? { prevHref } : {}),
         }}
         renderCell={(e, col) => {
           switch (col.key) {
@@ -79,12 +95,14 @@ export default async function AdminWaitlistPage(): Promise<React.ReactElement> {
                   {new Date(e.createdAt).toLocaleDateString()}
                 </span>
               );
-            case "status":
-              return e.approvedAt ? (
-                <Badge variant="success">approved</Badge>
-              ) : (
-                <Badge variant="warning">pending</Badge>
+            case "status": {
+              const isApproved = Boolean(e.approvedAt);
+              return (
+                <Badge variant={waitlistApprovalVariant(isApproved)}>
+                  {isApproved ? "approved" : "pending"}
+                </Badge>
               );
+            }
             case "actions":
               return e.approvedAt ? (
                 <span className="mono text-[10px] text-[var(--ink-muted)]">

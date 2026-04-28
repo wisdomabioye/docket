@@ -91,6 +91,25 @@ afterAll(async () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+// ping (auth probe used by the layout)
+// ─────────────────────────────────────────────────────────────────────
+
+describe("admin.ping", () => {
+  it("returns ok for an admin caller", async (ctx) => {
+    gate(ctx);
+    const out = await callAs(ADMIN).admin.ping();
+    expect(out).toEqual({ ok: true });
+  });
+
+  it("rejects non-admin callers with FORBIDDEN", async (ctx) => {
+    gate(ctx);
+    await expect(callAs(NON_ADMIN).admin.ping()).rejects.toThrow(
+      /admin role required/i,
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
 // getOverviewMetrics
 // ─────────────────────────────────────────────────────────────────────
 
@@ -193,11 +212,22 @@ describe("admin.listAllCases", () => {
     expect(filedRow?.primaryAttorney?.id).toBe(ATTORNEY_A);
   });
 
-  it("filters by status", async (ctx) => {
+  it("filters by single status", async (ctx) => {
     gate(ctx);
-    const out = await callAs(ADMIN).admin.listAllCases({ status: "filed" });
+    const out = await callAs(ADMIN).admin.listAllCases({ status: ["filed"] });
     expect(out.items.length).toBe(1);
     expect(out.items[0]!.status).toBe("filed");
+  });
+
+  it("filters by multiple statuses (StatBand grouping)", async (ctx) => {
+    // Seed has 1 intake + 1 draft_ready + 1 filed. Asking for the
+    // "Drafting" group's underlying statuses (none of the seed's intake
+    // statuses) returns just draft_ready.
+    gate(ctx);
+    const out = await callAs(ADMIN).admin.listAllCases({
+      status: ["ready_to_build", "building", "build_failed", "draft_ready"],
+    });
+    expect(out.items.map((i) => i.status).sort()).toEqual(["draft_ready"]);
   });
 
   it("filters by visa type", async (ctx) => {
@@ -316,6 +346,37 @@ describe("admin.getRevenueMetrics", () => {
     await expect(
       callAs(NON_ADMIN).admin.getRevenueMetrics({ period: "MTD" }),
     ).rejects.toThrow(/admin role required/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// listAuditEvents — total24h
+// ─────────────────────────────────────────────────────────────────────
+
+describe("admin.listAuditEvents — total24h", () => {
+  it("counts only events from the last 24 hours", async (ctx) => {
+    const d = gate(ctx);
+    // Two recent + one old (over 24h).
+    const old = new Date(Date.now() - 26 * 60 * 60 * 1000);
+    await d.insert(auditLog).values([
+      { actorType: "user", actorUserId: ADMIN, action: "attorney.activate", targetType: "user", targetId: ATTORNEY_A, details: null },
+      { actorType: "user", actorUserId: ADMIN, action: "waitlist.approve", targetType: "waitlist_entry", targetId: ATTORNEY_B, details: null },
+      { actorType: "user", actorUserId: ADMIN, action: "attorney.activate", targetType: "user", targetId: ATTORNEY_A, details: null, createdAt: old },
+    ]);
+
+    const out = await callAs(ADMIN).admin.listAuditEvents({});
+    expect(out.total24h).toBe(2);
+  });
+
+  it("respects the actionPrefix filter when computing total24h", async (ctx) => {
+    const d = gate(ctx);
+    await d.insert(auditLog).values([
+      { actorType: "user", actorUserId: ADMIN, action: "attorney.activate", targetType: "user", targetId: ATTORNEY_A, details: null },
+      { actorType: "user", actorUserId: ADMIN, action: "waitlist.approve", targetType: "waitlist_entry", targetId: ATTORNEY_B, details: null },
+    ]);
+
+    const out = await callAs(ADMIN).admin.listAuditEvents({ actionPrefix: "attorney." });
+    expect(out.total24h).toBe(1);
   });
 });
 

@@ -20,8 +20,11 @@ export type Delta = {
 export function KpiCard(props: {
   label: string;
   value: string;
-  /** When `value` is a placeholder for missing data (e.g. "—" or "0"). */
-  empty?: boolean;
+  /** Render the value in muted color — use when `value` is a stand-in
+   *  for missing data (e.g. `"$0"` or `"—"` before the source ledger
+   *  has been populated). The number still shows; it just doesn't read
+   *  as a real metric. */
+  dim?: boolean;
   /** Optional small line under the value (e.g. "on track to $94k MTD"). */
   sub?: string;
   delta?: Delta;
@@ -41,7 +44,7 @@ export function KpiCard(props: {
         className="mt-3 text-[28px] leading-none tracking-tight"
         style={{
           fontFamily: "var(--font-serif), Georgia, serif",
-          color: props.empty ? "var(--ink-faint)" : "var(--ink)",
+          color: props.dim ? "var(--ink-faint)" : "var(--ink)",
         }}
       >
         {props.value}

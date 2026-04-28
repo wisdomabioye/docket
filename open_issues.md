@@ -66,6 +66,77 @@ Surfaced: 2026-04-30 (Stage 03 review)
 
 ---
 
+### #18 — Stage 09 admin dashboard deferred items
+
+Status: Documented; non-blocking polish from the Stage 09 build.
+Surfaced: 2026-04-28 (Stage 09 implementation)
+
+**Schema gaps (block KPI fidelity, not page rendering)**
+
+1. **No `compute_category` enum on `case_compute_ledger`.** The Compute
+   page shows a single rolled-up total because the ledger doesn't yet
+   distinguish inference / embeddings / OCR / storage spend. Stage 07 +
+   10 should add the enum + populate it on every ledger insert. Today
+   the page renders an `EmptyState` card pointing at this issue.
+2. **No `readiness_score` column on `cases`.** The mockup's per-case
+   readiness score (87, 74, …) lives inside `cases.criteriaAnalysis`
+   JSONB. Pages can't sort/filter on it without either a generated
+   column or service-layer extraction. Defer until the build pipeline
+   actually populates `criteriaAnalysis`.
+3. **No `rfe_status` on `cases`.** Mockup highlights "RFE received"
+   risk. Today inferred only from `status='needs_revision'`. Add a real
+   column when USCIS RFE handling lands.
+4. **No `model_versions` table** for the "claude-opus-4 sunset May 15"
+   alert. Hardcoded text on the compute page; Stage 10 adds proper
+   model-versioning + sunset-date metadata.
+5. **No revenue ledger / Stripe Treasury sync.** Revenue page sums
+   `cases.case_fee_cents` directly — works for the dashboard but won't
+   reconcile against actual Stripe payouts. Stage 10 adds an `invoices`
+   table + Stripe webhook sync.
+
+**Performance / index gaps**
+
+6. **`cases(filed_at DESC) WHERE deleted_at IS NULL`** — the revenue
+   aggregation window-scans `filed_at`. Cheap today (small table); add
+   the partial index before scaling beyond ~10k cases.
+7. **`audit_log(action, created_at DESC)`** — the audit page's prefix
+   filter does an action `LIKE prefix.%` scan. Composite index speeds
+   the filter + sort once the table grows past ~100k rows.
+8. **Per-attorney case counts** are stubbed at `0` in `listAttorneys`.
+   Mockup shows "active / filed / revenue 30d / approval rate" per row.
+   Real counts need a GROUP BY join through `case_participants` —
+   acceptable to defer until we have production data; service-layer
+   aggregation now would just add latency for zero benefit.
+
+**Audit + observability**
+
+9. **Hash-chained audit log not implemented.** Mockup shows
+   "Verified · 2 min ago" with chain proof. Today rendered as a static
+   "ships in a later stage" line on `/admin/audit-log`. Real chain
+   verification + cryptographic head hash is a Stage 11 / 12 task.
+
+**Tests**
+
+10. **No page-render smoke tests for the six admin pages.** RSC + tRPC
+    server caller is hard to render in JSDOM without a Playwright/E2E
+    setup. `pnpm build` exercises the full type-checked render path,
+    which catches the same class of bugs (unresolved imports, prop type
+    mismatches, missing exports). Add real E2E coverage when Playwright
+    lands post-beta (per CLAUDE.md §5).
+
+**Component library debt**
+
+11. **`StatBand` cell highlight (`active`) only renders a top-border
+    accent.** Mockup also shows the value text in `--accent` color.
+    Mostly there, but a hover→active state polish pass will catch
+    differences.
+12. **`PageHeader` actions slot has no built-in "primary action" button
+    style.** Pages currently inline `<button>`/`<Link>` markup if they
+    want a CTA. Stage 11 polish adds a dedicated `<Button>` primitive
+    in `components/ui/` so admin actions look uniform.
+
+---
+
 ### #17 — Invite-gate hardening follow-ups
 
 Status: Documented; non-blocking polish from the invite-gate slice.

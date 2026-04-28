@@ -9,3 +9,4 @@ export {
   type Pagination,
 } from "./DataTable";
 export { Filters, type Chip } from "./Filters";
+export { PageLink } from "./PageLink";

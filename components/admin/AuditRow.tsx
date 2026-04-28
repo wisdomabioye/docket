@@ -45,7 +45,14 @@ export function classifyAuditAction(action: string): {
   for (const bucket of ACTION_BUCKET) {
     if (bucket.match.test(action)) return bucket;
   }
-  return { label: action.toUpperCase(), variant: "neutral" };
+  // Unknown action: surface the prefix only (e.g. "case.beneficiary_updated"
+  // → `CASE`) so the badge stays compact. Without this the entire
+  // dotted-path renders as the label and overflows the cell at narrow
+  // widths.
+  const prefix = action.includes(".")
+    ? (action.split(".")[0] ?? action)
+    : action;
+  return { label: prefix.toUpperCase(), variant: "neutral" };
 }
 
 export function AuditRow(props: {

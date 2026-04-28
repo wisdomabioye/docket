@@ -1,6 +1,3 @@
-import { redirect } from "next/navigation";
-import { TRPCError } from "@trpc/server";
-import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { PageHeader } from "@/components/admin/PageHeader";
@@ -8,13 +5,14 @@ import { KpiCard, KpiGrid } from "@/components/kpi";
 import { Card, EmptyState, ProgressBar } from "@/components/ui";
 import { Filters, type Chip } from "@/components/table";
 import { formatCents } from "@/lib/utils";
+import { parseEnum } from "@/lib/url-params";
 
 export const metadata = { title: pageTitle("Revenue") };
 
-const PERIOD_CHIPS: ReadonlyArray<{
-  label: string;
-  period: "MTD" | "QTD" | "YTD" | "ALL";
-}> = [
+const PERIODS = ["MTD", "QTD", "YTD", "ALL"] as const;
+type Period = (typeof PERIODS)[number];
+
+const PERIOD_CHIPS: ReadonlyArray<{ label: string; period: Period }> = [
   { label: "MTD", period: "MTD" },
   { label: "QTD", period: "QTD" },
   { label: "YTD", period: "YTD" },
@@ -24,21 +22,9 @@ const PERIOD_CHIPS: ReadonlyArray<{
 export default async function AdminRevenuePage(props: {
   searchParams: Promise<{ period?: string }>;
 }): Promise<React.ReactElement> {
-  const session = await auth();
-  if (!session?.user) redirect(APP_ROUTES.login);
-
   const params = await props.searchParams;
-  const period = parsePeriod(params.period) ?? "QTD";
-
-  let data: Awaited<ReturnType<typeof api.admin.getRevenueMetrics>>;
-  try {
-    data = await api.admin.getRevenueMetrics({ period });
-  } catch (err) {
-    if (err instanceof TRPCError && err.code === "FORBIDDEN") {
-      redirect(APP_ROUTES.dashboard);
-    }
-    throw err;
-  }
+  const period = parseEnum<Period>(params.period, PERIODS) ?? "QTD";
+  const data = await api.admin.getRevenueMetrics({ period });
 
   const empty = data.totals.filings === 0;
   const chips: Chip[] = PERIOD_CHIPS.map((c) => ({
@@ -61,19 +47,19 @@ export default async function AdminRevenuePage(props: {
         <KpiCard
           label={`Gross · ${period}`}
           value={formatCents(data.totals.grossCents)}
-          empty={empty}
+          dim={empty}
           sub={empty ? "Awaiting first filing" : `${data.totals.filings} filings`}
         />
         <KpiCard
           label={`Docket share · ${period}`}
           value={formatCents(data.totals.docketCents)}
-          empty={empty}
+          dim={empty}
           sub={empty ? "—" : "15% of gross"}
         />
         <KpiCard
           label={`Attorney payouts · ${period}`}
           value={formatCents(data.totals.attorneyCents)}
-          empty={empty}
+          dim={empty}
           sub={empty ? "—" : "85% of gross"}
         />
       </KpiGrid>
@@ -112,8 +98,3 @@ export default async function AdminRevenuePage(props: {
   );
 }
 
-function parsePeriod(raw: string | undefined): "MTD" | "QTD" | "YTD" | "ALL" | undefined {
-  return raw === "MTD" || raw === "QTD" || raw === "YTD" || raw === "ALL"
-    ? raw
-    : undefined;
-}

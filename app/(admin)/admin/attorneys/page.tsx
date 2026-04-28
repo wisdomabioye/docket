@@ -1,12 +1,24 @@
-import { redirect } from "next/navigation";
-import { TRPCError } from "@trpc/server";
-import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { Badge } from "@/components/ui";
 import { DataTable, Filters, type Chip, type Column } from "@/components/table";
+import { ATTORNEY_STATUSES, type AttorneyStatus } from "@/lib/constants";
+import { attorneyStatusVariant } from "@/lib/status-style";
+import {
+  buildNextHref,
+  buildPrevHref,
+  buildResetHref,
+  formatRange,
+  parsePaginationParams,
+} from "@/lib/keyset-pagination";
+import { parseEnum } from "@/lib/url-params";
 import { ActivateButton } from "./ActivateButton";
+
+// Auth + admin-role gating happens in `app/(admin)/layout.tsx` (sole
+// owner of `await auth()` and the `admin.ping` probe). Pages assume an
+// authenticated admin caller and call procedures directly.
+const PAGE_SIZE = 25;
 
 export const metadata = { title: pageTitle("Attorneys") };
 
@@ -29,56 +41,56 @@ const COLUMNS: readonly Column[] = [
   { key: "actions", label: "", align: "right" },
 ];
 
-const STATUS_VARIANT = {
-  active: "success",
-  pending: "warning",
-  suspended: "error",
-  inactive: "neutral",
-} as const;
-
 export default async function AdminAttorneysPage(props: {
   searchParams: Promise<{
     status?: string;
     cursor_at?: string;
     cursor_id?: string;
+    stack?: string;
   }>;
 }): Promise<React.ReactElement> {
-  const session = await auth();
-  if (!session?.user) redirect(APP_ROUTES.login);
-
   const params = await props.searchParams;
-  const status = parseStatus(params.status);
-  const cursor =
-    params.cursor_at && params.cursor_id
-      ? { createdAt: params.cursor_at, id: params.cursor_id }
-      : undefined;
+  const status = parseEnum<AttorneyStatus>(params.status, ATTORNEY_STATUSES);
+  const pagination = parsePaginationParams(params);
 
-  const data = await callOrBounce(() =>
-    api.admin.listAttorneys({
-      ...(status ? { status } : {}),
-      ...(cursor ? { cursor } : {}),
-    }),
-  );
+  const data = await api.admin.listAttorneys({
+    ...(status ? { status } : {}),
+    ...(pagination.cursor ? { cursor: pagination.cursor } : {}),
+  });
 
+  // Filter chip clicks reset to page 1 — keeping a stack across a filter
+  // change would point at irrelevant cursors.
   const chips: Chip[] = STATUS_CHIPS.map((c) => ({
     label: c.label,
     count: c.status === "all" ? data.totals.all : data.totals[c.status],
-    href:
-      c.status === "all"
-        ? APP_ROUTES.adminAttorneys
-        : `${APP_ROUTES.adminAttorneys}?status=${c.status}`,
+    href: buildResetHref(
+      APP_ROUTES.adminAttorneys,
+      c.status === "all" ? {} : { status: c.status },
+    ),
     active: (status ?? "all") === c.status,
   }));
 
-  const lastRow = data.items[data.items.length - 1];
-  const nextHref =
-    data.nextCursor && lastRow
-      ? buildHref(APP_ROUTES.adminAttorneys, {
-          status,
-          cursor_at: data.nextCursor.createdAt,
-          cursor_id: data.nextCursor.id,
-        })
-      : undefined;
+  const filterExtras = status ? { status } : {};
+  const nextHref = data.nextCursor
+    ? buildNextHref(
+        APP_ROUTES.adminAttorneys,
+        pagination,
+        data.nextCursor,
+        filterExtras,
+      )
+    : undefined;
+  const prevHref = buildPrevHref(
+    APP_ROUTES.adminAttorneys,
+    pagination,
+    filterExtras,
+  );
+
+  const total = status ? data.totals[status] : data.totals.all;
+  const range = formatRange({
+    pageIndex: pagination.stack.length,
+    pageSize: PAGE_SIZE,
+    itemsOnPage: data.items.length,
+  });
 
   return (
     <>
@@ -88,7 +100,7 @@ export default async function AdminAttorneysPage(props: {
         subtitle={`${data.totals.active} active · ${data.totals.pending} pending · ${data.totals.suspended} suspended`}
       />
 
-      <Filters chips={chips} right={`${data.items.length} on this page`} />
+      <Filters chips={chips} right={`${total.toLocaleString()} total`} />
 
       <DataTable
         columns={COLUMNS}
@@ -104,7 +116,10 @@ export default async function AdminAttorneysPage(props: {
             : { title: "No attorneys to show." }
         }
         pagination={{
+          total,
+          ...(range ? { range } : {}),
           ...(nextHref ? { nextHref } : {}),
+          ...(prevHref ? { prevHref } : {}),
         }}
         renderCell={(row, col) => {
           switch (col.key) {
@@ -128,7 +143,9 @@ export default async function AdminAttorneysPage(props: {
               );
             case "status":
               return (
-                <Badge variant={STATUS_VARIANT[row.status]}>{row.status}</Badge>
+                <Badge variant={attorneyStatusVariant[row.status]}>
+                  {row.status}
+                </Badge>
               );
             case "joined":
               return (
@@ -149,39 +166,4 @@ export default async function AdminAttorneysPage(props: {
   );
 }
 
-function parseStatus(
-  raw: string | undefined,
-): "active" | "pending" | "suspended" | "inactive" | undefined {
-  if (
-    raw === "active" ||
-    raw === "pending" ||
-    raw === "suspended" ||
-    raw === "inactive"
-  ) {
-    return raw;
-  }
-  return undefined;
-}
 
-function buildHref(
-  base: string,
-  params: Record<string, string | undefined>,
-): string {
-  const sp = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v) sp.set(k, v);
-  }
-  const qs = sp.toString();
-  return qs ? `${base}?${qs}` : base;
-}
-
-async function callOrBounce<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (err) {
-    if (err instanceof TRPCError && err.code === "FORBIDDEN") {
-      redirect(APP_ROUTES.dashboard);
-    }
-    throw err;
-  }
-}

@@ -1,12 +1,6 @@
 import { TRPCError } from "@trpc/server";
-import {
-  and,
-  desc,
-  eq,
-  inArray,
-  isNull,
-  lt,
-} from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { keysetLt } from "@/server/db/helpers";
 import { z } from "zod";
 import {
   caseEvents,
@@ -142,11 +136,9 @@ export const caseRouter = router({
     if (input.visaType?.length)
       filters.push(inArray(cases.visaType, input.visaType));
     if (input.cursor) {
-      // Keyset pagination: createdAt-only. Two cases with identical
-      // timestamps could fall on the page boundary (open_issues #13.3) —
-      // vanishingly rare with millisecond defaults. Phase 2 adds the
-      // `id` tiebreaker via `(createdAt, id) < (cursor.createdAt, cursor.id)`.
-      filters.push(lt(cases.createdAt, new Date(input.cursor.createdAt)));
+      // Composite `(createdAt, id)` keyset cursor — see `keysetLt` for
+      // why both columns are needed and why we truncate to milliseconds.
+      filters.push(keysetLt(cases.createdAt, cases.id, input.cursor));
     }
 
     const rows = await db

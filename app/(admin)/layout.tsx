@@ -23,8 +23,7 @@ export default async function AdminLayout(props: {
   if (!session?.user) redirect(APP_ROUTES.login);
 
   try {
-    // Cheapest admin-only call we have — purely a permission probe.
-    await api.admin.listPendingAttorneys();
+    await api.admin.ping();
   } catch (err) {
     if (err instanceof TRPCError && err.code === "FORBIDDEN") {
       redirect(APP_ROUTES.dashboard);

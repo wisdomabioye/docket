@@ -164,9 +164,9 @@ describe("admin.listWaitlist", () => {
       },
     ]);
 
-    const rows = await callAs(ADMIN).admin.listWaitlist();
-    expect(rows.length).toBeGreaterThanOrEqual(2);
-    const ours = rows.filter((r) =>
+    const data = await callAs(ADMIN).admin.listWaitlist();
+    expect(data.items.length).toBeGreaterThanOrEqual(2);
+    const ours = data.items.filter((r) =>
       ALL_TEST_EMAILS.includes(r.email),
     );
     expect(ours[0]?.email).toBe(APPROVED_EMAIL);
@@ -174,6 +174,7 @@ describe("admin.listWaitlist", () => {
     expect(ours[1]?.email).toBe(PENDING_EMAIL);
     expect(ours[1]?.approvedAt).toBeNull();
     expect(ours[1]?.approvedByEmail).toBeNull();
+    expect(data.totals.total).toBeGreaterThanOrEqual(2);
   });
 
   it("hides soft-deleted entries", async (ctx) => {
@@ -182,8 +183,8 @@ describe("admin.listWaitlist", () => {
       email: PENDING_EMAIL,
       deletedAt: new Date(),
     });
-    const rows = await callAs(ADMIN).admin.listWaitlist();
-    expect(rows.find((r) => r.email === PENDING_EMAIL)).toBeUndefined();
+    const data = await callAs(ADMIN).admin.listWaitlist();
+    expect(data.items.find((r) => r.email === PENDING_EMAIL)).toBeUndefined();
   });
 
   it("rejects non-admin callers", async (ctx) => {
@@ -191,6 +192,34 @@ describe("admin.listWaitlist", () => {
     await expect(callAs(NON_ADMIN).admin.listWaitlist()).rejects.toThrow(
       /admin role required/i,
     );
+  });
+
+  it("paginates via cursor, returning nextCursor when more rows exist", async (ctx) => {
+    const d = gate(ctx);
+    // Insert 27 entries across two pages (page size = 25).
+    const rows = Array.from({ length: 27 }, (_, i) => ({
+      email: `wl-pagination-${i.toString().padStart(2, "0")}@docket.local`,
+      name: `WL ${i}`,
+    }));
+    await d.insert(waitlistEntries).values(rows);
+
+    const page1 = await callAs(ADMIN).admin.listWaitlist();
+    expect(page1.items.length).toBe(25);
+    expect(page1.nextCursor).not.toBeNull();
+    expect(page1.totals.total).toBeGreaterThanOrEqual(27);
+
+    const page2 = await callAs(ADMIN).admin.listWaitlist({
+      cursor: page1.nextCursor!,
+    });
+    // Remaining 2 of our seed (plus any leftovers from prior tests in
+    // this beforeEach), but at least our 2.
+    expect(page2.items.length).toBeGreaterThanOrEqual(2);
+    expect(page2.nextCursor).toBeNull();
+
+    // No overlap between pages.
+    const page1Ids = new Set(page1.items.map((i) => i.id));
+    const overlap = page2.items.filter((i) => page1Ids.has(i.id));
+    expect(overlap).toEqual([]);
   });
 });
 

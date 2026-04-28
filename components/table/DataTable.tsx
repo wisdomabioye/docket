@@ -1,7 +1,7 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { PageLink } from "./PageLink";
 
 /**
  * Generic admin table chrome. Pure RSC: pagination is rendered as `Link`s
@@ -166,24 +166,3 @@ function PaginationFooter(p: Pagination): React.ReactElement {
   );
 }
 
-function PageLink({ href, label }: { href?: string; label: string }) {
-  if (!href) {
-    return (
-      <span
-        className="cursor-not-allowed rounded-sm border px-2.5 py-1 opacity-40"
-        style={{ borderColor: "var(--border)" }}
-      >
-        {label}
-      </span>
-    );
-  }
-  return (
-    <Link
-      href={href}
-      className="rounded-sm border px-2.5 py-1 hover:bg-[var(--surface-sunken)]"
-      style={{ borderColor: "var(--border)" }}
-    >
-      {label}
-    </Link>
-  );
-}

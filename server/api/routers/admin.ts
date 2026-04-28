@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { alias } from "drizzle-orm/pg-core";
-import { and, desc, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { bn, keysetLt } from "@/server/db/helpers";
 import { z } from "zod";
 import {
   attorneyProfiles,
@@ -39,17 +40,6 @@ const PERIOD_INTERVAL: Record<(typeof PERIODS)[number], string | null> = {
   ALL: null,
 };
 
-/** Coerce a postgres-js aggregation result to `bigint`. `sum(int8)::bigint`
- *  comes back as a string under postgres-js's default type config — Drizzle's
- *  `sql<bigint>` is a TypeScript hint, not a runtime parser. Use this on
- *  every aggregated money column so the wire shape stays `bigint`. */
-function bn(v: unknown): bigint {
-  if (typeof v === "bigint") return v;
-  if (typeof v === "number") return BigInt(v);
-  if (typeof v === "string") return BigInt(v);
-  return 0n;
-}
-
 /** Build a human-readable message for an audit row. Falls back to the
  *  raw action when no template matches — better than empty text. */
 function summarizeAuditAction(e: {
@@ -83,6 +73,16 @@ function summarizeAuditAction(e: {
  */
 
 export const adminRouter = router({
+  /**
+   * Cheapest possible admin probe. The layout calls this once per page
+   * load to gate access; an admin gets `{ ok: true }`, a non-admin gets
+   * `FORBIDDEN` from `adminProcedure`. No DB scans, no joins — just the
+   * `is_admin()` SECURITY DEFINER check that `adminProcedure` already
+   * runs. Cheaper than `listPendingAttorneys` (the prior probe) which
+   * hit two tables for data we discarded.
+   */
+  ping: adminProcedure.query(() => ({ ok: true as const })),
+
   /** Attorneys waiting for activation — most recent submissions first. */
   listPendingAttorneys: adminProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db
@@ -174,31 +174,84 @@ export const adminRouter = router({
     }),
 
   /**
-   * Waitlist + invite gate. `listWaitlist` returns every non-deleted entry
-   * newest-first with approval status joined; `approveWaitlistEntry` flips
-   * `approved_at` so the email can complete OAuth sign-in.
+   * Waitlist + invite gate. Newest-first paginated stream of non-deleted
+   * entries with approver email joined; `approveWaitlistEntry` flips the
+   * row from pending → approved.
    *
-   * No pagination yet — the queue is small in early access. Add a cursor
-   * once it crosses ~200 entries.
+   * Keyset cursor `(createdAt, id)` matches the other admin listings.
    */
-  listWaitlist: adminProcedure.query(async ({ ctx }) => {
-    const approver = alias(users, "approver");
-    const rows = await ctx.db
-      .select({
-        id: waitlistEntries.id,
-        email: waitlistEntries.email,
-        name: waitlistEntries.name,
-        source: waitlistEntries.source,
-        createdAt: waitlistEntries.createdAt,
-        approvedAt: waitlistEntries.approvedAt,
-        approvedByEmail: approver.email,
-      })
-      .from(waitlistEntries)
-      .leftJoin(approver, eq(approver.id, waitlistEntries.approvedBy))
-      .where(isNull(waitlistEntries.deletedAt))
-      .orderBy(desc(waitlistEntries.createdAt));
-    return rows;
-  }),
+  listWaitlist: adminProcedure
+    .input(
+      z
+        .object({
+          cursor: z
+            .object({
+              createdAt: z.iso.datetime(),
+              id: z.uuid(),
+            })
+            .optional(),
+        })
+        .optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const { db } = ctx;
+      const approver = alias(users, "approver");
+
+      const filters = [isNull(waitlistEntries.deletedAt)];
+      if (input?.cursor) {
+        filters.push(
+          keysetLt(waitlistEntries.createdAt, waitlistEntries.id, input.cursor),
+        );
+      }
+
+      // Items + totals — independent reads, fan out.
+      const [rows, countsRows] = await Promise.all([
+        db
+          .select({
+            id: waitlistEntries.id,
+            email: waitlistEntries.email,
+            name: waitlistEntries.name,
+            source: waitlistEntries.source,
+            createdAt: waitlistEntries.createdAt,
+            approvedAt: waitlistEntries.approvedAt,
+            approvedByEmail: approver.email,
+          })
+          .from(waitlistEntries)
+          .leftJoin(approver, eq(approver.id, waitlistEntries.approvedBy))
+          .where(and(...filters))
+          .orderBy(desc(waitlistEntries.createdAt), desc(waitlistEntries.id))
+          .limit(LIST_PAGE_SIZE + 1),
+
+        db
+          .select({
+            total: sql<number>`count(*)::int`,
+            pending: sql<number>`count(*) filter (where ${waitlistEntries.approvedAt} is null)::int`,
+            approved: sql<number>`count(*) filter (where ${waitlistEntries.approvedAt} is not null)::int`,
+          })
+          .from(waitlistEntries)
+          .where(isNull(waitlistEntries.deletedAt)),
+      ]);
+
+      const hasMore = rows.length > LIST_PAGE_SIZE;
+      const items = hasMore ? rows.slice(0, LIST_PAGE_SIZE) : rows;
+      const counts = countsRows[0];
+
+      const last = items[items.length - 1];
+      const nextCursor =
+        hasMore && last
+          ? { createdAt: last.createdAt.toISOString(), id: last.id }
+          : null;
+
+      return {
+        items: items.map((r) => ({
+          ...r,
+          createdAt: r.createdAt.toISOString(),
+          approvedAt: r.approvedAt?.toISOString() ?? null,
+        })),
+        totals: counts ?? { total: 0, pending: 0, approved: 0 },
+        nextCursor,
+      };
+    }),
 
   approveWaitlistEntry: adminProcedure
     .input(z.object({ entryId: z.uuid() }))
@@ -281,24 +334,67 @@ export const adminRouter = router({
   getOverviewMetrics: adminProcedure.query(async ({ ctx }) => {
     const { db } = ctx;
 
-    const [attorneyCounts] = await db
-      .select({
-        active: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'active')::int`,
-        pending: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'pending')::int`,
-        suspended: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'suspended')::int`,
-        inactive: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'inactive')::int`,
-      })
-      .from(attorneyProfiles)
-      .where(isNull(attorneyProfiles.deletedAt));
+    // Four independent reads — fan out in parallel. The whole procedure
+    // becomes a single round-trip's worth of latency instead of four.
+    const [attorneyCountsRows, caseStatusRows, revenue7dRows, recent] =
+      await Promise.all([
+        db
+          .select({
+            active: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'active')::int`,
+            pending: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'pending')::int`,
+            suspended: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'suspended')::int`,
+            inactive: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'inactive')::int`,
+          })
+          .from(attorneyProfiles)
+          .where(isNull(attorneyProfiles.deletedAt)),
 
-    const caseStatusRows = await db
-      .select({
-        status: cases.status,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(cases)
-      .where(isNull(cases.deletedAt))
-      .groupBy(cases.status);
+        db
+          .select({
+            status: cases.status,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(cases)
+          .where(isNull(cases.deletedAt))
+          .groupBy(cases.status),
+
+        // Filed cases in the last 7 days. Returns zero `bigint`s if no
+        // cases have `filed_at` yet (Stage 07/10 wires this up).
+        db
+          .select({
+            grossCents: sql<bigint>`coalesce(sum(${cases.caseFeeCents}), 0)::bigint`,
+            docketShareCents: sql<bigint>`coalesce(sum(${cases.docketShareCents}), 0)::bigint`,
+            filings: sql<number>`count(*)::int`,
+          })
+          .from(cases)
+          .where(
+            and(
+              isNull(cases.deletedAt),
+              isNotNull(cases.filedAt),
+              sql`${cases.filedAt} >= now() - interval '7 days'`,
+            ),
+          ),
+
+        // Recent admin-relevant events. Joins actor email so the UI
+        // doesn't need a second round-trip. Limit 10 for the Ops Inbox.
+        db
+          .select({
+            id: auditLog.id,
+            action: auditLog.action,
+            targetType: auditLog.targetType,
+            targetId: auditLog.targetId,
+            details: auditLog.details,
+            ipAddress: auditLog.ipAddress,
+            createdAt: auditLog.createdAt,
+            actorEmail: users.email,
+          })
+          .from(auditLog)
+          .leftJoin(users, eq(users.id, auditLog.actorUserId))
+          .orderBy(desc(auditLog.createdAt))
+          .limit(10),
+      ]);
+
+    const attorneyCounts = attorneyCountsRows[0];
+    const revenue7d = revenue7dRows[0];
 
     const casesByStatus = Object.fromEntries(
       caseStatusEnum.enumValues.map((s) => [s, 0]),
@@ -308,41 +404,6 @@ export const adminRouter = router({
       casesByStatus[row.status] = row.count;
       casesTotal += row.count;
     }
-
-    // Revenue: filed cases in the last 7 days. Returns zero `bigint`s if
-    // no cases have `filed_at` yet (Stage 07/10 wires this up).
-    const [revenue7d] = await db
-      .select({
-        grossCents: sql<bigint>`coalesce(sum(${cases.caseFeeCents}), 0)::bigint`,
-        docketShareCents: sql<bigint>`coalesce(sum(${cases.docketShareCents}), 0)::bigint`,
-        filings: sql<number>`count(*)::int`,
-      })
-      .from(cases)
-      .where(
-        and(
-          isNull(cases.deletedAt),
-          isNotNull(cases.filedAt),
-          sql`${cases.filedAt} >= now() - interval '7 days'`,
-        ),
-      );
-
-    // Recent admin-relevant events. Joins actor email so the UI doesn't
-    // need a second round-trip. Limit 10 for the Ops Inbox card.
-    const recent = await db
-      .select({
-        id: auditLog.id,
-        action: auditLog.action,
-        targetType: auditLog.targetType,
-        targetId: auditLog.targetId,
-        details: auditLog.details,
-        ipAddress: auditLog.ipAddress,
-        createdAt: auditLog.createdAt,
-        actorEmail: users.email,
-      })
-      .from(auditLog)
-      .leftJoin(users, eq(users.id, auditLog.actorUserId))
-      .orderBy(desc(auditLog.createdAt))
-      .limit(10);
 
     return {
       attorneys: attorneyCounts ?? {
@@ -404,45 +465,58 @@ export const adminRouter = router({
       }
       if (input.cursor) {
         filters.push(
-          lt(attorneyProfiles.createdAt, new Date(input.cursor.createdAt)),
+          keysetLt(
+            attorneyProfiles.createdAt,
+            attorneyProfiles.id,
+            input.cursor,
+          ),
         );
       }
 
-      const rows = await db
-        .select({
-          userId: users.id,
-          name: users.name,
-          email: users.email,
-          barNumber: attorneyProfiles.barNumber,
-          barStates: attorneyProfiles.barStates,
-          status: attorneyProfiles.status,
-          createdAt: attorneyProfiles.createdAt,
-          submittedAt: attorneyProfiles.submittedAt,
-          profileId: attorneyProfiles.id,
-        })
-        .from(attorneyProfiles)
-        .innerJoin(users, eq(users.id, attorneyProfiles.userId))
-        .where(and(...filters))
-        .orderBy(desc(attorneyProfiles.createdAt), desc(attorneyProfiles.id))
-        .limit(LIST_PAGE_SIZE + 1);
+      // Items + status totals — independent reads, fan out.
+      const [rows, totalsRows] = await Promise.all([
+        db
+          .select({
+            userId: users.id,
+            name: users.name,
+            email: users.email,
+            barNumber: attorneyProfiles.barNumber,
+            barStates: attorneyProfiles.barStates,
+            status: attorneyProfiles.status,
+            createdAt: attorneyProfiles.createdAt,
+            submittedAt: attorneyProfiles.submittedAt,
+            profileId: attorneyProfiles.id,
+          })
+          .from(attorneyProfiles)
+          .innerJoin(users, eq(users.id, attorneyProfiles.userId))
+          .where(and(...filters))
+          .orderBy(
+            desc(attorneyProfiles.createdAt),
+            desc(attorneyProfiles.id),
+          )
+          .limit(LIST_PAGE_SIZE + 1),
+
+        // Counts per status for filter chips — does NOT inherit the
+        // status filter (chips show all-time counts regardless of which
+        // chip is active).
+        db
+          .select({
+            all: sql<number>`count(*)::int`,
+            active: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'active')::int`,
+            pending: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'pending')::int`,
+            suspended: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'suspended')::int`,
+            inactive: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'inactive')::int`,
+          })
+          .from(attorneyProfiles)
+          .innerJoin(users, eq(users.id, attorneyProfiles.userId))
+          .where(
+            and(isNull(attorneyProfiles.deletedAt), isNull(users.deletedAt)),
+          ),
+      ]);
 
       const hasMore = rows.length > LIST_PAGE_SIZE;
       const items = hasMore ? rows.slice(0, LIST_PAGE_SIZE) : rows;
-
-      // Counts per status for filter chips. One query, one row.
-      const [totals] = await db
-        .select({
-          all: sql<number>`count(*)::int`,
-          active: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'active')::int`,
-          pending: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'pending')::int`,
-          suspended: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'suspended')::int`,
-          inactive: sql<number>`count(*) filter (where ${attorneyProfiles.status} = 'inactive')::int`,
-        })
-        .from(attorneyProfiles)
-        .innerJoin(users, eq(users.id, attorneyProfiles.userId))
-        .where(
-          and(isNull(attorneyProfiles.deletedAt), isNull(users.deletedAt)),
-        );
+      const totals = totalsRows[0];
 
       const last = items[items.length - 1];
       const nextCursor =
@@ -482,7 +556,11 @@ export const adminRouter = router({
   listAllCases: adminProcedure
     .input(
       z.object({
-        status: z.enum(caseStatusEnum.enumValues).optional(),
+        // Array so the StatBand groupings on `/admin/cases` (Drafting =
+        // ready_to_build + building + build_failed + draft_ready, etc.)
+        // can match the count they advertise. Single-status lookups pass
+        // a one-element array.
+        status: z.array(z.enum(caseStatusEnum.enumValues)).min(1).optional(),
         visaType: z.enum(visaTypeEnum.enumValues).optional(),
         cursor: z
           .object({
@@ -499,56 +577,62 @@ export const adminRouter = router({
       const org = alias(organizations, "org");
 
       const filters = [isNull(cases.deletedAt)];
-      if (input.status) filters.push(eq(cases.status, input.status));
+      if (input.status?.length) {
+        filters.push(inArray(cases.status, input.status));
+      }
       if (input.visaType) filters.push(eq(cases.visaType, input.visaType));
       if (input.cursor) {
-        filters.push(lt(cases.createdAt, new Date(input.cursor.createdAt)));
+        filters.push(keysetLt(cases.createdAt, cases.id, input.cursor));
       }
 
-      const rows = await db
-        .select({
-          id: cases.id,
-          visaType: cases.visaType,
-          status: cases.status,
-          beneficiaryData: cases.beneficiaryData,
-          caseFeeCents: cases.caseFeeCents,
-          docketShareCents: cases.docketShareCents,
-          filedAt: cases.filedAt,
-          createdAt: cases.createdAt,
-          updatedAt: cases.updatedAt,
-          orgName: org.name,
-          attorneyId: attorney.id,
-          attorneyName: attorney.name,
-          attorneyEmail: attorney.email,
-        })
-        .from(cases)
-        .leftJoin(
-          primary,
-          and(
-            eq(primary.caseId, cases.id),
-            eq(primary.role, "attorney"),
-            eq(primary.isPrimary, true),
-            isNull(primary.removedAt),
-          ),
-        )
-        .leftJoin(attorney, eq(attorney.id, primary.userId))
-        .leftJoin(org, eq(org.id, cases.organizationId))
-        .where(and(...filters))
-        .orderBy(desc(cases.createdAt), desc(cases.id))
-        .limit(LIST_PAGE_SIZE + 1);
+      // Items + StatBand totals — independent reads, fan out.
+      const [rows, statusRows] = await Promise.all([
+        db
+          .select({
+            id: cases.id,
+            visaType: cases.visaType,
+            status: cases.status,
+            beneficiaryData: cases.beneficiaryData,
+            caseFeeCents: cases.caseFeeCents,
+            docketShareCents: cases.docketShareCents,
+            filedAt: cases.filedAt,
+            createdAt: cases.createdAt,
+            updatedAt: cases.updatedAt,
+            orgName: org.name,
+            attorneyId: attorney.id,
+            attorneyName: attorney.name,
+            attorneyEmail: attorney.email,
+          })
+          .from(cases)
+          .leftJoin(
+            primary,
+            and(
+              eq(primary.caseId, cases.id),
+              eq(primary.role, "attorney"),
+              eq(primary.isPrimary, true),
+              isNull(primary.removedAt),
+            ),
+          )
+          .leftJoin(attorney, eq(attorney.id, primary.userId))
+          .leftJoin(org, eq(org.id, cases.organizationId))
+          .where(and(...filters))
+          .orderBy(desc(cases.createdAt), desc(cases.id))
+          .limit(LIST_PAGE_SIZE + 1),
+
+        // StatBand totals — does NOT inherit the active filter (cells
+        // show all-time per-status counts regardless of which is active).
+        db
+          .select({
+            status: cases.status,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(cases)
+          .where(isNull(cases.deletedAt))
+          .groupBy(cases.status),
+      ]);
 
       const hasMore = rows.length > LIST_PAGE_SIZE;
       const items = hasMore ? rows.slice(0, LIST_PAGE_SIZE) : rows;
-
-      // Status totals for the StatBand on `/admin/cases`.
-      const statusRows = await db
-        .select({
-          status: cases.status,
-          count: sql<number>`count(*)::int`,
-        })
-        .from(cases)
-        .where(isNull(cases.deletedAt))
-        .groupBy(cases.status);
 
       const byStatus = Object.fromEntries(
         caseStatusEnum.enumValues.map((s) => [s, 0]),
@@ -617,38 +701,60 @@ export const adminRouter = router({
         filters.push(sql`${auditLog.action} like ${input.actionPrefix + "%"}`);
       }
       if (input.cursor) {
-        filters.push(lt(auditLog.createdAt, new Date(input.cursor.createdAt)));
+        filters.push(keysetLt(auditLog.createdAt, auditLog.id, input.cursor));
       }
 
-      const rows = await db
-        .select({
-          id: auditLog.id,
-          action: auditLog.action,
-          targetType: auditLog.targetType,
-          targetId: auditLog.targetId,
-          details: auditLog.details,
-          ipAddress: auditLog.ipAddress,
-          createdAt: auditLog.createdAt,
-          actorEmail: users.email,
-        })
-        .from(auditLog)
-        .leftJoin(users, eq(users.id, auditLog.actorUserId))
-        .where(filters.length > 0 ? and(...filters) : undefined)
-        .orderBy(desc(auditLog.createdAt))
-        .limit(LIST_PAGE_SIZE + 1);
+      // Total matching the active filter (used by the pagination footer
+      // to render "Showing X–Y of Z"). Last 24h scope keeps the count
+      // cheap; pagination through older events is supported via cursor
+      // even though the displayed total reflects the 24h window.
+      const totalFilters = [
+        sql`${auditLog.createdAt} >= now() - interval '24 hours'`,
+      ];
+      if (input.actionPrefix) {
+        totalFilters.push(
+          sql`${auditLog.action} like ${input.actionPrefix + "%"}`,
+        );
+      }
+
+      // Three independent reads — fan out.
+      const [rows, prefixRows, totalRows] = await Promise.all([
+        db
+          .select({
+            id: auditLog.id,
+            action: auditLog.action,
+            targetType: auditLog.targetType,
+            targetId: auditLog.targetId,
+            details: auditLog.details,
+            ipAddress: auditLog.ipAddress,
+            createdAt: auditLog.createdAt,
+            actorEmail: users.email,
+          })
+          .from(auditLog)
+          .leftJoin(users, eq(users.id, auditLog.actorUserId))
+          .where(filters.length > 0 ? and(...filters) : undefined)
+          .orderBy(desc(auditLog.createdAt))
+          .limit(LIST_PAGE_SIZE + 1),
+
+        // Prefix-bucket totals for the legend (last 24h to keep cheap).
+        db
+          .select({
+            action: auditLog.action,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(auditLog)
+          .where(sql`${auditLog.createdAt} >= now() - interval '24 hours'`)
+          .groupBy(auditLog.action),
+
+        db
+          .select({ total: sql<number>`count(*)::int` })
+          .from(auditLog)
+          .where(and(...totalFilters)),
+      ]);
 
       const hasMore = rows.length > LIST_PAGE_SIZE;
       const items = hasMore ? rows.slice(0, LIST_PAGE_SIZE) : rows;
-
-      // Prefix-bucket totals for the legend (last 24h to keep cheap).
-      const prefixRows = await db
-        .select({
-          action: auditLog.action,
-          count: sql<number>`count(*)::int`,
-        })
-        .from(auditLog)
-        .where(sql`${auditLog.createdAt} >= now() - interval '24 hours'`)
-        .groupBy(auditLog.action);
+      const totalRow = totalRows[0];
 
       const byPrefix: Record<string, number> = {};
       for (const r of prefixRows) {
@@ -674,6 +780,7 @@ export const adminRouter = router({
           ipAddress: e.ipAddress,
         })),
         byPrefix,
+        total24h: totalRow?.total ?? 0,
         nextCursor,
       };
     }),
@@ -696,26 +803,30 @@ export const adminRouter = router({
         );
       }
 
-      const [totals] = await db
-        .select({
-          grossCents: sql<bigint>`coalesce(sum(${cases.caseFeeCents}), 0)::bigint`,
-          docketCents: sql<bigint>`coalesce(sum(${cases.docketShareCents}), 0)::bigint`,
-          attorneyCents: sql<bigint>`coalesce(sum(${cases.attorneyShareCents}), 0)::bigint`,
-          filings: sql<number>`count(*)::int`,
-        })
-        .from(cases)
-        .where(and(...filters));
+      // Two independent reads with the same WHERE — fan out.
+      const [totalsRows, byVisa] = await Promise.all([
+        db
+          .select({
+            grossCents: sql<bigint>`coalesce(sum(${cases.caseFeeCents}), 0)::bigint`,
+            docketCents: sql<bigint>`coalesce(sum(${cases.docketShareCents}), 0)::bigint`,
+            attorneyCents: sql<bigint>`coalesce(sum(${cases.attorneyShareCents}), 0)::bigint`,
+            filings: sql<number>`count(*)::int`,
+          })
+          .from(cases)
+          .where(and(...filters)),
 
-      const byVisa = await db
-        .select({
-          visa: cases.visaType,
-          cents: sql<bigint>`coalesce(sum(${cases.docketShareCents}), 0)::bigint`,
-          count: sql<number>`count(*)::int`,
-        })
-        .from(cases)
-        .where(and(...filters))
-        .groupBy(cases.visaType)
-        .orderBy(desc(sql`coalesce(sum(${cases.docketShareCents}), 0)`));
+        db
+          .select({
+            visa: cases.visaType,
+            cents: sql<bigint>`coalesce(sum(${cases.docketShareCents}), 0)::bigint`,
+            count: sql<number>`count(*)::int`,
+          })
+          .from(cases)
+          .where(and(...filters))
+          .groupBy(cases.visaType)
+          .orderBy(desc(sql`coalesce(sum(${cases.docketShareCents}), 0)`)),
+      ]);
+      const totals = totalsRows[0];
 
       return {
         period: input.period,

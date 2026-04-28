@@ -87,7 +87,7 @@ export function AdminSidebar(): React.ReactElement {
         className="sticky top-0 z-20 flex h-12 items-center justify-between px-3 text-[var(--cream)] lg:hidden"
         style={{ background: "var(--ink)" }}
       >
-        <Brand compact />
+        <Brand />
         <button
           type="button"
           onClick={() => setOpenPath(pathname)}
@@ -134,13 +134,10 @@ export function AdminSidebar(): React.ReactElement {
   );
 }
 
-function Brand({ compact }: { compact?: boolean }) {
+function Brand() {
   return (
     <div
-      className={cn(
-        "flex items-center gap-2 px-2.5 text-[20px] tracking-[-0.01em]",
-        compact ? "" : "pb-4 text-[22px]",
-      )}
+      className="flex items-center gap-2 px-2.5 text-[22px] tracking-[-0.01em]"
       style={{ fontFamily: "var(--font-serif), Georgia, serif" }}
     >
       Docket<span style={{ color: "var(--accent-ink)" }}>.</span>

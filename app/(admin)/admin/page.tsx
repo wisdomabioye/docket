@@ -1,5 +1,5 @@
 import { api } from "@/lib/trpc/server";
-import { pageTitle, APP_ROUTES } from "@/config";
+import { APP_ROUTES, pageTitle } from "@/config";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { AuditRow } from "@/components/admin/AuditRow";
 import { KpiCard, KpiGrid } from "@/components/kpi";
@@ -37,7 +37,7 @@ export default async function AdminOverviewPage(): Promise<React.ReactElement> {
         <KpiCard
           label="Gross revenue · 7d"
           value={formatCents(data.revenue7d.grossCents)}
-          empty={noRevenueYet}
+          dim={noRevenueYet}
           sub={
             noRevenueYet
               ? "Awaiting first filing"
@@ -47,7 +47,7 @@ export default async function AdminOverviewPage(): Promise<React.ReactElement> {
         <KpiCard
           label="Docket share · 7d"
           value={formatCents(data.revenue7d.docketShareCents)}
-          empty={noRevenueYet}
+          dim={noRevenueYet}
           sub={noRevenueYet ? "—" : "15% of gross"}
         />
         <KpiCard
