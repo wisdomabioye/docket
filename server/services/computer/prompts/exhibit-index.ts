@@ -1,5 +1,7 @@
 import "server-only";
+import { z } from "zod";
 import { buildSystemPrompt } from "./system";
+import { snippet } from "./_shared";
 import type { BuildContext, PromptSpec } from "./context";
 
 /**
@@ -50,30 +52,26 @@ export function buildExhibitIndexPrompt(ctx: BuildContext): PromptSpec {
   };
 }
 
-function snippet(s: string, n: number): string {
-  if (!s) return "(no extracted text)";
-  return s.length <= n ? s : `${s.slice(0, n)}…`;
-}
+/** Local Zod schema for the exhibit index — the canonical type isn't
+ *  defined elsewhere yet (Stage 8 may move it to `case_outputs.metadata`
+ *  per-type schema). Defined here so the JSON Schema sent to Sonar and
+ *  the eventual `JSON.parse(...)` validator stay in sync via one source. */
+export const ExhibitIndexEntrySchema = z
+  .object({
+    label: z.string(), // "Exhibit A"
+    documentId: z.string(),
+    filename: z.string(),
+    description: z.string(),
+    supportsCriteria: z.array(z.string()),
+  })
+  .strict();
 
-const EXHIBIT_INDEX_JSON_SCHEMA = {
-  type: "object",
-  required: ["entries"],
-  additionalProperties: false,
-  properties: {
-    entries: {
-      type: "array",
-      items: {
-        type: "object",
-        required: ["label", "documentId", "filename", "description", "supportsCriteria"],
-        additionalProperties: false,
-        properties: {
-          label: { type: "string" }, // "Exhibit A"
-          documentId: { type: "string" },
-          filename: { type: "string" },
-          description: { type: "string" },
-          supportsCriteria: { type: "array", items: { type: "string" } },
-        },
-      },
-    },
-  },
-} as const;
+export const ExhibitIndexSchema = z
+  .object({
+    entries: z.array(ExhibitIndexEntrySchema),
+  })
+  .strict();
+
+const EXHIBIT_INDEX_JSON_SCHEMA = z.toJSONSchema(ExhibitIndexSchema, {
+  target: "draft-2020-12",
+}) as Record<string, unknown>;

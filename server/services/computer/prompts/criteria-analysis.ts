@@ -1,4 +1,6 @@
 import "server-only";
+import { z } from "zod";
+import { CriteriaAnalysisSchema } from "@/server/db/schema/zod";
 import { buildSystemPrompt } from "./system";
 import type { BuildContext, PromptSpec } from "./context";
 
@@ -47,27 +49,7 @@ export function buildCriteriaAnalysisPrompt(ctx: BuildContext): PromptSpec {
   };
 }
 
-const CRITERIA_ANALYSIS_JSON_SCHEMA = {
-  type: "object",
-  required: ["visaType", "metCount", "requiredCount", "items"],
-  additionalProperties: false,
-  properties: {
-    visaType: { type: "string" },
-    metCount: { type: "integer", minimum: 0 },
-    requiredCount: { type: "integer", minimum: 0 },
-    items: {
-      type: "array",
-      items: {
-        type: "object",
-        required: ["criterion", "met", "rationale", "supportingExhibits"],
-        additionalProperties: false,
-        properties: {
-          criterion: { type: "string" },
-          met: { type: "boolean" },
-          rationale: { type: "string" },
-          supportingExhibits: { type: "array", items: { type: "string" } },
-        },
-      },
-    },
-  },
-} as const;
+/** Derived from the canonical `CriteriaAnalysisSchema` (Zod). */
+const CRITERIA_ANALYSIS_JSON_SCHEMA = z.toJSONSchema(CriteriaAnalysisSchema, {
+  target: "draft-2020-12",
+}) as Record<string, unknown>;

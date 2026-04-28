@@ -1,5 +1,8 @@
 import "server-only";
+import { z } from "zod";
+import { EvidencePlanSchema } from "@/server/db/schema/zod";
 import { buildSystemPrompt } from "./system";
+import { snippet } from "./_shared";
 import type { BuildContext, PromptSpec } from "./context";
 
 /**
@@ -46,41 +49,10 @@ export function buildEvidencePlanPrompt(ctx: BuildContext): PromptSpec {
   };
 }
 
-/** First N chars + ellipsis. Used to keep doc excerpts in the prompt
- *  brief; full extracted text lives in the case_documents row. */
-function snippet(s: string, n: number): string {
-  if (!s) return "(no extracted text)";
-  return s.length <= n ? s : `${s.slice(0, n)}…`;
-}
-
-/** Mirrors `EvidencePlanSchema` from server/db/schema/zod/. Hand-rolled
- *  JSON Schema so we don't pull in zod-to-json-schema as a dep just
- *  for prompt construction. */
-const EVIDENCE_PLAN_JSON_SCHEMA = {
-  type: "object",
-  required: ["visaType", "overallStrength", "criteria", "generatedAt"],
-  additionalProperties: false,
-  properties: {
-    visaType: { type: "string" },
-    overallStrength: { type: "string", enum: ["strong", "moderate", "weak"] },
-    criteria: {
-      type: "array",
-      items: {
-        type: "object",
-        required: ["criterion", "assessment", "summary", "gaps"],
-        additionalProperties: false,
-        properties: {
-          criterion: { type: "string" },
-          assessment: {
-            type: "string",
-            enum: ["strong", "moderate", "weak", "absent"],
-          },
-          summary: { type: "string" },
-          gaps: { type: "array", items: { type: "string" } },
-          recommendation: { type: "string" },
-        },
-      },
-    },
-    generatedAt: { type: "string", format: "date-time" },
-  },
-} as const;
+/** Derived from the canonical `EvidencePlanSchema` (Zod) — single source
+ *  of truth. Adding a field to the Zod schema picks it up here on the
+ *  next request. `target: "draft-2020-12"` matches what OpenAI-style
+ *  `response_format` JSON Schema expects. */
+const EVIDENCE_PLAN_JSON_SCHEMA = z.toJSONSchema(EvidencePlanSchema, {
+  target: "draft-2020-12",
+}) as Record<string, unknown>;

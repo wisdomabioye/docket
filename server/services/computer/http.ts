@@ -7,7 +7,9 @@ import Perplexity, {
   InternalServerError,
   RateLimitError,
 } from "@perplexity-ai/perplexity_ai";
+import type { CompletionCreateParamsNonStreaming } from "@perplexity-ai/perplexity_ai/resources/chat/completions";
 import { env } from "@/config/env";
+import { costForTokens } from "./pricing";
 import {
   ComputerError,
   ComputerOutputSchema,
@@ -38,12 +40,6 @@ import {
 
 const DEFAULT_MODEL = "sonar-pro";
 const DEFAULT_MAX_TOKENS = 4096;
-// Sonar-pro list pricing (as of Stage 07 plan): $3 / $15 per 1M tokens.
-// Mirrors the mock so dev + prod produce the same ledger entries on the
-// same prompts. If Perplexity adjusts pricing, update both constants
-// AND open_issues should record the divergence point.
-const PRICE_INPUT_PER_M_TOKENS_USD_CENTS = 300;
-const PRICE_OUTPUT_PER_M_TOKENS_USD_CENTS = 1500;
 
 export class SonarClient implements ComputerClient {
   private readonly client: Perplexity;
@@ -85,7 +81,15 @@ export class SonarClient implements ComputerClient {
   }
 }
 
-function requestFromInput(input: ComputerInput) {
+/** Annotated return type forces SDK-shape compliance — a typo in
+ *  `disable_search` would fail at the spread instead of being silently
+ *  sent to Sonar (and ignored). Same for `search_domain_filter` etc.
+ *
+ *  Exported for testing — the policy → params mapping is the most
+ *  policy-laden translation in this file and warrants direct coverage. */
+export function requestFromInput(
+  input: ComputerInput,
+): CompletionCreateParamsNonStreaming {
   const searchOpts = searchPolicyToOptions(input.searchPolicy);
   const responseFormat = input.jsonSchema
     ? {
@@ -100,10 +104,11 @@ function requestFromInput(input: ComputerInput) {
   return {
     model: DEFAULT_MODEL,
     messages: [
-      { role: "system" as const, content: input.systemPrompt },
-      { role: "user" as const, content: input.userPrompt },
+      { role: "system", content: input.systemPrompt },
+      { role: "user", content: input.userPrompt },
     ],
     max_tokens: input.maxTokens ?? DEFAULT_MAX_TOKENS,
+    stream: false,
     ...searchOpts,
     ...(responseFormat ? { response_format: responseFormat } : {}),
   };
@@ -177,15 +182,12 @@ function adaptResponse(
 
   // Prefer the provider's reported cost when present — accounting truth
   // beats our local rate calc when the model sees a pricing update.
-  // SDK reports `total_cost` in USD (not cents); convert + ceil.
+  // SDK reports `total_cost` in USD (not cents); convert + ceil. Falls
+  // back to `costForTokens` (shared with the mock) when omitted.
   const usdCents =
     typeof r.usage?.cost?.total_cost === "number"
       ? Math.ceil(r.usage.cost.total_cost * 100)
-      : Math.ceil(
-          (promptTokens * PRICE_INPUT_PER_M_TOKENS_USD_CENTS +
-            completionTokens * PRICE_OUTPUT_PER_M_TOKENS_USD_CENTS) /
-            1_000_000,
-        ) || 1;
+      : costForTokens(promptTokens, completionTokens);
 
   const searchResults = r.search_results?.map((sr) => ({
     title: sr.title,

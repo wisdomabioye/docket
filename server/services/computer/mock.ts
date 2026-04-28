@@ -1,5 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { costForTokens, estimateTokens } from "./pricing";
 import {
   ComputerOutputSchema,
   type ComputerClient,
@@ -19,15 +20,11 @@ import {
  *     content → same row (write rejected by the index, which is the
  *     desired behavior).
  *
- * Token + cost math uses Sonar's published rates (see Stage 07 plan):
- * $3 per 1M input tokens, $15 per 1M output tokens (sonar-pro). Matches
- * the real client's accounting so the cost ledger reads identically in
- * dev and prod.
+ * Token + cost math goes through `pricing.ts` — same constants the real
+ * client uses, so the cost ledger reads identically in dev and prod.
  */
 
 const MOCK_LATENCY_MS = 200;
-const PRICE_INPUT_PER_M_TOKENS_USD_CENTS = 300; // $3.00
-const PRICE_OUTPUT_PER_M_TOKENS_USD_CENTS = 1500; // $15.00
 
 export class MockComputerClient implements ComputerClient {
   async generate(input: ComputerInput): Promise<ComputerOutput> {
@@ -41,12 +38,7 @@ export class MockComputerClient implements ComputerClient {
 
     const promptTokens = estimateTokens(input.systemPrompt + input.userPrompt);
     const completionTokens = estimateTokens(text);
-    const usdCents =
-      Math.ceil(
-        (promptTokens * PRICE_INPUT_PER_M_TOKENS_USD_CENTS +
-          completionTokens * PRICE_OUTPUT_PER_M_TOKENS_USD_CENTS) /
-          1_000_000,
-      ) || 1; // floor at 1 cent so cost ledger never records 0 for a real call
+    const usdCents = costForTokens(promptTokens, completionTokens);
 
     return ComputerOutputSchema.parse({
       text,
@@ -104,13 +96,6 @@ function generateMockText(args: {
     `(Stand-in body for ${args.outputType} on case ${args.caseId}. Real`,
     "Perplexity Sonar output replaces this once PERPLEXITY_API_KEY is set.)",
   ].join("\n");
-}
-
-/** Same `length / 4` heuristic the real client uses for pre-flight token
- *  estimates. Off by 10–25% vs. real BPE; acceptable for cost projection
- *  (open_issues #24 covers the real `tiktoken` upgrade). */
-function estimateTokens(s: string): number {
-  return Math.ceil(s.length / 4);
 }
 
 function wait(ms: number): Promise<void> {

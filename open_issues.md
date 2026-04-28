@@ -66,6 +66,67 @@ Surfaced: 2026-04-30 (Stage 03 review)
 
 ---
 
+### #19 — Stage 07 cleanup-pass deferrals
+
+Status: Documented; surfaced during Phase 7.5 cleanup before Phase 8.
+Surfaced: 2026-04-28 (Stage 07 mid-stage review)
+
+Items intentionally not fixed in the cleanup pass — each has a clear
+owner phase / stage where it lands more naturally:
+
+1. **`SonarClient.ping()` makes a real billable Sonar call.** Phase 12
+   wires a 5-min cron + a 1s `/api/health` probe against this. At
+   `sonar-pro` rates the per-call cost is fractions of a cent, but the
+   cron runs ~288×/day with no payoff (Sonar status doesn't change
+   every 5 min). **Phase 12 fix:** cache the result in Redis with a
+   5-min TTL; the cron writes the cache, the health probe reads it.
+   Avoid the billable call in the synchronous request path entirely.
+
+2. **No context-window pre-flight in `SonarClient`.** Stage 7 spec
+   §10.5 said: *"estimate tokens with `length/4` ... if over budget,
+   summarize each document via Claude first."* `estimateTokens()` now
+   lives in `pricing.ts` (shared with the mock), but no caller wires
+   it into a pre-flight check yet. Today an oversize prompt → Sonar
+   400 → `ComputerError("InvalidInput")` → case to `build_failed`.
+   Loud + fail-fast, but no recovery path. **Phase 9 fix:** sub-
+   functions add a pre-flight `estimateTokens(systemPrompt + userPrompt)
+   < SONAR_CONTEXT_BUDGET (180_000)` check; over-budget prompts get
+   per-doc text truncation before the call. The summarize-then-rerun
+   flow stays deferred to post-beta (would need a fallback model we
+   don't have per Decision #C).
+
+3. **`server/services/output/index.ts` barrel-as-module naming.** Other
+   services use named files (`server/services/cases/transition.ts`).
+   This one ships as `index.ts` with multiple exports. Inconsistent
+   but harmless — the barrel pattern is also used by
+   `server/services/computer/prompts/index.ts`. Pick a convention and
+   stick to it during a quiet stage; not worth churning during active
+   build.
+
+4. **`OutputMetadataSchema` is `z.union`, not `z.discriminatedUnion`.**
+   The `GenericMetadata` branch is `passthrough()`, so the typed
+   branches (`recommendation_letter_template`, `exhibit_index`) are
+   effectively unreachable for validation — any malformed shape on
+   those `type` values would silently match the generic branch.
+   Fix: `z.discriminatedUnion("type", [...])` so the typed branches
+   are picked correctly. Stage 8 (output review) is the natural
+   landing — the per-type metadata shapes get locked there.
+
+5. **`SonarClient.ping()` doesn't pre-flight-check the API key
+   format.** Today a malformed key → first real call throws
+   `AuthenticationError` → mapped to `ComputerError("NotConfigured")`.
+   Acceptable, but a smarter health probe would also surface "key
+   present but invalid" distinctly from "no key set." Bundle with #1.
+
+6. **`z.toJSONSchema` results cast to `Record<string, unknown>`.** The
+   Sonar SDK's `response_format.json_schema.schema` field is typed as
+   `Record<string, unknown>`; Zod 4's `z.toJSONSchema` returns a more
+   specific type. Cast keeps the SDK type happy; if the SDK tightens
+   its `schema` type, drop the cast. Tracked here so the diff is
+   small + obvious when it lands.
+
+---
+
 ### #18 — Stage 09 admin dashboard deferred items
 
 Status: Documented; non-blocking polish from the Stage 09 build.
