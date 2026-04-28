@@ -11,6 +11,7 @@ import {
   verificationTokens,
 } from "@/server/db/schema";
 import { onSignIn } from "./onboarding";
+import { isInvitePermitted } from "./invite-gate";
 import { APP_ROUTES } from "@/config";
 import { env } from "@/config/env";
 
@@ -65,6 +66,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   pages: {
     signIn: APP_ROUTES.login,
     error: APP_ROUTES.authError,
+  },
+  callbacks: {
+    /**
+     * Invite gate. Runs BEFORE the adapter creates the user row, so
+     * rejected sign-ins leave no trace in the DB. Returning a string
+     * redirects to that URL; we surface a friendly `not-invited` code on
+     * the auth error page. Returning `true` lets the sign-in proceed.
+     *
+     * Returning users (already in `users`) always pass — the gate only
+     * applies to first-time sign-ups.
+     */
+    signIn: async ({ user, profile }) => {
+      const email = user.email ?? profile?.email;
+      if (!email) return false;
+      const allowed = await isInvitePermitted(email);
+      if (allowed) return true;
+      return `${APP_ROUTES.authError}?error=not-invited`;
+    },
   },
   events: {
     signIn: async ({ user, isNewUser }) => {

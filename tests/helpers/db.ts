@@ -9,14 +9,21 @@ let cachedClient: Sql | null = null;
 let cachedDb: TestDb | null = null;
 
 /**
- * Connect to the test DB. Returns `null` when `DATABASE_URL` isn't set so
- * integration tests skip cleanly (CI without services, contributor without
- * local Postgres). Cached — repeated calls reuse the same connection.
+ * Connect to the **test** DB. Reads `TEST_DATABASE_URL` (NOT `DATABASE_URL`)
+ * so tests never touch the developer's dev DB. Returns `null` when the
+ * variable is unset so integration tests skip cleanly (CI without
+ * services, contributor without local Postgres). Cached — repeated calls
+ * reuse the same connection.
+ *
+ * Schema migrations are auto-applied to the test DB on `pnpm test` startup
+ * by `tests/global-setup.ts`; per-file `beforeAll` in `tests/setup.ts`
+ * truncates every app table so each test file starts pristine.
  */
 export function getTestDb(): TestDb | null {
-  if (!process.env.DATABASE_URL) return null;
+  const url = process.env.TEST_DATABASE_URL;
+  if (!url) return null;
   if (!cachedDb) {
-    cachedClient = postgres(process.env.DATABASE_URL, {
+    cachedClient = postgres(url, {
       max: 2,
       prepare: false,
     });

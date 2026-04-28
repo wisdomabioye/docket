@@ -27,6 +27,12 @@ const schema = z
     // connects directly via this URL; nothing else is needed for DB access.
     DATABASE_URL: z.url().optional(), // Stage 01
 
+    // Test-only Postgres URL. Tests run against this DB instead of
+    // `DATABASE_URL` so the dev DB stays clean. Migrations apply
+    // automatically via `tests/global-setup.ts`. Optional in normal runs;
+    // when unset, integration tests skip cleanly.
+    TEST_DATABASE_URL: z.url().optional(),
+
     // Auth.js — sessions written to our own Postgres via Drizzle adapter.
     // No Supabase Auth keys; OAuth only.
     AUTH_SECRET: z.string().min(32).optional(), // Stage 02
@@ -36,6 +42,22 @@ const schema = z
     AUTH_APPLE_SECRET: z.string().min(1).optional(),
     AUTH_MICROSOFT_ID: z.string().min(1).optional(),
     AUTH_MICROSOFT_SECRET: z.string().min(1).optional(),
+
+    /**
+     * One-time bootstrap: when this email signs in via SSO and no admin
+     * exists yet in `user_roles`, the invite gate lets them through and
+     * `onSignIn()` auto-grants them the `admin` role + activates their
+     * attorney profile. Self-disabling — once any admin exists, this
+     * variable is inert. See `server/auth/invite-gate.ts` and
+     * `server/auth/onboarding.ts`.
+     *
+     * Lowercased on parse so case mismatches between env file and SSO
+     * profile don't silently disable the bootstrap.
+     */
+    ADMIN_BOOTSTRAP_EMAIL: z
+      .email()
+      .transform((s) => s.toLowerCase())
+      .optional(),
 
     // Other services.
     POSTMARK_API_KEY: z.string().min(1).optional(), // Stage 11

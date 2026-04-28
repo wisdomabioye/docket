@@ -3,12 +3,14 @@ import { eq, sql } from "drizzle-orm";
 import { db, type Db } from "@/server/db/client";
 import {
   attorneyProfiles,
+  auditLog,
   organizationMembers,
   organizations,
   userRoles,
   users,
 } from "@/server/db/schema";
 import { randomSuffix, slugBase } from "./slug";
+import { emailMatchesBootstrap, anyAdminExists } from "./admin-bootstrap";
 
 /**
  * One-time provisioning for a brand-new user.
@@ -82,6 +84,50 @@ export async function onSignIn(args: {
         target: attorneyProfiles.userId,
         where: sql`${attorneyProfiles.deletedAt} is null`,
       });
+
+    // Founder bootstrap. Fires only if (a) the env-configured email
+    // matches AND (b) no admin exists yet — both checked atomically
+    // inside this transaction. Self-disabling once any admin exists.
+    if (emailMatchesBootstrap(user.email)) {
+      const txDb = tx as unknown as Db;
+      if (!(await anyAdminExists(txDb))) {
+        await applyFounderBootstrap(txDb, userId);
+      }
+    }
+  });
+}
+
+/**
+ * Promote the freshly-provisioned user to admin and activate their
+ * attorney profile so they can use the dashboard immediately. Idempotent:
+ * `user_roles` PK on `(user_id, role)` swallows a duplicate admin grant,
+ * and the profile UPDATE is a no-op the second time around.
+ */
+async function applyFounderBootstrap(
+  tx: Db,
+  userId: string,
+): Promise<void> {
+  await tx
+    .insert(userRoles)
+    .values({ userId, role: "admin" })
+    .onConflictDoNothing();
+
+  // Status alone is what gates dashboard access. Bar fields,
+  // `agreementSignedAt`, and `acceptedTermsVersion` stay null — the
+  // founder can fill them in later via /onboarding (which won't bounce
+  // them, since `status === 'active'` already passes the dashboard gate).
+  await tx
+    .update(attorneyProfiles)
+    .set({ status: "active" })
+    .where(eq(attorneyProfiles.userId, userId));
+
+  await tx.insert(auditLog).values({
+    actorType: "system",
+    actorUserId: null,
+    action: "admin.bootstrap",
+    targetType: "user",
+    targetId: userId,
+    details: { reason: "ADMIN_BOOTSTRAP_EMAIL matched first sign-in" },
   });
 }
 

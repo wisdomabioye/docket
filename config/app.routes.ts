@@ -36,6 +36,7 @@ export const APP_ROUTES = {
   // Admin
   admin: "/admin",
   adminAttorneys: "/admin/attorneys",
+  adminWaitlist: "/admin/waitlist",
   adminCases: "/admin/cases",
   adminRevenue: "/admin/revenue",
   adminCompute: "/admin/compute",

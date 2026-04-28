@@ -66,6 +66,38 @@ Surfaced: 2026-04-30 (Stage 03 review)
 
 ---
 
+### #17 — Invite-gate hardening follow-ups
+
+Status: Documented; non-blocking polish from the invite-gate slice.
+Surfaced: 2026-04-28 (post-Stage 03 hardening)
+
+1. **No email notification on approval.** Today, an admin approves a
+   waitlist entry and the user has no way to know. Wire Postmark in
+   Stage 11 to send "you're approved — sign in here" with a link to
+   `/login`. Until then, founder reaches out manually.
+2. **No revoke / un-approve action in `/admin/waitlist`.** Once
+   approved, the only way to keep a user out is to suspend the
+   resulting attorney profile (Stage 09 admin polish). Acceptable:
+   approval is rare and intentional; revocation by deleting the
+   waitlist row would still let an existing user (with `users` row)
+   sign in via the returning-user branch.
+3. **No founder-bootstrap doc.** The README should mention the one-shot
+   SQL the very first founder runs to seed themselves as an approved
+   waitlist entry + admin role. Add to `README.md` setup section.
+4. **`listWaitlist` is unpaginated.** Fine while volume is tiny; add a
+   `(createdAt, id)` keyset cursor at ~200 entries.
+5. **`signIn` callback runs an unmemoized DB query per OAuth attempt.**
+   At our scale (sub-1000 sign-ins/day) this is invisible, but a flood
+   of unsigned-up users hammering Google OAuth could thrash the gate.
+   Phase 2: add Upstash rate-limit on `not-invited` rejections by IP.
+6. **No test asserts that the `signIn` callback returns the redirect
+   URL on rejection.** The pure gate function is covered (7 cases) and
+   the admin surface is covered (8 cases), but the wire-up between the
+   two — the literal callback in `server/auth/config.ts` — is only
+   verified manually. Worth adding once Auth.js exposes a test harness.
+
+---
+
 ### #9 — Lint rule for `accounts` import outside `server/auth/`
 
 Status: Documented but never written.

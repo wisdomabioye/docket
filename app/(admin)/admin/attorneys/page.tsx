@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { TRPCError } from "@trpc/server";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
@@ -46,6 +47,14 @@ export default async function AdminAttorneysPage() {
             ? "Nobody waiting."
             : `${pending.length} awaiting activation.`}
         </p>
+        <nav className="mt-4 flex gap-4 text-xs">
+          <Link
+            href={APP_ROUTES.adminWaitlist}
+            className="text-[var(--color-ink-muted)] underline"
+          >
+            ← Waitlist
+          </Link>
+        </nav>
       </header>
 
       {pending.length > 0 && (
