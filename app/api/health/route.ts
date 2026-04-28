@@ -45,7 +45,7 @@ export async function GET() {
       auth: presence(env.AUTH_SECRET),
       authGoogle: presence(env.AUTH_GOOGLE_ID),
       authMicrosoft: presence(env.AUTH_MICROSOFT_ID),
-      computer: presence(env.PERPLEXITY_COMPUTER_API_KEY),
+      perplexity: presence(env.PERPLEXITY_API_KEY),
       stripe: presence(env.STRIPE_SECRET_KEY),
       postmark: presence(env.POSTMARK_API_KEY),
       inngest: presence(env.INNGEST_EVENT_KEY),

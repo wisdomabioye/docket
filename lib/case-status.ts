@@ -86,6 +86,23 @@ export function canUploadInStatus(s: CaseStatus): boolean {
   return (UPLOADABLE_STATUSES as readonly CaseStatus[]).includes(s);
 }
 
+/**
+ * Statuses from which the attorney can request a build (Stage 07).
+ * `ready_to_build` is the post-extraction happy path; `build_failed` is the
+ * retry path. Pre-extraction statuses (`intake`, `documents_pending`,
+ * `extracting`) are NOT buildable — there's nothing to build with.
+ * Post-build statuses (`building`, `draft_ready`, `in_review` etc.) reject
+ * because a build is in flight or already done.
+ */
+export const BUILDABLE_STATUSES = [
+  "ready_to_build",
+  "build_failed",
+] as const satisfies readonly CaseStatus[];
+
+export function canRequestBuild(s: CaseStatus): boolean {
+  return (BUILDABLE_STATUSES as readonly CaseStatus[]).includes(s);
+}
+
 /** Human-friendly status label (`needs_revision` → `Needs revision`). */
 export function formatStatus(s: CaseStatus): string {
   const spaced = s.replace(/_/g, " ");

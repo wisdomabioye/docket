@@ -65,7 +65,12 @@ const schema = z
     UPSTASH_REDIS_REST_TOKEN: z.string().min(1).optional(),
     INNGEST_EVENT_KEY: z.string().min(1).optional(), // Stage 07
     INNGEST_SIGNING_KEY: z.string().min(1).optional(),
-    PERPLEXITY_COMPUTER_API_KEY: z.string().min(1).optional(), // Stage 07
+    // Perplexity Sonar API. SDK convention is `PERPLEXITY_API_KEY` (the
+    // official `@perplexity-ai/perplexity_ai` package reads it by default).
+    // Was `PERPLEXITY_COMPUTER_API_KEY` pre-Stage-07 — that legacy name
+    // referred to the deprecated "Perplexity Computer" product; we use
+    // Sonar now (chat completions with web grounding).
+    PERPLEXITY_API_KEY: z.string().min(1).optional(), // Stage 07
     STRIPE_SECRET_KEY: z.string().min(1).optional(), // Stage 10
     STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
     SENTRY_AUTH_TOKEN: z.string().min(1).optional(),

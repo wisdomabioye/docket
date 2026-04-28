@@ -2,8 +2,9 @@ import "server-only";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { ZodError } from "zod";
 import superjson from "superjson";
-import { sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db, type Db } from "@/server/db/client";
+import { attorneyProfiles } from "@/server/db/schema";
 import { auth } from "@/server/auth/config";
 import { appErrorToTrpcCode, isAppError } from "@/lib/errors";
 
@@ -99,6 +100,40 @@ const requireAdmin = t.middleware(async ({ ctx, next }) => {
   return next();
 });
 
+/**
+ * Attorney procedure — extends protectedProcedure with an "active attorney
+ * profile" check. Reads `attorney_profiles.status` for the current user
+ * via RLS-engaged ctx.db (the `attorney_profiles_self` policy in
+ * migration 0005 lets a user see their own row). Per-request DB hit, no
+ * caching — keeps the source of truth on the row, not in a session
+ * snapshot. Volume is low (only mutating attorney procedures use this).
+ *
+ * FORBIDDEN if the row is missing or `status !== 'active'`. The case-new
+ * page and dashboard already do the same inline check; this middleware
+ * lets us drop those duplications when a procedure can express the
+ * requirement at the type level.
+ */
+const requireActiveAttorney = t.middleware(async ({ ctx, next }) => {
+  const c = ctx as typeof ctx & { db: Db; userId: string };
+  const [profile] = await c.db
+    .select({ status: attorneyProfiles.status })
+    .from(attorneyProfiles)
+    .where(
+      and(
+        eq(attorneyProfiles.userId, c.userId),
+        isNull(attorneyProfiles.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (!profile || profile.status !== "active") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "active attorney profile required",
+    });
+  }
+  return next();
+});
+
 /** Public procedure — no auth, no DB transaction. */
 export const publicProcedure = t.procedure;
 
@@ -107,6 +142,9 @@ export const protectedProcedure = t.procedure.use(requireAuthAndDb);
 
 /** Admin procedure — protected + admin role check. */
 export const adminProcedure = protectedProcedure.use(requireAdmin);
+
+/** Attorney procedure — protected + active attorney profile check. */
+export const attorneyProcedure = protectedProcedure.use(requireActiveAttorney);
 
 /**
  * Map service-layer errors to tRPC errors at the boundary. tRPC's
