@@ -1,16 +1,122 @@
 @import "tailwindcss";
 
 /*
- * Stage 00 minimum: brand background, ink text, and the three font variables
- * wired in `app/layout.tsx`. The full design-token block (palette, spacing,
- * radii, dark theme via `data-theme="dark"`) lands in Stage 00b via Tailwind 4's
- * `@theme` directive.
+ * Design tokens — Stage 00b.
+ *
+ * Source of truth for the visual system. Mirrors `Docket-Meridian-UI/hifi/app.css`
+ * (the canonical hi-fi mockups). When mockups and code drift, mockups win
+ * (CLAUDE.md §2). Update both files together.
+ *
+ * Two layers of names for every color:
+ *   1. `--color-<name>` inside `@theme` — Tailwind 4 picks these up and
+ *      generates utilities (`bg-accent`, `text-ink`, `border-border`).
+ *   2. `--<name>` aliases at `:root` — bare names match the mockup CSS so
+ *      ported markup can use `style="background: var(--accent)"` verbatim.
+ *
+ * Dark theme: same token names recomposed under `html[data-theme="dark"]`.
+ * Forest accent reads warm on deep ink.
  */
 
-:root {
-  --color-cream: #f5f1e8;
+@theme {
+  /* Ink (foreground text scale) */
   --color-ink: #0b1221;
-  --color-ink-muted: #5a6173;
+  --color-ink-soft: #2a3344;
+  --color-ink-muted: #6b7280;
+  --color-ink-faint: #9ca3af;
+
+  /* Surface (background scale) */
+  --color-cream: #f5f1e8;
+  --color-surface: #fefdfb;
+  --color-surface-sunken: #efebe0;
+  --color-surface-deep: #e7e2d3;
+  --color-white: #ffffff;
+
+  /* Borders */
+  --color-border: #e5e0d5;
+  --color-border-strong: #c8c2b3;
+
+  /* Accent — forest green (Open Decision #4) */
+  --color-accent: #1f3d2f;
+  --color-accent-ink: #12281e;
+  --color-accent-soft: #e8ede9;
+
+  /* Semantic */
+  --color-warning: #8b6914;
+  --color-warning-soft: #f5efd9;
+  --color-error: #9b2c2c;
+  --color-error-soft: #f5e2e2;
+  --color-info: #1f3d5c;
+  --color-info-soft: #e2eaf2;
+  --color-success: #1f5c3a;
+  --color-success-soft: #e5f0ea;
+
+  /* Radius */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+}
+
+:root {
+  /* Mockup-compatible bare aliases. Keep in lockstep with @theme above so
+     existing `var(--color-*)` callers and ported `var(--*)` callers both
+     resolve to the same value. */
+  --ink: var(--color-ink);
+  --ink-soft: var(--color-ink-soft);
+  --ink-muted: var(--color-ink-muted);
+  --ink-faint: var(--color-ink-faint);
+  --cream: var(--color-cream);
+  --surface: var(--color-surface);
+  --surface-sunken: var(--color-surface-sunken);
+  --surface-deep: var(--color-surface-deep);
+  --white: var(--color-white);
+  --border: var(--color-border);
+  --border-strong: var(--color-border-strong);
+  --accent: var(--color-accent);
+  --accent-ink: var(--color-accent-ink);
+  --accent-soft: var(--color-accent-soft);
+  --warning: var(--color-warning);
+  --warning-soft: var(--color-warning-soft);
+  --error: var(--color-error);
+  --error-soft: var(--color-error-soft);
+  --info: var(--color-info);
+  --info-soft: var(--color-info-soft);
+  --success: var(--color-success);
+  --success-soft: var(--color-success-soft);
+
+  --shadow-sm: 0 1px 2px rgba(11, 18, 33, 0.05);
+  --shadow-md: 0 4px 16px -4px rgba(11, 18, 33, 0.08);
+}
+
+/* Dark theme — opt-in via `<html data-theme="dark">`. Token names are
+   identical; only values change so any consumer (Tailwind utility or raw
+   `var()`) automatically picks up the dark variant. */
+html[data-theme="dark"] {
+  --color-ink: #ede7d8;
+  --color-ink-soft: #c8c2b3;
+  --color-ink-muted: #8a8577;
+  --color-ink-faint: #55524a;
+  --color-cream: #0e120f;
+  --color-surface: #151a16;
+  --color-surface-sunken: #1d221e;
+  --color-surface-deep: #252b26;
+  --color-white: #1b201c;
+  --color-border: #2a3028;
+  --color-border-strong: #3c4239;
+  --color-accent: #8ab29a;
+  --color-accent-ink: #a6c4aa;
+  --color-accent-soft: #1e2922;
+  --color-warning: #d9b56f;
+  --color-warning-soft: #2a2417;
+  --color-error: #d88f8f;
+  --color-error-soft: #2a1c1c;
+  --color-info: #8aa8c9;
+  --color-info-soft: #1a2430;
+  --color-success: #8eb99e;
+  --color-success-soft: #1b2720;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 18px -4px rgba(0, 0, 0, 0.5);
+
+  color-scheme: dark;
 }
 
 html,
@@ -19,9 +125,30 @@ body {
 }
 
 body {
-  background: var(--color-cream);
-  color: var(--color-ink);
+  background: var(--cream);
+  color: var(--ink);
   font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Utility helpers used by ported markup. Tailwind covers most cases;
+   these are the few classes that map 1:1 to mockup names so we don't
+   rewrite every `class="serif"` we port. */
+.serif {
+  font-family: var(--font-serif), Georgia, serif;
+}
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.eyebrow {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
 }
