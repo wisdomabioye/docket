@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { keysetLt } from "@/server/db/helpers";
 import { z } from "zod";
 import {
@@ -12,8 +12,16 @@ import {
 } from "@/server/db/schema";
 import { BeneficiaryDataSchema } from "@/server/db/schema/zod";
 import { db as ownerDb, type Db } from "@/server/db/client";
-import { protectedProcedure, router } from "@/server/api/trpc";
+import {
+  attorneyProcedure,
+  protectedProcedure,
+  router,
+} from "@/server/api/trpc";
 import { transitionCase } from "@/server/services/cases/transition";
+import { meetsBuildRequirements } from "@/server/services/cases/readiness";
+import { canRequestBuild } from "@/lib/case-status";
+import { rateLimit } from "@/server/services/ratelimit";
+import { inngest } from "@/server/jobs/client";
 import { AppError, appErrorToTrpcCode } from "@/lib/errors";
 
 /**
@@ -59,6 +67,10 @@ const ArchiveInput = z.object({
 });
 
 const GetInput = z.object({ caseId: z.uuid() });
+
+const RequestBuildInput = z.object({ caseId: z.uuid() });
+
+const ReadinessInput = z.object({ caseId: z.uuid() });
 
 export const caseRouter = router({
   create: protectedProcedure
@@ -316,6 +328,153 @@ export const caseRouter = router({
         }
         throw err;
       }
+    }),
+
+  /**
+   * Read-only readiness probe — used by the build page (Stage 7 UI) to
+   * render which gates are satisfied. Same predicate as `requestBuild`
+   * uses internally, surfaced here so the UI can disable the CTA + show
+   * specific gaps. Doesn't require an active attorney profile (read-only).
+   */
+  readiness: protectedProcedure
+    .input(ReadinessInput)
+    .query(async ({ ctx, input }) => {
+      try {
+        const r = await meetsBuildRequirements({
+          db: ctx.db,
+          caseId: input.caseId,
+        });
+        const statusOk = canRequestBuild(r.status);
+        return {
+          ok: r.ok && statusOk,
+          status: r.status,
+          statusOk,
+          reasons: [...r.reasons],
+        };
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw new TRPCError({
+            code: appErrorToTrpcCode(err.code),
+            message: err.message,
+          });
+        }
+        throw err;
+      }
+    }),
+
+  /**
+   * Kick off the build pipeline. Atomically:
+   *   1. Per-user rate limit (`case.requestBuild` 10/hr, spec §17.5).
+   *   2. RLS read confirms the user can see the case.
+   *   3. Status guard via `canRequestBuild` (only `ready_to_build` /
+   *      `build_failed` are allowed; other statuses → CONFLICT).
+   *   4. `meetsBuildRequirements` content gate (intake + extracted docs).
+   *   5. `transitionCase` to `building` inside a tx — the row lock
+   *      serializes concurrent requests; only one wins, the other gets
+   *      CONFLICT from `transitionCase`.
+   *   6. Emit `case/build.requested` so the parent `case-build` Inngest
+   *      function picks up. Concurrency=1 per case is the second
+   *      defense in depth.
+   *
+   * Requires `attorneyProcedure` — reverted attorneys (status != active)
+   * can't burn budget. The middleware already enforced that; we don't
+   * re-check here.
+   */
+  requestBuild: attorneyProcedure
+    .input(RequestBuildInput)
+    .mutation(async ({ ctx, input }) => {
+      const { db, userId } = ctx;
+
+      // 1. Rate limit. User-id identifier (never IP — attorneys can
+      // share a NAT). Bypassed in dev when Upstash isn't configured.
+      const rl = await rateLimit("case.requestBuild", userId);
+      if (!rl.success) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Build rate limit reached (${rl.limit}/hour). Try again later.`,
+        });
+      }
+
+      // 2. Single read pass: status (lifecycle gate) + content readiness.
+      // `meetsBuildRequirements` runs through the RLS-engaged ctx.db so
+      // an unauthorized caller throws NOT_FOUND with no content leak.
+      let r;
+      try {
+        r = await meetsBuildRequirements({ db, caseId: input.caseId });
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw new TRPCError({
+            code: appErrorToTrpcCode(err.code),
+            message: err.message,
+          });
+        }
+        throw err;
+      }
+
+      // 3. Status guard.
+      if (!canRequestBuild(r.status)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `case is in status ${r.status} — build can only be requested from ready_to_build or build_failed`,
+        });
+      }
+
+      // 4. Content gate.
+      if (!r.ok) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `case not ready to build: ${r.reasons.join(" ")}`,
+        });
+      }
+
+      // 5. Atomic transition + stamp `build_started_at`. transitionCase
+      // locks the row inside the tx; a concurrent requestBuild for the
+      // same case waits, sees status=building, and rejects with CONFLICT
+      // — the second click can't double-emit the event.
+      //
+      // Why stamp `build_started_at` here (not just in the parent
+      // function): if `inngest.send` below fails (network), the case is
+      // already in `building`. Without this timestamp the watchdog's
+      // `lt(buildStartedAt, now() - 30m)` predicate is FALSE for NULL,
+      // so the case would be stuck in `building` forever. Stamping now
+      // means the watchdog sweeps to `build_failed` after 30 min.
+      // The parent's step 2 will overwrite this with its own `now()`
+      // when it picks up — that's a refresh, not a regression.
+      try {
+        await ownerDb.transaction(async (tx) => {
+          await transitionCase({
+            tx: tx as unknown as Db,
+            caseId: input.caseId,
+            toStatus: "building",
+            actor: { type: "user", userId },
+            reason: "attorney requested build",
+          });
+          await tx
+            .update(cases)
+            .set({ buildStartedAt: sql`now()`, buildCompletedAt: null })
+            .where(eq(cases.id, input.caseId));
+        });
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw new TRPCError({
+            code: appErrorToTrpcCode(err.code),
+            message: err.message,
+          });
+        }
+        throw err;
+      }
+
+      // 6. Emit. AFTER the transition commits — if the emit fails, the
+      // case is in `building` with `build_started_at` stamped, so the
+      // watchdog catches it after 30m. Better than the alternative
+      // (event sent, transition fails → duplicate parent run with
+      // concurrency=1 dropping one).
+      const { ids } = await inngest.send({
+        name: "case/build.requested",
+        data: { caseId: input.caseId, requestedBy: userId },
+      });
+
+      return { ok: true as const, eventId: ids[0] ?? null };
     }),
 
   archive: protectedProcedure
