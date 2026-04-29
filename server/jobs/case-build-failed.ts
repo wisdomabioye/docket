@@ -16,7 +16,14 @@ import { inngest } from "./client";
  */
 
 export const caseBuildFailedEvent = eventType("case/build.failed", {
-  schema: staticSchema<{ caseId: string; reason: string }>(),
+  schema: staticSchema<{
+    caseId: string;
+    reason: string;
+    /** User who triggered the build, OR the literal `"system"` when the
+     *  watchdog killed it. The notifier picks the email recipient with
+     *  this hint. */
+    requestedBy: string;
+  }>(),
 });
 
 export const caseBuildFailed = inngest.createFunction(
