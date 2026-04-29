@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { caseEvents, cases } from "@/server/db/schema";
 import type { Db } from "@/server/db/client";
 import { AppError } from "@/lib/errors";
@@ -94,4 +94,54 @@ export async function transitionCase(args: {
   });
 
   return { from: fromStatus, to: toStatus };
+}
+
+/**
+ * Convenience: transition + stamp `build_started_at = now()` and clear
+ * `build_completed_at = null`. Used by the entry points that BEGIN a
+ * build run (`case.requestBuild` tRPC, `case-build` parent's mark-building
+ * step). Centralizes the dance so future callers can't forget to clear
+ * the prior `build_completed_at` (which would skew watchdog queries).
+ */
+export async function markBuildStarted(args: {
+  tx: Db;
+  caseId: string;
+  toStatus: CaseStatus;
+  actor:
+    | { type: "user"; userId: string }
+    | { type: "system" }
+    | { type: "computer" };
+  reason?: string;
+  expectedRowRevision?: number;
+}): Promise<{ from: CaseStatus; to: CaseStatus }> {
+  const result = await transitionCase(args);
+  await args.tx
+    .update(cases)
+    .set({ buildStartedAt: sql`now()`, buildCompletedAt: null })
+    .where(eq(cases.id, args.caseId));
+  return result;
+}
+
+/**
+ * Convenience: transition + stamp `build_completed_at = now()`. Used by
+ * the exit points (parent `finalize-status` step, parent `onFailure`,
+ * watchdog `kill-{id}` step). Pairs with `markBuildStarted`.
+ */
+export async function markBuildEnded(args: {
+  tx: Db;
+  caseId: string;
+  toStatus: CaseStatus;
+  actor:
+    | { type: "user"; userId: string }
+    | { type: "system" }
+    | { type: "computer" };
+  reason?: string;
+  expectedRowRevision?: number;
+}): Promise<{ from: CaseStatus; to: CaseStatus }> {
+  const result = await transitionCase(args);
+  await args.tx
+    .update(cases)
+    .set({ buildCompletedAt: sql`now()` })
+    .where(eq(cases.id, args.caseId));
+  return result;
 }

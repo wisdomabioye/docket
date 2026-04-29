@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { keysetLt } from "@/server/db/helpers";
 import { z } from "zod";
 import {
@@ -17,7 +17,10 @@ import {
   protectedProcedure,
   router,
 } from "@/server/api/trpc";
-import { transitionCase } from "@/server/services/cases/transition";
+import {
+  markBuildStarted,
+  transitionCase,
+} from "@/server/services/cases/transition";
 import { meetsBuildRequirements } from "@/server/services/cases/readiness";
 import { canRequestBuild } from "@/lib/case-status";
 import { rateLimit } from "@/server/services/ratelimit";
@@ -427,10 +430,12 @@ export const caseRouter = router({
         });
       }
 
-      // 5. Atomic transition + stamp `build_started_at`. transitionCase
-      // locks the row inside the tx; a concurrent requestBuild for the
-      // same case waits, sees status=building, and rejects with CONFLICT
-      // — the second click can't double-emit the event.
+      // 5. Atomic transition + stamp `build_started_at` (via the
+      // `markBuildStarted` helper which centralizes the timestamp
+      // dance). transitionCase locks the row inside the tx; a
+      // concurrent requestBuild for the same case waits, sees
+      // status=building, and rejects with CONFLICT — the second click
+      // can't double-emit the event.
       //
       // Why stamp `build_started_at` here (not just in the parent
       // function): if `inngest.send` below fails (network), the case is
@@ -438,22 +443,18 @@ export const caseRouter = router({
       // `lt(buildStartedAt, now() - 30m)` predicate is FALSE for NULL,
       // so the case would be stuck in `building` forever. Stamping now
       // means the watchdog sweeps to `build_failed` after 30 min.
-      // The parent's step 2 will overwrite this with its own `now()`
+      // The parent's mark-building step will overwrite both timestamps
       // when it picks up — that's a refresh, not a regression.
       try {
-        await ownerDb.transaction(async (tx) => {
-          await transitionCase({
+        await ownerDb.transaction(async (tx) =>
+          markBuildStarted({
             tx: tx as unknown as Db,
             caseId: input.caseId,
             toStatus: "building",
             actor: { type: "user", userId },
             reason: "attorney requested build",
-          });
-          await tx
-            .update(cases)
-            .set({ buildStartedAt: sql`now()`, buildCompletedAt: null })
-            .where(eq(cases.id, input.caseId));
-        });
+          }),
+        );
       } catch (err) {
         if (err instanceof AppError) {
           throw new TRPCError({

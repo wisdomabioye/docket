@@ -29,6 +29,10 @@ type LimitConfig = {
   window: `${number} ${"s" | "m" | "h" | "d"}`;
 };
 
+// `mutation.default` is intentionally registered but unused at the call
+// sites — it's the cap that the future "rate-limit every mutation"
+// middleware will apply (Stage 12 readiness checklist). Keeping it here
+// means the limit lives in one place when that middleware lands.
 const LIMITS: Record<RateLimitName, LimitConfig> = {
   "case.requestBuild": { limit: 10, window: "1 h" },
   "mutation.default": { limit: 60, window: "1 m" },

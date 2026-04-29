@@ -21,7 +21,34 @@ describe("inngest client", () => {
 });
 
 describe("inngestFunctions registry", () => {
-  it("is an array (empty until Phase 9-10 populates it)", () => {
+  it("is an array", () => {
     expect(Array.isArray(inngestFunctions)).toBe(true);
+  });
+
+  it("registers all Phase 9-10 functions (regression guard)", () => {
+    // Hard-coding the expected ids catches accidental drops if a
+    // `import { ... } from "..."` line gets removed during refactors.
+    // Order isn't enforced — Inngest doesn't care.
+    const ids = inngestFunctions.map((f) => f.id());
+    expect(new Set(ids)).toEqual(
+      new Set([
+        "output-evidence-plan",
+        "output-personal-statement",
+        "output-petition-letter",
+        "output-recommendation-letter",
+        "output-exhibit-index",
+        "computer-health",
+        "case-build-failed",
+        "case-build",
+        "regenerate-output",
+        "case-build-watchdog",
+      ]),
+    );
+  });
+
+  it("each registered function exposes a stable id (no anonymous functions)", () => {
+    for (const fn of inngestFunctions) {
+      expect(fn.id()).toMatch(/^[a-z][a-z0-9-]+$/);
+    }
   });
 });

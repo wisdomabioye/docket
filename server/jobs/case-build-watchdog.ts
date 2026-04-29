@@ -1,9 +1,9 @@
 import "server-only";
 import { and, eq, isNull, lt, sql } from "drizzle-orm";
 import { inngest } from "./client";
-import { db } from "@/server/db/client";
+import { db, type Db } from "@/server/db/client";
 import { cases } from "@/server/db/schema";
-import { transitionCase } from "@/server/services/cases/transition";
+import { markBuildEnded } from "@/server/services/cases/transition";
 
 /**
  * Watchdog cron. Sweeps every 5 minutes for cases stuck in `building`
@@ -67,19 +67,15 @@ export const caseBuildWatchdog = inngest.createFunction(
       // don't double-flip a case.
       try {
         await step.run(`kill-${row.id}`, async () =>
-          db.transaction(async (tx) => {
-            await transitionCase({
-              tx: tx as never,
+          db.transaction(async (tx) =>
+            markBuildEnded({
+              tx: tx as unknown as Db,
               caseId: row.id,
               toStatus: "build_failed",
               actor: { type: "system" },
               reason: `watchdog: stuck in building > ${STUCK_THRESHOLD_MINUTES}m`,
-            });
-            await tx
-              .update(cases)
-              .set({ buildCompletedAt: sql`now()` })
-              .where(eq(cases.id, row.id));
-          }),
+            }),
+          ),
         );
         await step.sendEvent(`emit-failed-${row.id}`, {
           name: "case/build.failed",

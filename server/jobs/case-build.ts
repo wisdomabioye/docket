@@ -1,10 +1,14 @@
 import "server-only";
 import { eventType, staticSchema } from "inngest";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { inngest } from "./client";
 import { db } from "@/server/db/client";
 import { caseOutputs, cases } from "@/server/db/schema";
-import { transitionCase } from "@/server/services/cases/transition";
+import {
+  markBuildEnded,
+  markBuildStarted,
+} from "@/server/services/cases/transition";
+import type { Db } from "@/server/db/client";
 import { loadBuildContext, parseEvidencePlanText } from "./_context";
 import { outputEvidencePlan } from "./output-evidence-plan";
 import { outputPersonalStatement } from "./output-personal-statement";
@@ -98,17 +102,13 @@ export const caseBuild = inngest.createFunction(
             .limit(1)
             .for("update");
           if (row?.status !== "building") return false;
-          await transitionCase({
-            tx: tx as never,
+          await markBuildEnded({
+            tx: tx as unknown as Db,
             caseId,
             toStatus: "build_failed",
             actor: { type: "system" },
             reason,
           });
-          await tx
-            .update(cases)
-            .set({ buildCompletedAt: sql`now()` })
-            .where(eq(cases.id, caseId));
           return true;
         }),
       );
@@ -128,21 +128,20 @@ export const caseBuild = inngest.createFunction(
       loadBuildContext(caseId),
     );
 
-    // ── 2. Transition to building + stamp build_started_at
+    // ── 2. Transition to building + stamp build_started_at (helper
+    // refreshes both timestamps — `requestBuild` may have already
+    // stamped them when the user clicked, but the parent's stamp is
+    // the canonical "compute pipeline started" marker).
     await step.run("mark-building", async () =>
-      db.transaction(async (tx) => {
-        await transitionCase({
-          tx: tx as never,
+      db.transaction(async (tx) =>
+        markBuildStarted({
+          tx: tx as unknown as Db,
           caseId,
           toStatus: "building",
           actor: { type: "user", userId: requestedBy },
           reason: "case-build orchestrator started",
-        });
-        await tx
-          .update(cases)
-          .set({ buildStartedAt: sql`now()`, buildCompletedAt: null })
-          .where(eq(cases.id, caseId));
-      }),
+        }),
+      ),
     );
 
     // ── 3. Evidence plan (required dependency)
@@ -253,11 +252,11 @@ export const caseBuild = inngest.createFunction(
     const failureCount = settled.filter((r) => !r.ok).length;
     const allFailed = successCount === 0;
 
-    // ── 7. Final status transition
+    // ── 7. Final status transition + stamp build_completed_at
     await step.run("finalize-status", async () =>
-      db.transaction(async (tx) => {
-        await transitionCase({
-          tx: tx as never,
+      db.transaction(async (tx) =>
+        markBuildEnded({
+          tx: tx as unknown as Db,
           caseId,
           toStatus: allFailed ? "build_failed" : "draft_ready",
           actor: { type: "system" },
@@ -267,12 +266,8 @@ export const caseBuild = inngest.createFunction(
                 .map((r) => r.outputType)
                 .join(", ")}`
             : `${successCount}/${settled.length} fan-out outputs saved`,
-        });
-        await tx
-          .update(cases)
-          .set({ buildCompletedAt: sql`now()` })
-          .where(eq(cases.id, caseId));
-      }),
+        }),
+      ),
     );
 
     // ── 8. Emit completion (or fall through to build.failed for all-fail)

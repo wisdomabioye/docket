@@ -85,8 +85,12 @@ export async function saveOutputVersion(
   // arbitrary additional fields (model, finishReason, citations, …)
   // while still catching shape errors on the typed branches
   // (recommendation_letter_template, exhibit_index).
+  // `type: outputType` LAST so it's authoritative — if a caller's
+  // `args.metadata` includes its own `type` key (intentional or not),
+  // it CANNOT override the discriminator and silently route the
+  // metadata through the wrong branch of `OutputMetadataSchema`.
   const validatedMetadata = args.metadata
-    ? OutputMetadataSchema.parse({ type: outputType, ...args.metadata })
+    ? OutputMetadataSchema.parse({ ...args.metadata, type: outputType })
     : undefined;
 
   // Step 1: lock the cases row for the duration of this tx. Concurrent

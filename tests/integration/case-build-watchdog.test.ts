@@ -19,18 +19,21 @@ import {
   type TestDb,
 } from "../helpers/db";
 import { truncateAllAppTables } from "../helpers/truncate";
-import { transitionCase } from "@/server/services/cases/transition";
+import { markBuildEnded } from "@/server/services/cases/transition";
 
 /**
  * The watchdog cron itself is wrapped in `inngest.createFunction`, so
  * the test exercises the SQL it runs against a real DB. We re-execute
  * the same select + transition sequence the production handler does
- * and assert the row outcomes.
+ * and assert the row outcomes — PLUS we collect the simulated
+ * `sendEvent` payloads in a test-local array so the failure-event
+ * emission is verified (not just the status transition).
  *
  * Locked behaviors:
  *   - A case in `building` with `build_started_at` > 30m ago gets
- *     transitioned to `build_failed`.
- *   - A case in `building` with a recent `build_started_at` is skipped.
+ *     transitioned to `build_failed` AND emits `case/build.failed`.
+ *   - A case in `building` with a recent `build_started_at` is skipped
+ *     (no transition, no event).
  *   - A case NOT in `building` is skipped even with an old timestamp.
  *   - The watchdog re-fires safely (the second sweep finds nothing).
  */
@@ -70,7 +73,15 @@ afterAll(async () => {
 
 const STUCK_THRESHOLD_MINUTES = 30;
 
-async function findAndKillStuck(d: TestDb): Promise<{ swept: number; killed: number }> {
+type EmittedEvent = {
+  name: string;
+  data: Record<string, unknown>;
+};
+
+async function findAndKillStuck(
+  d: TestDb,
+  emitted: EmittedEvent[],
+): Promise<{ swept: number; killed: number }> {
   const stuck = await d
     .select({ id: cases.id })
     .from(cases)
@@ -86,18 +97,24 @@ async function findAndKillStuck(d: TestDb): Promise<{ swept: number; killed: num
   let killed = 0;
   for (const row of stuck) {
     try {
-      await d.transaction(async (tx) => {
-        await transitionCase({
+      await d.transaction(async (tx) =>
+        markBuildEnded({
           tx: tx as never,
           caseId: row.id,
           toStatus: "build_failed",
           actor: { type: "system" },
           reason: `watchdog: stuck > ${STUCK_THRESHOLD_MINUTES}m`,
-        });
-        await tx
-          .update(cases)
-          .set({ buildCompletedAt: sql`now()` })
-          .where(eq(cases.id, row.id));
+        }),
+      );
+      // Mirror the production handler's sendEvent — the test now
+      // catches a regression that drops this emit.
+      emitted.push({
+        name: "case/build.failed",
+        data: {
+          caseId: row.id,
+          reason: `watchdog: stuck > ${STUCK_THRESHOLD_MINUTES}m`,
+          requestedBy: "system",
+        },
       });
       killed += 1;
     } catch {
@@ -108,9 +125,10 @@ async function findAndKillStuck(d: TestDb): Promise<{ swept: number; killed: num
 }
 
 describe("case-build-watchdog (sql parity)", () => {
-  it("transitions stuck cases to build_failed", async (ctx) => {
+  it("transitions stuck cases to build_failed AND emits case/build.failed", async (ctx) => {
     const d = gate(ctx);
-    const result = await findAndKillStuck(d);
+    const emitted: EmittedEvent[] = [];
+    const result = await findAndKillStuck(d, emitted);
     expect(result.swept).toBe(1);
     expect(result.killed).toBe(1);
 
@@ -120,11 +138,23 @@ describe("case-build-watchdog (sql parity)", () => {
       .where(eq(cases.id, STUCK));
     expect(row?.status).toBe("build_failed");
     expect(row?.completedAt).not.toBeNull();
+
+    // Regression guard — a future refactor that drops the sendEvent
+    // call would fail this assertion.
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toEqual({
+      name: "case/build.failed",
+      data: {
+        caseId: STUCK,
+        reason: expect.stringMatching(/watchdog:/),
+        requestedBy: "system",
+      },
+    });
   });
 
   it("ignores recently-started builds", async (ctx) => {
     const d = gate(ctx);
-    await findAndKillStuck(d);
+    await findAndKillStuck(d, []);
     const [row] = await d
       .select({ status: cases.status })
       .from(cases)
@@ -134,7 +164,7 @@ describe("case-build-watchdog (sql parity)", () => {
 
   it("ignores cases not in `building` status", async (ctx) => {
     const d = gate(ctx);
-    await findAndKillStuck(d);
+    await findAndKillStuck(d, []);
     const [row] = await d
       .select({ status: cases.status })
       .from(cases)
@@ -144,8 +174,8 @@ describe("case-build-watchdog (sql parity)", () => {
 
   it("re-firing is a no-op (idempotent)", async (ctx) => {
     const d = gate(ctx);
-    await findAndKillStuck(d);
-    const second = await findAndKillStuck(d);
+    await findAndKillStuck(d, []);
+    const second = await findAndKillStuck(d, []);
     expect(second.swept).toBe(0);
     expect(second.killed).toBe(0);
   });

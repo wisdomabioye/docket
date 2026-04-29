@@ -66,6 +66,38 @@ Surfaced: 2026-04-30 (Stage 03 review)
 
 ---
 
+### #21 — `regenerate-output` for `evidence_plan` doesn't update `cases.evidence_plan`
+
+Status: Documented; defer to Stage 08.
+Surfaced: 2026-04-29 (Stage 07 final test-coverage pass)
+
+`regenerate-output` (Phase 10) calls `runOutputJob` → `saveOutputVersion`,
+which writes a new `case_outputs` row but does NOT update the
+`cases.evidence_plan` jsonb column. The parent `case-build` orchestrator
+DOES update that column (step "persist-evidence-plan") before fanning
+out the prose outputs.
+
+Consequence: if an attorney regenerates `evidence_plan` via the Stage 8
+review UI, the new evidence plan is saved as `case_outputs` v2 but
+`cases.evidence_plan` keeps the old jsonb. Subsequent `regenerate-output`
+calls for `personal_statement` / `petition_letter` / etc. read the stale
+plan via `loadBuildContext`.
+
+Mitigations to pick from in Stage 08:
+   a. Have `regenerate-output` parse + persist the evidence plan when
+      `outputType === "evidence_plan"` (mirroring the parent's step).
+   b. Make `loadBuildContext` resolve `evidencePlan` from the latest
+      `case_outputs` row (single source of truth) instead of from the
+      jsonb shortcut on `cases`. Costs one extra query but eliminates
+      the divergence.
+   c. Block `regenerate-output` for `evidence_plan` and require a full
+      `case.requestBuild` rerun. Heaviest UX cost.
+
+Recommendation: (b). Removing the jsonb shortcut on `cases` is a small
+refactor and removes a class of "two sources of truth" bugs.
+
+---
+
 ### #20 — Multi-recommender letter `is_current` semantics
 
 Status: Documented; deferred to Stage 08.
