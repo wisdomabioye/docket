@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { auth, signOut } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
+import { RevenueCard } from "@/components/revenue/RevenueCard";
 
 export const metadata = { title: pageTitle("Dashboard") };
 
@@ -53,6 +54,8 @@ export default async function DashboardPage() {
           + New case
         </Link>
       </header>
+
+      <RevenueCard />
 
       <section>
         <h2 className="text-sm uppercase tracking-wide text-[var(--color-ink-muted)]">

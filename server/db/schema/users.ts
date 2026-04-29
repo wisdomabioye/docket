@@ -71,6 +71,13 @@ export const attorneyProfiles = pgTable(
     agreementStoragePath: text("agreement_storage_path"),
     acceptedTermsVersion: text("accepted_terms_version"),
 
+    /** Stripe Customer id, lazily created on first invoice (Stage 10).
+     *  Null until the attorney has at least one billed case; the
+     *  service-layer `getOrCreateCustomer` populates this row + uses
+     *  it on subsequent invoices so we don't keep recreating customers
+     *  in Stripe. */
+    stripeCustomerId: text("stripe_customer_id"),
+
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
+import { RevenuePanel } from "@/components/revenue/RevenuePanel";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -94,6 +95,16 @@ export default async function CaseDetailPage({ params }: Props) {
           />
         </Card>
       </section>
+
+      <RevenuePanel
+        caseId={data.id}
+        initial={{
+          feeCents: Number(data.caseFeeCents ?? 0n),
+          docketShareCents: Number(data.docketShareCents ?? 0n),
+          attorneyShareCents: Number(data.attorneyShareCents ?? 0n),
+          revenueStatus: data.revenueStatus,
+        }}
+      />
 
       <section>
         <h2 className="text-sm font-medium uppercase tracking-wide text-[var(--color-ink-muted)]">

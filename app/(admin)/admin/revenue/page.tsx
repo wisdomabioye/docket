@@ -7,6 +7,10 @@ import { Card, EmptyState, ProgressBar } from "@/components/ui";
 import { Filters, type Chip } from "@/components/table";
 import { formatCents } from "@/lib/utils";
 import { parseEnum } from "@/lib/url-params";
+import {
+  AdminInvoicePanel,
+  type AttorneyOption,
+} from "@/components/revenue/AdminInvoicePanel";
 
 export const metadata = { title: pageTitle("Revenue") };
 
@@ -25,10 +29,24 @@ export default async function AdminRevenuePage(props: {
 }): Promise<React.ReactElement> {
   const params = await props.searchParams;
   const period = parseEnum<Period>(params.period, PERIODS) ?? "QTD";
-  const [data, byAttorney] = await Promise.all([
+  const [data, byAttorney, recentInvoices] = await Promise.all([
     api.admin.getRevenueMetrics({ period }),
     api.admin.getRevenueByAttorney({ period }),
+    api.revenue.adminListInvoices({}),
   ]);
+
+  // The invoice panel needs a complete attorney roster (not just the
+  // top-10 in `byAttorney`). Pull from the all-time aggregate so the
+  // dropdown isn't truncated when the current period is empty.
+  const allTimeByAttorney = period === "ALL"
+    ? byAttorney
+    : await api.admin.getRevenueByAttorney({ period: "ALL" });
+  const attorneyOptions: ReadonlyArray<AttorneyOption> = allTimeByAttorney.items.map(
+    (a) => ({
+      userId: a.userId,
+      label: a.name ? `${a.name} · ${a.email}` : a.email,
+    }),
+  );
 
   const empty = data.totals.filings === 0;
   const chips: Chip[] = PERIOD_CHIPS.map((c) => ({
@@ -134,6 +152,89 @@ export default async function AdminRevenuePage(props: {
                 </li>
               ))}
             </ul>
+          )}
+        </Card>
+      </div>
+
+      <div className="mt-6">
+        <Card title="Generate monthly invoice">
+          <AdminInvoicePanel attorneys={attorneyOptions} />
+        </Card>
+      </div>
+
+      <div className="mt-6">
+        <Card
+          title="Recent invoices"
+          meta={`${recentInvoices.items.length} latest`}
+        >
+          {recentInvoices.items.length === 0 ? (
+            <EmptyState
+              title="No invoices yet."
+              subtitle="Generate the first monthly invoice for an attorney above."
+            />
+          ) : (
+            <table className="w-full text-sm">
+              <thead
+                className="text-left text-[10px] uppercase tracking-wider"
+                style={{ color: "var(--ink-muted)" }}
+              >
+                <tr>
+                  <th className="pb-2 font-medium">Attorney</th>
+                  <th className="pb-2 font-medium">Period</th>
+                  <th className="pb-2 font-medium">Total</th>
+                  <th className="pb-2 font-medium">Status</th>
+                  <th className="pb-2 font-medium" />
+                </tr>
+              </thead>
+              <tbody>
+                {recentInvoices.items.map((row) => (
+                  <tr
+                    key={row.id}
+                    className="border-t"
+                    style={{ borderColor: "var(--border)" }}
+                  >
+                    <td className="py-2 text-xs">
+                      <Link
+                        href={`${APP_ROUTES.adminAttorneys}/${row.attorneyId}`}
+                        className="underline-offset-2 hover:underline"
+                      >
+                        {row.attorneyName ?? row.attorneyEmail}
+                      </Link>
+                    </td>
+                    <td className="py-2 mono text-xs">
+                      {row.periodYear}-{String(row.periodMonth).padStart(2, "0")}
+                    </td>
+                    <td className="py-2 mono text-xs">{formatCents(row.totalCents)}</td>
+                    <td className="py-2 text-xs uppercase tracking-wider" style={{ color: "var(--ink-muted)" }}>
+                      {row.status}
+                      {row.lastFailureReason ? (
+                        <span
+                          className="ml-2 mono normal-case"
+                          style={{ color: "var(--warning, #8a4a13)" }}
+                          title={row.lastFailureReason}
+                        >
+                          ⚠
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="py-2 text-right text-xs">
+                      {row.hostedInvoiceUrl ? (
+                        <Link
+                          href={row.hostedInvoiceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="underline-offset-2 hover:underline"
+                        >
+                          Open &rarr;
+                        </Link>
+                      ) : (
+                        <span style={{ color: "var(--ink-muted)" }}>—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </Card>
       </div>
