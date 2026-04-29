@@ -24,6 +24,9 @@ import { getRedis } from "./redis";
 export type RateLimitName =
   | "case.requestBuild"
   | "output.regenerate"
+  | "revenue.logFee"
+  | "revenue.adjust"
+  | "revenue.generateInvoice"
   | "mutation.default";
 
 type LimitConfig = {
@@ -42,6 +45,13 @@ const LIMITS: Record<RateLimitName, LimitConfig> = {
   // a single output (vs. the whole pipeline). Looser than `case.requestBuild`
   // because per-output regen burns ~1/5th the budget of a full build.
   "output.regenerate": { limit: 20, window: "1 h" },
+  // Stage 10 revenue mutations. logFee gets the default mutation cap
+  // (free DB write, but spam = audit/event noise). Adjust + generate
+  // are admin-only and tighter — generateInvoice burns Stripe API
+  // budget per call (one Invoice + N InvoiceItems).
+  "revenue.logFee": { limit: 60, window: "1 m" },
+  "revenue.adjust": { limit: 30, window: "1 m" },
+  "revenue.generateInvoice": { limit: 10, window: "1 m" },
   "mutation.default": { limit: 60, window: "1 m" },
 };
 

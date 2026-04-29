@@ -123,12 +123,21 @@ describe("invoiceLineDescription", () => {
     ).toBe("O-1A · Beneficiary M.G.");
   });
 
-  it("uses placeholder for unnamed beneficiary", () => {
+  it("uses 'Unnamed beneficiary' when name is null", () => {
     expect(
       invoiceLineDescription({
         visaType: "EB-1A",
         beneficiaryFullName: null,
       }),
-    ).toBe("EB-1A · Beneficiary Beneficiary");
+    ).toBe("EB-1A · Unnamed beneficiary");
+  });
+
+  it("uses 'Unnamed beneficiary' when name is whitespace", () => {
+    expect(
+      invoiceLineDescription({
+        visaType: "EB-1A",
+        beneficiaryFullName: "   ",
+      }),
+    ).toBe("EB-1A · Unnamed beneficiary");
   });
 });

@@ -270,14 +270,17 @@ export type CreateMonthlyInvoiceResult = {
  *   6. Update each case's `revenue_status = invoiced` and `invoice_id`.
  *
  * Idempotency: the unique index makes step 3 atomic; a concurrent
- * call returns CONFLICT. If a Stripe call later fails, the row is
- * cleaned up (but cases stay in `pending` so the admin can retry).
+ * call returns CONFLICT. If a Stripe call later fails, the catch block
+ * deletes the placeholder DB row AND deletes the draft Stripe invoice
+ * (which removes any attached items along with it) so the admin can
+ * retry without orphans on either side. Cases stay in their previous
+ * state (no `revenue_status` flip happens until step 6).
  *
- * The whole flow runs in a single transaction up to step 3; Stripe
- * calls (4-5) happen outside the tx — Stripe doesn't roll back, so a
- * failure there leaves an orphan `invoices` row that the admin
- * cleans up via Stripe dashboard + a `revenue.adminVoidInvoice`
- * follow-up (Stage 11 polish).
+ * Stripe item ownership: items are created with `invoice: invoice.id`
+ * (attached, not floating on the customer). This means a partial
+ * failure mid-loop can be cleaned up by deleting the invoice — Stripe
+ * cascades the delete to attached items. Without this, items live on
+ * the customer and pollute the next retry's invoice.
  */
 export async function createMonthlyInvoice(
   args: CreateMonthlyInvoiceArgs,
@@ -343,25 +346,21 @@ export async function createMonthlyInvoice(
     throw err;
   }
 
-  // 4. Stripe — InvoiceItems + Invoice + finalize + send
+  // 4. Stripe — Invoice (empty draft) → attached InvoiceItems → finalize → send.
+  // Order matters: creating items WITH `invoice: invoice.id` makes Stripe
+  // own them. A partial failure is recoverable by deleting the draft
+  // invoice (Stripe cascades to attached items). Floating items on the
+  // customer would survive cleanup and pollute the next retry.
   const stripe = getStripe();
+  let stripeInvoiceIdToCleanup: string | null = null;
   try {
-    for (const c of eligible) {
-      await stripe.invoiceItems.create({
-        customer: customerId,
-        currency: "usd",
-        amount: Number(c.docketShareCents),
-        description: invoiceLineDescription({
-          visaType: c.visaType,
-          beneficiaryFullName: c.beneficiaryFullName,
-        }),
-        metadata: { docketCaseId: c.id },
-      });
-    }
     const invoice = await stripe.invoices.create({
       customer: customerId,
       collection_method: "send_invoice",
       days_until_due: 14,
+      // Don't auto-pull any pre-existing floating items on this customer —
+      // we attach the items we want explicitly below.
+      pending_invoice_items_behavior: "exclude",
       metadata: {
         docketAttorneyId: args.attorneyUserId,
         periodYear: String(args.periodYear),
@@ -372,31 +371,50 @@ export async function createMonthlyInvoice(
     if (!invoice.id) {
       throw new AppError("INTERNAL", "Stripe invoice missing id");
     }
+    stripeInvoiceIdToCleanup = invoice.id;
+
+    for (const c of eligible) {
+      await stripe.invoiceItems.create({
+        customer: customerId,
+        invoice: invoice.id,
+        currency: "usd",
+        amount: Number(c.docketShareCents),
+        description: invoiceLineDescription({
+          visaType: c.visaType,
+          beneficiaryFullName: c.beneficiaryFullName,
+        }),
+        metadata: { docketCaseId: c.id },
+      });
+    }
+
     const finalized = await stripe.invoices.finalizeInvoice(invoice.id);
     await stripe.invoices.sendInvoice(invoice.id);
 
-    // 5. Persist the real Stripe id + hosted URL + status.
-    await args.db
-      .update(invoices)
-      .set({
-        stripeInvoiceId: finalized.id ?? invoice.id,
-        hostedInvoiceUrl: finalized.hosted_invoice_url ?? null,
-        status: stripeStatusToColumn(finalized.status),
-        updatedAt: sql`now()`,
-      })
-      .where(eq(invoices.id, createdInvoice.id));
-
-    // 6. Link cases + flip their revenue_status.
+    // 5+6. Persist the real Stripe id + link cases atomically. Two
+    // separate UPDATEs in a single transaction: a row-level failure
+    // here would otherwise leave the invoice row populated but cases
+    // unlinked (webhook arriving for invoice.paid would no-op on cases).
     const caseIds = eligible.map((c) => c.id);
-    if (caseIds.length > 0) {
-      await args.db
-        .update(cases)
+    await args.db.transaction(async (tx) => {
+      await tx
+        .update(invoices)
         .set({
-          revenueStatus: "invoiced",
-          invoiceId: createdInvoice.id,
+          stripeInvoiceId: finalized.id ?? invoice.id,
+          hostedInvoiceUrl: finalized.hosted_invoice_url ?? null,
+          status: stripeStatusToColumn(finalized.status),
+          updatedAt: sql`now()`,
         })
-        .where(inArray(cases.id, [...caseIds]));
-    }
+        .where(eq(invoices.id, createdInvoice.id));
+      if (caseIds.length > 0) {
+        await tx
+          .update(cases)
+          .set({
+            revenueStatus: "invoiced",
+            invoiceId: createdInvoice.id,
+          })
+          .where(inArray(cases.id, [...caseIds]));
+      }
+    });
 
     return {
       invoiceId: createdInvoice.id,
@@ -406,8 +424,17 @@ export async function createMonthlyInvoice(
       caseIds,
     };
   } catch (err) {
-    // Stripe failed — drop the placeholder row so the admin can retry
-    // without hitting the unique-period constraint.
+    // Stripe failed mid-flight. Best-effort cleanup on BOTH sides:
+    //   - delete the Stripe invoice (cascades to attached items),
+    //   - delete the placeholder DB row (so the unique-period index
+    //     doesn't block a retry).
+    // Each cleanup tolerates its own failure; the original error is
+    // what the caller cares about.
+    if (stripeInvoiceIdToCleanup) {
+      await stripe.invoices
+        .del(stripeInvoiceIdToCleanup)
+        .catch(() => undefined);
+    }
     await args.db
       .delete(invoices)
       .where(eq(invoices.id, createdInvoice.id))
@@ -426,9 +453,28 @@ export async function createMonthlyInvoice(
 // ─────────────────────────────────────────────────────────────────────
 
 /**
+ * The set of `cases.revenue_status` values a webhook is allowed to
+ * transition. Two states are deliberately preserved by every handler:
+ *   - `waived`: an admin pro-bono adjustment via `revenue.adjustCaseFee`
+ *     after the case was invoiced. Ledger says "we won't bill this
+ *     even though Stripe retains an invoice line for it." A late
+ *     `invoice.paid` webhook would otherwise silently overwrite that
+ *     decision (the audit-log entry from the admin would be orthogonal
+ *     to the actual ledger state).
+ *   - `paid`: defends against Stripe delivering events out of order
+ *     (rare but not impossible). Once we've recorded payment for a
+ *     case, no later webhook should regress it.
+ *
+ * Centralized so all three handlers stay in lockstep.
+ */
+const WEBHOOK_TRANSITIONABLE_STATUSES = ["pending", "invoiced", "failed"] as const;
+
+/**
  * Webhook target — `invoice.paid`. Idempotent: a duplicate event
  * (Stripe retries on 5xx, plus replays during development) finds the
- * row already in `paid` and returns without touching cases.
+ * row already in `paid` and returns without touching cases. Status-
+ * guarded on the cases UPDATE so an admin's prior `waived` adjustment
+ * is preserved.
  */
 export async function markInvoicePaid(args: {
   db: Db;
@@ -454,7 +500,12 @@ export async function markInvoicePaid(args: {
     await tx
       .update(cases)
       .set({ revenueStatus: "paid" })
-      .where(eq(cases.invoiceId, row.id));
+      .where(
+        and(
+          eq(cases.invoiceId, row.id),
+          inArray(cases.revenueStatus, [...WEBHOOK_TRANSITIONABLE_STATUSES]),
+        ),
+      );
     return { updated: true };
   });
 }
@@ -475,7 +526,10 @@ export async function markInvoiceFailed(args: {
     // Stripe sends `payment_failed` on charge attempts; the invoice
     // stays `open` (Stripe will retry). We keep the column as `open`
     // and stamp `last_failure_reason` so the admin can see the error.
-    // Cases flip to `failed` so the dashboard can flag them.
+    // Cases flip to `failed` so the dashboard can flag them — but only
+    // when they were in a transitionable state. A late `payment_failed`
+    // arriving after `invoice.paid` (out-of-order delivery) must not
+    // regress a paid case; an admin's `waived` adjustment is preserved.
     await tx
       .update(invoices)
       .set({
@@ -486,7 +540,12 @@ export async function markInvoiceFailed(args: {
     await tx
       .update(cases)
       .set({ revenueStatus: "failed" })
-      .where(eq(cases.invoiceId, row.id));
+      .where(
+        and(
+          eq(cases.invoiceId, row.id),
+          inArray(cases.revenueStatus, [...WEBHOOK_TRANSITIONABLE_STATUSES]),
+        ),
+      );
     return { updated: true };
   });
 }
@@ -508,12 +567,20 @@ export async function markInvoiceVoided(args: {
       .update(invoices)
       .set({ status: "void", updatedAt: sql`now()` })
       .where(eq(invoices.id, row.id));
-    // Voiding releases the cases back to `pending` so they can be
-    // re-billed in a future invoice (admin's choice).
+    // Voiding releases transitionable cases back to `pending` so they
+    // can be re-billed in a future invoice (admin's choice). `paid`
+    // and `waived` cases keep their state — voiding the invoice
+    // doesn't undo a payment Stripe already collected, and shouldn't
+    // overturn an admin's pro-bono mark.
     await tx
       .update(cases)
       .set({ revenueStatus: "pending", invoiceId: null })
-      .where(eq(cases.invoiceId, row.id));
+      .where(
+        and(
+          eq(cases.invoiceId, row.id),
+          inArray(cases.revenueStatus, [...WEBHOOK_TRANSITIONABLE_STATUSES]),
+        ),
+      );
     return { updated: true };
   });
 }

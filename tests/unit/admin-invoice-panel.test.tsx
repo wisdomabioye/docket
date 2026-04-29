@@ -91,20 +91,21 @@ describe("AdminInvoicePanel — preview flow", () => {
     expect(previewRefetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("renders 'no eligible cases' message when preview returns empty", () => {
+  it("renders 'no eligible cases' message after Preview returns empty", () => {
     useEligibleMock.mockReturnValue({
       data: { items: [], totalDocketCents: 0 },
       refetch: previewRefetchMock,
       isFetching: false,
     });
     render(<AdminInvoicePanel attorneys={ATTORNEYS} />);
+    fireEvent.click(screen.getByRole("button", { name: /preview/i }));
     expect(screen.getByText(/no eligible cases/i)).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /generate invoice/i }),
     ).toBeDisabled();
   });
 
-  it("renders eligible cases + total + ENABLES Generate when preview has items", () => {
+  it("renders eligible cases + total + ENABLES Generate after Preview", () => {
     useEligibleMock.mockReturnValue({
       data: {
         items: [
@@ -124,6 +125,7 @@ describe("AdminInvoicePanel — preview flow", () => {
       isFetching: false,
     });
     render(<AdminInvoicePanel attorneys={ATTORNEYS} />);
+    fireEvent.click(screen.getByRole("button", { name: /preview/i }));
     expect(screen.getByText(/1 eligible case/i)).toBeInTheDocument();
     expect(screen.getByText("O-1A")).toBeInTheDocument();
     expect(screen.getByText("Maria Gonzalez")).toBeInTheDocument();
@@ -131,10 +133,49 @@ describe("AdminInvoicePanel — preview flow", () => {
       screen.getByRole("button", { name: /generate invoice/i }),
     ).not.toBeDisabled();
   });
+
+  it("hides preview + disables Generate when attorney changes after Preview (stale guard)", () => {
+    useEligibleMock.mockReturnValue({
+      data: {
+        items: [
+          {
+            id: "c-1",
+            visaType: "O-1A",
+            beneficiaryFullName: "Maria Gonzalez",
+            caseFeeCents: "600000",
+            docketShareCents: "90000",
+            attorneyShareCents: "510000",
+            filedAt: new Date().toISOString(),
+          },
+        ],
+        totalDocketCents: 90_000,
+      },
+      refetch: previewRefetchMock,
+      isFetching: false,
+    });
+    render(<AdminInvoicePanel attorneys={ATTORNEYS} />);
+    fireEvent.click(screen.getByRole("button", { name: /preview/i }));
+    expect(screen.getByText("Maria Gonzalez")).toBeInTheDocument();
+    // Switch attorney → preview must hide and Generate disable.
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "u-2" } });
+    expect(screen.queryByText("Maria Gonzalez")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /generate invoice/i }),
+    ).toBeDisabled();
+  });
 });
 
 describe("AdminInvoicePanel — generate", () => {
-  it("clicking Generate fires the mutation with current form state", () => {
+  it("Generate is disabled until Preview is clicked (no stale-data clicks)", () => {
+    render(<AdminInvoicePanel attorneys={ATTORNEYS} />);
+    expect(
+      screen.getByRole("button", { name: /generate invoice/i }),
+    ).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /generate invoice/i }));
+    expect(generateMutateMock).not.toHaveBeenCalled();
+  });
+
+  it("clicking Generate after a fresh non-empty Preview fires the mutation", () => {
     useEligibleMock.mockReturnValue({
       data: {
         items: [
@@ -154,6 +195,7 @@ describe("AdminInvoicePanel — generate", () => {
       isFetching: false,
     });
     render(<AdminInvoicePanel attorneys={ATTORNEYS} />);
+    fireEvent.click(screen.getByRole("button", { name: /preview/i }));
     fireEvent.click(screen.getByRole("button", { name: /generate invoice/i }));
     expect(generateMutateMock).toHaveBeenCalledWith(
       expect.objectContaining({

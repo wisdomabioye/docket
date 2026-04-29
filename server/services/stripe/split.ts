@@ -65,13 +65,18 @@ export function maskBeneficiaryName(fullName: string | null | undefined): string
 }
 
 /**
- * Format an invoice line description: "{visaType} · Beneficiary {initials}".
- * Single source so the attorney-facing line + admin-side preview
- * agree on the wording.
+ * Format an invoice line description. With a name → "{visaType} ·
+ * Beneficiary {initials}"; without one → "{visaType} · Unnamed
+ * beneficiary". Single source so the attorney-facing line + admin-side
+ * preview agree on the wording.
  */
 export function invoiceLineDescription(args: {
   visaType: string;
   beneficiaryFullName: string | null | undefined;
 }): string {
-  return `${args.visaType} · Beneficiary ${maskBeneficiaryName(args.beneficiaryFullName)}`;
+  const trimmed = (args.beneficiaryFullName ?? "").trim();
+  if (trimmed.length === 0) {
+    return `${args.visaType} · Unnamed beneficiary`;
+  }
+  return `${args.visaType} · Beneficiary ${maskBeneficiaryName(trimmed)}`;
 }

@@ -68,15 +68,19 @@ export const invoices = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    /** Soft-delete column per CLAUDE.md §6.8 — every business table has
+     *  one. Voiding via Stripe webhook sets `status='void'` (kept for
+     *  audit history); `deleted_at` is reserved for the rare "admin
+     *  removes the row entirely" path. Queries filter on `IS NULL`. */
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (t) => [
     // One invoice per (attorney, year, month). Unique catches a race
-    // between two admin clicks for the same period.
-    uniqueIndex("invoices_attorney_period_uniq").on(
-      t.attorneyId,
-      t.periodYear,
-      t.periodMonth,
-    ),
+    // between two admin clicks for the same period. Filter to live
+    // rows so a soft-deleted entry doesn't block re-generation.
+    uniqueIndex("invoices_attorney_period_uniq")
+      .on(t.attorneyId, t.periodYear, t.periodMonth)
+      .where(sql`${t.deletedAt} is null`),
     // Stripe webhook lookups are by stripe_invoice_id only.
     uniqueIndex("invoices_stripe_id_uniq").on(t.stripeInvoiceId),
     // Admin "all invoices for attorney X, newest first".

@@ -44,6 +44,18 @@ export function AdminInvoicePanel(
   const [periodMonth, setPeriodMonth] = useState<number>(defaults.month);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  // Snapshot of the form state the most recent Preview was issued for.
+  // Lets us detect when the rendered preview is stale (admin changed
+  // attorney/period after previewing) and gate Generate accordingly —
+  // the mutation itself uses live form state and the server re-computes
+  // the eligible set, so a mis-click here would still produce a
+  // CORRECT invoice for the new selection, but the preview would have
+  // misled the admin about what they're billing. This avoids that.
+  const [previewedFor, setPreviewedFor] = useState<{
+    attorneyUserId: string;
+    periodYear: number;
+    periodMonth: number;
+  } | null>(null);
 
   const previewQuery = trpc.revenue.eligibleCasesForPeriod.useQuery(
     { attorneyUserId, periodYear, periodMonth },
@@ -55,6 +67,7 @@ export function AdminInvoicePanel(
       setSuccess(
         `Invoice ${result.invoiceId.slice(0, 8)} generated · ${formatCents(result.totalCents)}`,
       );
+      setPreviewedFor(null);
       router.refresh();
     },
     onError: (err) => {
@@ -63,13 +76,20 @@ export function AdminInvoicePanel(
     },
   });
 
-  const previewItems = previewQuery.data?.items ?? [];
-  const previewTotal = previewQuery.data?.totalDocketCents ?? 0;
-  const canGenerate = previewItems.length > 0 && !generateMutation.isPending;
+  const previewIsFresh =
+    previewedFor !== null &&
+    previewedFor.attorneyUserId === attorneyUserId &&
+    previewedFor.periodYear === periodYear &&
+    previewedFor.periodMonth === periodMonth;
+  const previewItems = previewIsFresh ? (previewQuery.data?.items ?? []) : [];
+  const previewTotal = previewIsFresh ? (previewQuery.data?.totalDocketCents ?? 0) : 0;
+  const canGenerate =
+    previewIsFresh && previewItems.length > 0 && !generateMutation.isPending;
 
   function handlePreview(): void {
     setError(null);
     setSuccess(null);
+    setPreviewedFor({ attorneyUserId, periodYear, periodMonth });
     void previewQuery.refetch();
   }
   function handleGenerate(): void {
@@ -190,7 +210,7 @@ export function AdminInvoicePanel(
         </p>
       ) : null}
 
-      {previewQuery.data ? (
+      {previewIsFresh && previewQuery.data ? (
         previewItems.length === 0 ? (
           <p
             className="rounded-sm border border-dashed p-3 text-xs"

@@ -22,6 +22,7 @@ import {
   listEligibleCasesForPeriod,
 } from "@/server/services/stripe";
 import { withAudit } from "@/server/services/audit";
+import { rateLimit } from "@/server/services/ratelimit";
 import { AppError, appErrorToTrpcCode, isAppError } from "@/lib/errors";
 
 /**
@@ -79,6 +80,14 @@ export const revenueRouter = router({
     .input(LogFeeInput)
     .mutation(async ({ ctx, input }) => {
       const { db, userId } = ctx;
+
+      const rl = await rateLimit("revenue.logFee", userId);
+      if (!rl.success) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Too many fee updates (${rl.limit}/min). Try again shortly.`,
+        });
+      }
 
       // RLS-engaged read: we ALSO require the caller is the case's
       // primary attorney participant. Even though RLS hides cases the
@@ -174,6 +183,14 @@ export const revenueRouter = router({
     .input(AdjustFeeInput)
     .mutation(async ({ ctx, input }) => {
       const { db, userId: adminId } = ctx;
+
+      const rl = await rateLimit("revenue.adjust", adminId);
+      if (!rl.success) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Adjust rate limit reached (${rl.limit}/min).`,
+        });
+      }
 
       const [existing] = await db
         .select({
@@ -301,6 +318,15 @@ export const revenueRouter = router({
     .input(PeriodInput)
     .mutation(async ({ ctx, input }) => {
       const { userId: adminId } = ctx;
+
+      const rl = await rateLimit("revenue.generateInvoice", adminId);
+      if (!rl.success) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Generate-invoice rate limit reached (${rl.limit}/min).`,
+        });
+      }
+
       try {
         const result = await withAudit(
           {
@@ -340,7 +366,7 @@ export const revenueRouter = router({
     .input(ListInvoicesInput)
     .query(async ({ ctx, input }) => {
       const { db } = ctx;
-      const filters = [];
+      const filters = [isNull(invoices.deletedAt)];
       if (input.attorneyUserId) {
         filters.push(eq(invoices.attorneyId, input.attorneyUserId));
       }
@@ -403,7 +429,7 @@ export const revenueRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const { db, userId } = ctx;
-      const filters = [eq(invoices.attorneyId, userId)];
+      const filters = [eq(invoices.attorneyId, userId), isNull(invoices.deletedAt)];
       if (input.cursor) {
         const cursorAt = new Date(input.cursor.createdAt);
         filters.push(
@@ -527,17 +553,11 @@ export const revenueRouter = router({
 
 /** Map service-layer `AppError` to TRPC at the boundary. The router
  *  uses this in every mutation's catch — keeps the error mapping in
- *  one place. `isAppError` narrows the type so subsequent code reads
- *  without optional-chain noise. */
+ *  one place. `isAppError` covers both the runtime instance check and
+ *  the structural-shape fallback for cross-realm `AppError`s. */
 function rethrow(err: unknown): never {
   if (err instanceof TRPCError) throw err;
-  if (isAppError(err)) {
-    throw new TRPCError({
-      code: appErrorToTrpcCode(err.code),
-      message: err.message,
-    });
-  }
-  if (err instanceof AppError) {
+  if (isAppError(err) || err instanceof AppError) {
     throw new TRPCError({
       code: appErrorToTrpcCode(err.code),
       message: err.message,

@@ -36,11 +36,14 @@ export default async function AdminRevenuePage(props: {
   ]);
 
   // The invoice panel needs a complete attorney roster (not just the
-  // top-10 in `byAttorney`). Pull from the all-time aggregate so the
-  // dropdown isn't truncated when the current period is empty.
-  const allTimeByAttorney = period === "ALL"
-    ? byAttorney
-    : await api.admin.getRevenueByAttorney({ period: "ALL" });
+  // top-10 in `byAttorney`). Reuse the current period's roster when it
+  // already has attorneys (saves a DB round-trip); fall back to the
+  // all-time aggregate only when the current period is empty (e.g. a
+  // brand-new month with no filings yet).
+  const allTimeByAttorney =
+    period === "ALL" || byAttorney.items.length > 0
+      ? byAttorney
+      : await api.admin.getRevenueByAttorney({ period: "ALL" });
   const attorneyOptions: ReadonlyArray<AttorneyOption> = allTimeByAttorney.items.map(
     (a) => ({
       userId: a.userId,
