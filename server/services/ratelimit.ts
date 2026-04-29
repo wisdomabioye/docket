@@ -21,7 +21,10 @@ import { getRedis } from "./redis";
  * and stays declarative.
  */
 
-export type RateLimitName = "case.requestBuild" | "mutation.default";
+export type RateLimitName =
+  | "case.requestBuild"
+  | "output.regenerate"
+  | "mutation.default";
 
 type LimitConfig = {
   limit: number;
@@ -35,6 +38,10 @@ type LimitConfig = {
 // means the limit lives in one place when that middleware lands.
 const LIMITS: Record<RateLimitName, LimitConfig> = {
   "case.requestBuild": { limit: 10, window: "1 h" },
+  // 20/hr per attorney — Stage 08 review flow lets attorneys regenerate
+  // a single output (vs. the whole pipeline). Looser than `case.requestBuild`
+  // because per-output regen burns ~1/5th the budget of a full build.
+  "output.regenerate": { limit: 20, window: "1 h" },
   "mutation.default": { limit: 60, window: "1 m" },
 };
 

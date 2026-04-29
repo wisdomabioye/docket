@@ -46,6 +46,11 @@ export type RunOutputJobArgs = {
   caseId: string;
   outputType: OutputType;
   prompt: PromptSpec;
+  /** Per-(case, type) sub-bucket — see `saveOutputVersion`. The
+   *  recommendation-letter sub-function passes `recommender.id` so each
+   *  recommender's letter has its own current/version chain. Default
+   *  `null` for single-instance output types. */
+  subgroupKey?: string | null;
   /** Stable id used for log correlation. Pass the Inngest `event.id` or
    *  a derivative; Sonar's response id supersedes this in saved metadata. */
   sessionId: string;
@@ -73,6 +78,7 @@ export async function runOutputJob(
   args: RunOutputJobArgs,
 ): Promise<RunOutputJobResult> {
   const { caseId, outputType, prompt, sessionId, extraMetadata } = args;
+  const subgroupKey = args.subgroupKey ?? null;
 
   const input: ComputerInput = {
     systemPrompt: prompt.systemPrompt,
@@ -116,6 +122,7 @@ export async function runOutputJob(
         tx: tx as unknown as Db,
         caseId,
         outputType,
+        subgroupKey,
         content: out.text,
         metadata,
         computerSessionId: out.sessionId,

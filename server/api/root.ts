@@ -5,6 +5,7 @@ import { adminRouter } from "./routers/admin";
 import { marketingRouter } from "./routers/marketing";
 import { caseRouter } from "./routers/case";
 import { documentRouter } from "./routers/document";
+import { outputRouter } from "./routers/output";
 
 /**
  * Root tRPC router. Add new domain routers here.
@@ -19,6 +20,7 @@ export const appRouter = router({
   marketing: marketingRouter,
   case: caseRouter,
   document: documentRouter,
+  output: outputRouter,
 });
 
 export type AppRouter = typeof appRouter;

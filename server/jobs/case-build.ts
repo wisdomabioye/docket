@@ -3,13 +3,13 @@ import { eventType, staticSchema } from "inngest";
 import { eq } from "drizzle-orm";
 import { inngest } from "./client";
 import { db } from "@/server/db/client";
-import { caseOutputs, cases } from "@/server/db/schema";
+import { cases } from "@/server/db/schema";
 import {
   markBuildEnded,
   markBuildStarted,
 } from "@/server/services/cases/transition";
 import type { Db } from "@/server/db/client";
-import { loadBuildContext, parseEvidencePlanText } from "./_context";
+import { loadBuildContext } from "./_context";
 import { outputEvidencePlan } from "./output-evidence-plan";
 import { outputPersonalStatement } from "./output-personal-statement";
 import { outputPetitionLetter } from "./output-petition-letter";
@@ -156,24 +156,17 @@ export const caseBuild = inngest.createFunction(
       },
     );
 
-    // ── 4-5. Persist + reload so ctx.evidencePlan is populated
-    const ctxWithPlan = await step.run("persist-evidence-plan", async () => {
-      const [row] = await db
-        .select({ content: caseOutputs.content })
-        .from(caseOutputs)
-        .where(eq(caseOutputs.id, evidencePlanOutputId));
-      if (!row?.content) {
-        throw new Error(
-          `evidence-plan row ${evidencePlanOutputId} has no content`,
-        );
-      }
-      const plan = parseEvidencePlanText(row.content);
-      await db
-        .update(cases)
-        .set({ evidencePlan: plan })
-        .where(eq(cases.id, caseId));
-      return loadBuildContext(caseId);
-    });
+    // ── 4. Reload context so the downstream prompts see the populated
+    // evidence plan. Since migration 0012 dropped the `cases.evidence_plan`
+    // jsonb cache, `loadBuildContext` resolves the plan from the
+    // `case_outputs` row the evidence-plan sub-function just saved
+    // (single source of truth, open_issues #21). The previous
+    // "persist-evidence-plan" step (which also wrote the jsonb) collapses
+    // into this single reload.
+    void evidencePlanOutputId;
+    const ctxWithPlan = await step.run("reload-context", async () =>
+      loadBuildContext(caseId),
+    );
 
     // ── 6. Fan-out parallel — partial-failure tolerant.
     // Inline try/catch around each `step.invoke`: extracting a generic

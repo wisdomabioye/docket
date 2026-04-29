@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { NonRetriableError } from "inngest";
 import {
   caseDocuments,
@@ -164,24 +164,24 @@ describe("regenerateOutputHandler — happy path", () => {
       })
       .returning({ id: caseOutputs.id });
     if (!out) throw new Error("insert returned no id");
-    await d
-      .update(cases)
-      .set({
-        evidencePlan: {
-          visaType: "O-1A",
-          overallStrength: "moderate",
-          criteria: [
-            {
-              criterion: "Awards",
-              assessment: "moderate",
-              summary: "ok",
-              gaps: [],
-            },
-          ],
-          generatedAt: new Date().toISOString(),
-        },
-      })
-      .where(eq(cases.id, CASE_ID));
+    // Stage 08: evidence plan resolves from `case_outputs`, not the
+    // dropped `cases.evidence_plan` jsonb. Seed an evidence-plan row so
+    // the personal-statement prompt builder finds a populated plan.
+    await d.insert(caseOutputs).values({
+      caseId: CASE_ID,
+      outputType: "evidence_plan",
+      outputVersion: 1,
+      isCurrent: true,
+      author: "computer",
+      content: JSON.stringify({
+        visaType: "O-1A",
+        overallStrength: "moderate",
+        criteria: [
+          { criterion: "Awards", assessment: "moderate", summary: "ok", gaps: [] },
+        ],
+        generatedAt: new Date().toISOString(),
+      }),
+    });
 
     const { regenerateOutputHandler } = await import(
       "@/server/jobs/regenerate-output"
@@ -196,13 +196,20 @@ describe("regenerateOutputHandler — happy path", () => {
     // The mock computer client stamps `mock-${uuid}` for sessionId.
     expect(result.computerSessionId).toMatch(/^mock-/);
 
+    // Filter to the personal_statement type so the seed evidence-plan
+    // row from this test doesn't pollute the version count.
     const rows = await d
       .select({
         version: caseOutputs.outputVersion,
         current: caseOutputs.isCurrent,
       })
       .from(caseOutputs)
-      .where(eq(caseOutputs.caseId, CASE_ID));
+      .where(
+        and(
+          eq(caseOutputs.caseId, CASE_ID),
+          eq(caseOutputs.outputType, "personal_statement"),
+        ),
+      );
     expect(rows).toHaveLength(2);
     const v1 = rows.find((r) => r.version === 1);
     const v2 = rows.find((r) => r.version === 2);
@@ -212,25 +219,28 @@ describe("regenerateOutputHandler — happy path", () => {
 
   it("prepends guidance to the prompt's userPrompt and stamps it in metadata", async (ctx) => {
     const d = gate(ctx);
-    // Populate evidencePlan — the exhibit_index prompt builder requires it.
-    await d
-      .update(cases)
-      .set({
-        evidencePlan: {
-          visaType: "O-1A",
-          overallStrength: "moderate",
-          criteria: [
-            {
-              criterion: "Original Contributions",
-              assessment: "moderate",
-              summary: "ok",
-              gaps: [],
-            },
-          ],
-          generatedAt: new Date().toISOString(),
-        },
-      })
-      .where(eq(cases.id, CASE_ID));
+    // Stage 08: evidence plan now resolves from `case_outputs`. The
+    // exhibit_index prompt builder requires `ctx.evidencePlan` populated.
+    await d.insert(caseOutputs).values({
+      caseId: CASE_ID,
+      outputType: "evidence_plan",
+      outputVersion: 1,
+      isCurrent: true,
+      author: "computer",
+      content: JSON.stringify({
+        visaType: "O-1A",
+        overallStrength: "moderate",
+        criteria: [
+          {
+            criterion: "Original Contributions",
+            assessment: "moderate",
+            summary: "ok",
+            gaps: [],
+          },
+        ],
+        generatedAt: new Date().toISOString(),
+      }),
+    });
     const [out] = await d
       .insert(caseOutputs)
       .values({

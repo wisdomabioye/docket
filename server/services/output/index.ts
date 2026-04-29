@@ -1,5 +1,6 @@
 import "server-only";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import {
   caseComputeLedger,
   caseOutputs,
@@ -21,27 +22,48 @@ import type { OutputType } from "@/server/services/computer/types";
  *      `AppError("BAD_REQUEST", "compute budget exceeded")` so the
  *      sub-function can transition the case to `draft_ready` (partial)
  *      without writing a wasted row.
- *   3. Read MAX(`output_version`) for the (case, type) pair — also
- *      lock-aware via the FOR UPDATE on `cases` (Postgres serializes the
- *      whole tx vs. concurrent writes for the same case).
- *   4. Flip every prior `is_current=true` row in (case, type) to false.
+ *   3. Read MAX(`output_version`) for the (case, type, subgroup) tuple
+ *      — also lock-aware via the FOR UPDATE on `cases` (Postgres
+ *      serializes the whole tx vs. concurrent writes for the same case).
+ *   4. Flip every prior `is_current=true` row in (case, type, subgroup)
+ *      to false.
  *   5. INSERT the new `case_outputs` row (version = max + 1).
  *   6. INSERT a `case_compute_ledger` entry attributing the spend.
  *   7. UPDATE `cases.compute_spent_cents += usdCents`.
  *
  * Caller MUST pass the open transaction so all six writes land or none do.
  *
- * The DB has a partial unique index on `(case_id, output_type, output_version)
- * WHERE deleted_at IS NULL` (Stage 07 migration 0011) as a safety net —
- * the service layer is the gate, the index catches bugs.
+ * Subgroup awareness (Stage 08, open_issues #20): when the same output
+ * type splits into per-recommender (or future) buckets, pass `subgroupKey`
+ * so each bucket maintains an independent current/version chain.
+ * `recommendation_letter_template` uses `recommender.id`; single-instance
+ * types pass `null` (default).
+ *
+ * The DB has partial unique indexes on `(case_id, output_type,
+ * COALESCE(subgroup_key, ''))` and `(case_id, output_type,
+ * COALESCE(subgroup_key, ''), output_version)` (migration 0012) as
+ * safety nets — the service layer is the gate, the indexes catch bugs.
  */
 export type SaveOutputVersionArgs = {
   tx: Db;
   caseId: string;
   outputType: OutputType;
+  /** Per-(case, type) sub-bucket. Pass `recommender.id` for
+   *  `recommendation_letter_template`; `null` (default) for single-
+   *  instance output types. */
+  subgroupKey?: string | null;
+  /** Author of this version. Defaults to `computer` (Stage 07 jobs);
+   *  Stage 08 sets `attorney` for in-place edits and `system` for
+   *  restore-version copies. */
+  author?: "computer" | "attorney" | "system";
+  /** Links to the row this version derived from. Stage 08 sets this on
+   *  attorney edits and version restores so the version graph is
+   *  reconstructible. Default `null` (top of the chain). */
+  parentId?: string | null;
   /** Full prose or stringified JSON the model produced. */
   content: string;
-  /** Optional pre-rendered HTML (Stage 8 polish). null for now. */
+  /** Optional pre-rendered HTML cache. Stage 08 attorney edits stamp
+   *  this so reads don't re-run `marked` per request. */
   contentHtml?: string | null;
   /** Free-form metadata stored alongside the row — model name, finish
    *  reason, citation list, search results, etc. */
@@ -63,10 +85,21 @@ export type SaveOutputVersionResult = {
   newSpendCents: bigint;
 };
 
+/** Build the SQL filter that scopes a query to a (case, type, subgroup)
+ *  bucket. `null` subgroup matches `subgroup_key IS NULL`; non-null
+ *  matches by equality. Avoids the standard Drizzle gotcha where
+ *  `eq(col, null)` becomes `col = NULL` (always FALSE in Postgres). */
+function eqSubgroup(subgroupKey: string | null): SQL {
+  return subgroupKey === null
+    ? isNull(caseOutputs.subgroupKey)
+    : eq(caseOutputs.subgroupKey, subgroupKey);
+}
+
 export async function saveOutputVersion(
   args: SaveOutputVersionArgs,
 ): Promise<SaveOutputVersionResult> {
   const { tx, caseId, outputType, usdCents } = args;
+  const subgroupKey = args.subgroupKey ?? null;
 
   // Defensive: a negative cost is almost always a caller bug — silent
   // clamp would mask it AND let a "free" output bypass budget tracking.
@@ -80,15 +113,10 @@ export async function saveOutputVersion(
   const usdCentsBig = BigInt(Math.floor(usdCents));
 
   // Stamp + validate metadata via the canonical `OutputMetadataSchema`.
-  // The schema is a discriminated union over `type`; stamping `type =
-  // outputType` lets the generic-metadata branch (passthrough) accept
-  // arbitrary additional fields (model, finishReason, citations, …)
-  // while still catching shape errors on the typed branches
-  // (recommendation_letter_template, exhibit_index).
-  // `type: outputType` LAST so it's authoritative — if a caller's
-  // `args.metadata` includes its own `type` key (intentional or not),
-  // it CANNOT override the discriminator and silently route the
-  // metadata through the wrong branch of `OutputMetadataSchema`.
+  // Stage 08 made it a discriminated union — `type: outputType` LAST so
+  // it's authoritative; a caller's `metadata.type` (intentional or not)
+  // CANNOT override the discriminator and silently route through the
+  // wrong branch.
   const validatedMetadata = args.metadata
     ? OutputMetadataSchema.parse({ ...args.metadata, type: outputType })
     : undefined;
@@ -122,8 +150,8 @@ export async function saveOutputVersion(
     );
   }
 
-  // Step 3: next version number. Filter on `deleted_at IS NULL` to match
-  // the partial unique index — soft-deleted versions can be re-numbered.
+  // Step 3: next version number — scoped to the subgroup so per-
+  // recommender chains number independently.
   const [latest] = await tx
     .select({ maxVersion: sql<number>`coalesce(max(${caseOutputs.outputVersion}), 0)::int` })
     .from(caseOutputs)
@@ -131,14 +159,15 @@ export async function saveOutputVersion(
       and(
         eq(caseOutputs.caseId, caseId),
         eq(caseOutputs.outputType, outputType),
+        eqSubgroup(subgroupKey),
         isNull(caseOutputs.deletedAt),
       ),
     );
   const nextVersion = (latest?.maxVersion ?? 0) + 1;
 
-  // Step 4: flip prior current. The partial unique on (caseId, type)
-  // WHERE is_current=true means we MUST flip before inserting the new
-  // is_current=true row, otherwise the unique index rejects the insert.
+  // Step 4: flip prior current — also scoped to the subgroup. Without
+  // the subgroup filter, saving recommender B's letter would clobber
+  // recommender A's `is_current=true` flag.
   await tx
     .update(caseOutputs)
     .set({ isCurrent: false })
@@ -146,6 +175,7 @@ export async function saveOutputVersion(
       and(
         eq(caseOutputs.caseId, caseId),
         eq(caseOutputs.outputType, outputType),
+        eqSubgroup(subgroupKey),
         eq(caseOutputs.isCurrent, true),
         isNull(caseOutputs.deletedAt),
       ),
@@ -161,11 +191,14 @@ export async function saveOutputVersion(
       outputType,
       outputVersion: nextVersion,
       isCurrent: true,
+      ...(subgroupKey !== null ? { subgroupKey } : {}),
       content: args.content,
+      ...(args.contentHtml !== undefined ? { contentHtml: args.contentHtml } : {}),
+      ...(args.parentId !== undefined ? { parentId: args.parentId } : {}),
       ...(validatedMetadata
         ? { metadata: validatedMetadata as never }
         : {}),
-      author: "computer",
+      author: args.author ?? "computer",
       computerSessionId: args.computerSessionId,
       promptTokens: args.promptTokens,
       completionTokens: args.completionTokens,
@@ -210,9 +243,72 @@ export async function saveOutputVersion(
 }
 
 /**
+ * Slim projection of current outputs — used by `output.list` (the
+ * grid card view). Excludes `content` and `contentHtml` so the wire
+ * payload stays small even for cases with 50KB+ of prose per output.
+ * `contentLength` lets the UI render "X chars" / a progress bar
+ * without shipping the prose.
+ */
+export type CurrentOutputListItem = {
+  id: string;
+  outputType: OutputType;
+  outputVersion: number;
+  subgroupKey: string | null;
+  metadata: unknown;
+  attorneyApproved: boolean;
+  approvedAt: Date | null;
+  computerSessionId: string | null;
+  costCents: bigint | null;
+  contentLength: number;
+  hasContentHtml: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export async function getCurrentOutputsForList(args: {
+  db: Db;
+  caseId: string;
+}): Promise<CurrentOutputListItem[]> {
+  return await args.db
+    .select({
+      id: caseOutputs.id,
+      outputType: caseOutputs.outputType,
+      outputVersion: caseOutputs.outputVersion,
+      subgroupKey: caseOutputs.subgroupKey,
+      metadata: caseOutputs.metadata,
+      attorneyApproved: caseOutputs.attorneyApproved,
+      approvedAt: caseOutputs.approvedAt,
+      computerSessionId: caseOutputs.computerSessionId,
+      costCents: caseOutputs.costCents,
+      // SQL-side length to avoid shipping the prose just to count chars.
+      contentLength: sql<number>`coalesce(length(${caseOutputs.content}), 0)::int`,
+      hasContentHtml: sql<boolean>`${caseOutputs.contentHtml} is not null`,
+      createdAt: caseOutputs.createdAt,
+      updatedAt: caseOutputs.updatedAt,
+    })
+    .from(caseOutputs)
+    .where(
+      and(
+        eq(caseOutputs.caseId, args.caseId),
+        eq(caseOutputs.isCurrent, true),
+        isNull(caseOutputs.deletedAt),
+      ),
+    )
+    .orderBy(
+      sql`${caseOutputs.outputType}::text`,
+      sql`coalesce(${caseOutputs.subgroupKey}, '')`,
+    );
+}
+
+/**
  * Returns the current (`is_current=true`) outputs for a case, ordered
- * by `output_type`. Used by Stage 08's review UI and the package
- * compiler. Single-query convenience over filtering caller-side.
+ * by `output_type` (alphabetic). Stage 08's package compiler consumes
+ * this — the per-output PDF render needs the full `content` for body
+ * rendering. Multi-subgroup output types
+ * (`recommendation_letter_template`) return one row PER subgroup.
+ *
+ * Use `getCurrentOutputsForList` for the grid card view (no content
+ * payload).
  */
 export async function getCurrentOutputs(args: {
   db: Db;
@@ -222,11 +318,16 @@ export async function getCurrentOutputs(args: {
     id: string;
     outputType: OutputType;
     outputVersion: number;
+    subgroupKey: string | null;
     content: string | null;
+    contentHtml: string | null;
     metadata: unknown;
+    attorneyApproved: boolean;
+    approvedAt: Date | null;
     computerSessionId: string | null;
     costCents: bigint | null;
     createdAt: Date;
+    updatedAt: Date;
   }>
 > {
   return await args.db
@@ -234,11 +335,16 @@ export async function getCurrentOutputs(args: {
       id: caseOutputs.id,
       outputType: caseOutputs.outputType,
       outputVersion: caseOutputs.outputVersion,
+      subgroupKey: caseOutputs.subgroupKey,
       content: caseOutputs.content,
+      contentHtml: caseOutputs.contentHtml,
       metadata: caseOutputs.metadata,
+      attorneyApproved: caseOutputs.attorneyApproved,
+      approvedAt: caseOutputs.approvedAt,
       computerSessionId: caseOutputs.computerSessionId,
       costCents: caseOutputs.costCents,
       createdAt: caseOutputs.createdAt,
+      updatedAt: caseOutputs.updatedAt,
     })
     .from(caseOutputs)
     .where(
@@ -250,31 +356,109 @@ export async function getCurrentOutputs(args: {
     )
     // Alphabetical (cast to text — `output_type` is a Postgres enum, and
     // its native ordering is the enum-declaration order, not alphabetic).
-    .orderBy(sql`${caseOutputs.outputType}::text`);
+    // Subgroup as secondary sort so multi-recommender letters render in
+    // a stable order across reads.
+    .orderBy(
+      sql`${caseOutputs.outputType}::text`,
+      sql`coalesce(${caseOutputs.subgroupKey}, '')`,
+    );
 }
 
 /**
- * Full version history for one (case, type). Used by the version
- * selector in Stage 08's review UI.
+ * Read the latest `is_current=true` row for a (case, type, subgroup).
+ * Returns `null` when no current row exists (e.g. before the first
+ * generation completes). Stage 08's `output.get` and the build context
+ * loader (`server/jobs/_context.ts`) both use this.
+ */
+export async function getCurrentOutput(args: {
+  db: Db;
+  caseId: string;
+  outputType: OutputType;
+  subgroupKey?: string | null;
+}): Promise<{
+  id: string;
+  outputType: OutputType;
+  outputVersion: number;
+  subgroupKey: string | null;
+  content: string | null;
+  contentHtml: string | null;
+  metadata: unknown;
+  attorneyApproved: boolean;
+  approvedAt: Date | null;
+  approvedBy: string | null;
+  approvalNotes: string | null;
+  parentId: string | null;
+  author: "computer" | "attorney" | "system";
+  computerSessionId: string | null;
+  costCents: bigint | null;
+  createdAt: Date;
+  updatedAt: Date;
+} | null> {
+  const subgroup = args.subgroupKey ?? null;
+  const [row] = await args.db
+    .select({
+      id: caseOutputs.id,
+      outputType: caseOutputs.outputType,
+      outputVersion: caseOutputs.outputVersion,
+      subgroupKey: caseOutputs.subgroupKey,
+      content: caseOutputs.content,
+      contentHtml: caseOutputs.contentHtml,
+      metadata: caseOutputs.metadata,
+      attorneyApproved: caseOutputs.attorneyApproved,
+      approvedAt: caseOutputs.approvedAt,
+      approvedBy: caseOutputs.approvedBy,
+      approvalNotes: caseOutputs.approvalNotes,
+      parentId: caseOutputs.parentId,
+      author: caseOutputs.author,
+      computerSessionId: caseOutputs.computerSessionId,
+      costCents: caseOutputs.costCents,
+      createdAt: caseOutputs.createdAt,
+      updatedAt: caseOutputs.updatedAt,
+    })
+    .from(caseOutputs)
+    .where(
+      and(
+        eq(caseOutputs.caseId, args.caseId),
+        eq(caseOutputs.outputType, args.outputType),
+        eqSubgroup(subgroup),
+        eq(caseOutputs.isCurrent, true),
+        isNull(caseOutputs.deletedAt),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Full version history for one (case, type, subgroup). Used by Stage 08's
+ * version selector + restore UI.
  */
 export async function getOutputVersionHistory(args: {
   db: Db;
   caseId: string;
   outputType: OutputType;
+  subgroupKey?: string | null;
 }): Promise<
   Array<{
     id: string;
     outputVersion: number;
     isCurrent: boolean;
+    parentId: string | null;
+    author: "computer" | "attorney" | "system";
+    attorneyApproved: boolean;
     createdAt: Date;
     costCents: bigint | null;
   }>
 > {
+  const subgroup = args.subgroupKey ?? null;
   return await args.db
     .select({
       id: caseOutputs.id,
       outputVersion: caseOutputs.outputVersion,
       isCurrent: caseOutputs.isCurrent,
+      parentId: caseOutputs.parentId,
+      author: caseOutputs.author,
+      attorneyApproved: caseOutputs.attorneyApproved,
       createdAt: caseOutputs.createdAt,
       costCents: caseOutputs.costCents,
     })
@@ -283,6 +467,7 @@ export async function getOutputVersionHistory(args: {
       and(
         eq(caseOutputs.caseId, args.caseId),
         eq(caseOutputs.outputType, args.outputType),
+        eqSubgroup(subgroup),
         isNull(caseOutputs.deletedAt),
       ),
     )
@@ -307,4 +492,219 @@ export async function getCaseSpendCents(args: {
     .where(and(eq(cases.id, args.caseId), isNull(cases.deletedAt)))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Stage 08 — attorney in-place edit. Saves a new version of the named
+ * output with `author='attorney'` + `parentId` linking back to the
+ * version this was edited from. Stamps `contentHtml` so the reading
+ * view doesn't re-run markdown on every request.
+ *
+ * Refuses to save if the parent version is currently approved — the
+ * caller (tRPC procedure) must call `setOutputApproval(approved=false)`
+ * first. This forces the attorney to acknowledge that an edit
+ * un-approves the document, rather than silently demoting their
+ * earlier sign-off.
+ *
+ * Empty content (after trim) → BAD_REQUEST. The model can't generate
+ * blank prose; an attorney save reduced to whitespace is almost
+ * certainly an accidental Ctrl-A + Delete.
+ */
+export type UpdateOutputContentArgs = {
+  tx: Db;
+  outputId: string;
+  /** Markdown source. Sanitized HTML cache is computed by the caller
+   *  via `lib/markdown.ts` so this service stays free of the marked +
+   *  turndown dependency surface. */
+  content: string;
+  contentHtml: string;
+  attorneyId: string;
+};
+
+export async function updateOutputContent(
+  args: UpdateOutputContentArgs,
+): Promise<SaveOutputVersionResult> {
+  const trimmed = args.content.trim();
+  if (trimmed.length === 0) {
+    throw new AppError(
+      "BAD_REQUEST",
+      "Content cannot be empty — use Regenerate to draft fresh prose.",
+    );
+  }
+
+  // Read the row we're editing FROM so we can:
+  //   - look up the case (for `saveOutputVersion`'s tx)
+  //   - inherit `outputType` + `subgroupKey`
+  //   - reject when the parent is approved
+  const [parent] = await args.tx
+    .select({
+      caseId: caseOutputs.caseId,
+      outputType: caseOutputs.outputType,
+      subgroupKey: caseOutputs.subgroupKey,
+      attorneyApproved: caseOutputs.attorneyApproved,
+    })
+    .from(caseOutputs)
+    .where(
+      and(eq(caseOutputs.id, args.outputId), isNull(caseOutputs.deletedAt)),
+    )
+    .limit(1);
+  if (!parent) {
+    throw new AppError("NOT_FOUND", `output ${args.outputId} not found`);
+  }
+  if (parent.attorneyApproved) {
+    throw new AppError(
+      "CONFLICT",
+      "Output is currently approved — un-approve before editing.",
+    );
+  }
+
+  return await saveOutputVersion({
+    tx: args.tx,
+    caseId: parent.caseId,
+    outputType: parent.outputType,
+    subgroupKey: parent.subgroupKey,
+    author: "attorney",
+    parentId: args.outputId,
+    content: args.content,
+    contentHtml: args.contentHtml,
+    metadata: {
+      editedFromVersionId: args.outputId,
+      attorneyId: args.attorneyId,
+    },
+    // Attorney edits don't burn provider budget. usdCents=0 short-
+    // circuits the budget guard cleanly (still produces a $0 ledger row,
+    // which is desired audit trail).
+    computerSessionId: `attorney-edit-${args.attorneyId}`,
+    computeDurationMs: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    usdCents: 0,
+  });
+}
+
+/**
+ * Stage 08 — restore a prior version into a fresh `is_current` row.
+ * The previous current row is flipped off (by `saveOutputVersion`),
+ * the named version's content is copied verbatim, author=`system`.
+ * Used when the attorney clicks "Restore version N" in the version
+ * history drawer.
+ *
+ * History is preserved (the source version stays in the table); the
+ * restore creates a NEW version pointing back at the source via
+ * `parent_id`. Net: undo without losing the audit trail.
+ */
+export type RestoreOutputVersionArgs = {
+  tx: Db;
+  /** The version row to restore from (NOT the current row). */
+  fromVersionId: string;
+  attorneyId: string;
+};
+
+export async function restoreOutputVersion(
+  args: RestoreOutputVersionArgs,
+): Promise<SaveOutputVersionResult> {
+  const [source] = await args.tx
+    .select({
+      caseId: caseOutputs.caseId,
+      outputType: caseOutputs.outputType,
+      subgroupKey: caseOutputs.subgroupKey,
+      content: caseOutputs.content,
+      contentHtml: caseOutputs.contentHtml,
+    })
+    .from(caseOutputs)
+    .where(
+      and(eq(caseOutputs.id, args.fromVersionId), isNull(caseOutputs.deletedAt)),
+    )
+    .limit(1);
+  if (!source) {
+    throw new AppError(
+      "NOT_FOUND",
+      `version ${args.fromVersionId} not found`,
+    );
+  }
+  if (source.content === null) {
+    throw new AppError(
+      "BAD_REQUEST",
+      "Cannot restore an empty-content version.",
+    );
+  }
+
+  return await saveOutputVersion({
+    tx: args.tx,
+    caseId: source.caseId,
+    outputType: source.outputType,
+    subgroupKey: source.subgroupKey,
+    author: "system",
+    parentId: args.fromVersionId,
+    content: source.content,
+    contentHtml: source.contentHtml,
+    metadata: {
+      restoredFromVersionId: args.fromVersionId,
+      attorneyId: args.attorneyId,
+    },
+    computerSessionId: `attorney-restore-${args.attorneyId}`,
+    computeDurationMs: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    usdCents: 0,
+  });
+}
+
+/**
+ * Stage 08 — flip the approval boolean on the CURRENT row of an output.
+ * Idempotent: setting the same value is a no-op (no event written, no
+ * state change). The `output.regenerate` mutation calls this with
+ * `approved=false` AS A SIDE EFFECT before emitting the regenerate
+ * event — a regenerated draft must be re-reviewed.
+ */
+export type SetOutputApprovalArgs = {
+  tx: Db;
+  outputId: string;
+  approved: boolean;
+  attorneyId: string;
+  notes?: string | null;
+};
+
+export async function setOutputApproval(
+  args: SetOutputApprovalArgs,
+): Promise<{ changed: boolean }> {
+  const [row] = await args.tx
+    .select({
+      attorneyApproved: caseOutputs.attorneyApproved,
+    })
+    .from(caseOutputs)
+    .where(
+      and(eq(caseOutputs.id, args.outputId), isNull(caseOutputs.deletedAt)),
+    )
+    .limit(1)
+    .for("update");
+  if (!row) {
+    throw new AppError("NOT_FOUND", `output ${args.outputId} not found`);
+  }
+  if (row.attorneyApproved === args.approved) {
+    // Idempotent — same value, no-op. Caller can rely on this to make
+    // the regenerate flow's "auto un-approve" safe to call even when
+    // the row was never approved.
+    return { changed: false };
+  }
+
+  await args.tx
+    .update(caseOutputs)
+    .set(
+      args.approved
+        ? {
+            attorneyApproved: true,
+            approvedAt: sql`now()`,
+            approvedBy: args.attorneyId,
+            ...(args.notes !== undefined ? { approvalNotes: args.notes } : {}),
+          }
+        : {
+            attorneyApproved: false,
+            approvedAt: null,
+            approvedBy: null,
+            approvalNotes: null,
+          },
+    )
+    .where(eq(caseOutputs.id, args.outputId));
+  return { changed: true };
 }

@@ -66,9 +66,37 @@ Surfaced: 2026-04-30 (Stage 03 review)
 
 ---
 
+### #22 — `updateOutputContent` doesn't lock the parent row before approval check
+
+Status: Documented; Phase-2 multi-attorney concern.
+Surfaced: 2026-04-29 (Stage 08 Phase F deep audit)
+
+`updateOutputContent` reads `parent.attorneyApproved` without a row
+lock, then calls `saveOutputVersion` which only locks the `cases` row.
+Race window: attorney A approves while attorney B is mid-edit; B's
+stale read shows `attorneyApproved=false`, B's save proceeds and flips
+A's just-approved row to `is_current=false` — effectively unapproving
+without notice.
+
+Phase 1 spec is single-attorney-per-case so the race can't happen
+today. Stage 11 (multi-attorney support, Phase 2) needs to:
+   a. `for("update")` the output row inside `updateOutputContent`'s tx
+      so the approval check is serialized; OR
+   b. Re-check `attorneyApproved` inside `saveOutputVersion`'s flip
+      query (would require threading the parent state through).
+
+Recommendation: (a). Single point of change, no signature ripple.
+
+---
+
 ### #21 — `regenerate-output` for `evidence_plan` doesn't update `cases.evidence_plan`
 
-Status: Documented; defer to Stage 08.
+Status: ✅ RESOLVED 2026-04-29 (Stage 08 Phase C). Migration 0012
+dropped the `cases.evidence_plan` jsonb column entirely;
+`loadBuildContext` now resolves the plan from the latest `is_current`
+row in `case_outputs` (single source of truth). Recommendation (b)
+from the original entry implemented.
+
 Surfaced: 2026-04-29 (Stage 07 final test-coverage pass)
 
 `regenerate-output` (Phase 10) calls `runOutputJob` → `saveOutputVersion`,

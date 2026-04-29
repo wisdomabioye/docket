@@ -5,6 +5,7 @@ import { caseDocuments, cases } from "@/server/db/schema";
 import { AppError } from "@/lib/errors";
 import { EvidencePlanSchema } from "@/server/db/schema/zod";
 import type { EvidencePlan } from "@/server/db/schema/zod";
+import { getCurrentOutput } from "@/server/services/output";
 import type { BuildContext } from "@/server/services/computer/prompts/context";
 
 /**
@@ -34,7 +35,6 @@ export async function loadBuildContext(caseId: string): Promise<BuildContext> {
       id: cases.id,
       visaType: cases.visaType,
       beneficiaryData: cases.beneficiaryData,
-      evidencePlan: cases.evidencePlan,
       updatedAt: cases.updatedAt,
     })
     .from(cases)
@@ -44,6 +44,28 @@ export async function loadBuildContext(caseId: string): Promise<BuildContext> {
     // NOT_FOUND propagates upward; parent treats as build_failed.
     throw new AppError("NOT_FOUND", `case ${caseId} not found`);
   }
+
+  // Resolve the current evidence plan from `case_outputs` (single source
+  // of truth). Migration 0012 dropped the `cases.evidence_plan` jsonb
+  // cache that previously diverged from the row written by the
+  // evidence-plan sub-function (open_issues #21).
+  const evidencePlanOutput = await getCurrentOutput({
+    db,
+    caseId,
+    outputType: "evidence_plan",
+  });
+  const evidencePlan: EvidencePlan | null = (() => {
+    if (!evidencePlanOutput?.content) return null;
+    try {
+      const parsed: unknown = JSON.parse(evidencePlanOutput.content);
+      const result = EvidencePlanSchema.safeParse(parsed);
+      return result.success ? result.data : null;
+    } catch {
+      // Non-JSON content (e.g. mid-edit attorney prose). Downstream
+      // prompts will throw on null, surfacing the inconsistency.
+      return null;
+    }
+  })();
 
   const docs = await db
     .select({
@@ -78,38 +100,8 @@ export async function loadBuildContext(caseId: string): Promise<BuildContext> {
         truncated,
       };
     }),
-    // Re-parse from jsonb so a malformed write doesn't poison downstream
-    // prompts. `safeParse(null) → success: false`, leaving evidencePlan
-    // as the contract's null.
-    evidencePlan: caseRow.evidencePlan
-      ? EvidencePlanSchema.safeParse(caseRow.evidencePlan).data ?? null
-      : null,
+    evidencePlan,
     // TODO(stage-8): pull recommenders once intake stores them.
     recommenders: [],
   };
-}
-
-/** Parse the saved evidence-plan output's text content into the typed
- *  shape. The parent calls this after the evidence-plan sub-function
- *  succeeds, so the populated `BuildContext.evidencePlan` flows into
- *  every downstream prompt. Throws on shape mismatch — a malformed
- *  evidence plan is non-recoverable for the rest of the build. */
-export function parseEvidencePlanText(text: string): EvidencePlan {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (err) {
-    throw new AppError(
-      "INTERNAL",
-      `evidence-plan text is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  const result = EvidencePlanSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new AppError(
-      "INTERNAL",
-      `evidence-plan text doesn't match EvidencePlanSchema: ${result.error.message}`,
-    );
-  }
-  return result.data;
 }

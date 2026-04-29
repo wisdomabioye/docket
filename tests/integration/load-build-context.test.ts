@@ -100,36 +100,6 @@ describe("loadBuildContext", () => {
   });
 });
 
-describe("parseEvidencePlanText", () => {
-  it("parses + validates an evidence-plan blob", async () => {
-    const { parseEvidencePlanText } = await import("@/server/jobs/_context");
-    const text = JSON.stringify({
-      visaType: "O-1A",
-      overallStrength: "moderate",
-      criteria: [
-        { criterion: "Awards", assessment: "moderate", summary: "ok", gaps: [] },
-      ],
-      generatedAt: new Date().toISOString(),
-    });
-    expect(parseEvidencePlanText(text)).toMatchObject({
-      visaType: "O-1A",
-      overallStrength: "moderate",
-    });
-  });
-
-  it("throws on invalid JSON", async () => {
-    const { parseEvidencePlanText } = await import("@/server/jobs/_context");
-    expect(() => parseEvidencePlanText("not json")).toThrow();
-  });
-
-  it("throws on shape mismatch", async () => {
-    const { parseEvidencePlanText } = await import("@/server/jobs/_context");
-    expect(() =>
-      parseEvidencePlanText(JSON.stringify({ visaType: "O-1A" })),
-    ).toThrow();
-  });
-});
-
 async function seed(d: TestDb): Promise<void> {
   await d.insert(users).values({
     id: ATTORNEY,

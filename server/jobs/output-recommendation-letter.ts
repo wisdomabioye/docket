@@ -13,13 +13,11 @@ import type {
  * Parent fans out one event per `Recommender` in `ctx.recommenders`, so
  * this function carries a single `recommender` in the payload.
  *
- * NOTE on multi-recommender semantics (open_issues #20): every recommender
- * letter writes a `recommendation_letter_template` row. `saveOutputVersion`
- * flips prior `is_current=true` rows to `false`, so only the most recently
- * saved letter is `is_current`. Stage 8 needs to either (a) introduce a
- * per-recommender stable id on `case_outputs`, (b) bundle all letters into
- * one output, or (c) relax the is_current invariant for this type. Phase 9
- * accepts the lossy behavior; the version history retains all letters.
+ * Multi-recommender semantics (resolved in Stage 08, migration 0012):
+ * each recommender's letter occupies its own `(case, type, subgroupKey)`
+ * bucket via `subgroupKey = recommender.id`. The partial unique indexes
+ * on `case_outputs` use `COALESCE(subgroup_key, '')`, so each recommender's
+ * letter has an independent `is_current` + version chain. Closes #20.
  */
 
 export const recommendationLetterRequested = eventType(
@@ -50,6 +48,7 @@ export const outputRecommendationLetter = inngest.createFunction(
         runOutputJob({
           caseId,
           outputType: "recommendation_letter_template",
+          subgroupKey: recommender.id,
           prompt: buildRecommendationLetterPrompt(ctx, recommender),
           sessionId: event.id ?? `rec-letter-${caseId}-${recommender.id}`,
           extraMetadata: {

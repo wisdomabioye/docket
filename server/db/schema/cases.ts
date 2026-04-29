@@ -29,9 +29,6 @@ import { organizations } from "./organizations";
 import type {
   AuditDetails,
   BeneficiaryData,
-  CriteriaAnalysis,
-  DocumentChecklist,
-  EvidencePlan,
   OutputMetadata,
 } from "./zod";
 
@@ -69,12 +66,13 @@ export const cases = pgTable(
     }),
     beneficiaryData: jsonb("beneficiary_data").$type<BeneficiaryData>(),
 
-    // AI work products. `.$type<>()` links the column to its Zod schema
-    // (`server/db/schema/zod/`) so Drizzle's inferred row type stays in
-    // sync with the source-of-truth Zod definition.
-    evidencePlan: jsonb("evidence_plan").$type<EvidencePlan>(),
-    criteriaAnalysis: jsonb("criteria_analysis").$type<CriteriaAnalysis>(),
-    documentChecklist: jsonb("document_checklist").$type<DocumentChecklist>(),
+    // AI work products live in `case_outputs` (per-version, with author
+    // attribution + history). The Stage 07 jsonb caches on this row
+    // (`evidence_plan` / `criteria_analysis` / `document_checklist`)
+    // were dropped in migration 0012 because they invited drift —
+    // sub-functions that wrote to `case_outputs` could disagree with
+    // the cache. `loadBuildContext` now resolves the latest evidence
+    // plan from `case_outputs` (open_issues #21).
 
     // Money
     caseFeeCents: bigint("case_fee_cents", { mode: "bigint" }),
@@ -272,8 +270,22 @@ export const caseOutputs = pgTable(
     isCurrent: boolean("is_current").notNull().default(true),
     pinned: boolean("pinned").notNull().default(false),
 
+    /**
+     * Per-(case, type) sub-bucket — Stage 08, resolves open_issues #20.
+     * For `recommendation_letter_template`, set to `recommender.id` so
+     * each recommender's letter has its own current/version chain.
+     * Null for single-instance output types (one current row per case).
+     * The unique indexes use COALESCE(subgroup_key, '') so null and
+     * non-null values share the same uniqueness universe.
+     */
+    subgroupKey: text("subgroup_key"),
+
     title: text("title"),
     content: text("content"), // markdown / rich text. Move to object storage if > 1MB.
+    /** Cached HTML render of `content` markdown. Re-rendered on every
+     *  attorney save (Stage 08). Avoids running `marked` on every
+     *  read-side render. Sanitized via `lib/markdown.ts` allowlist. */
+    contentHtml: text("content_html"),
     metadata: jsonb("metadata").$type<OutputMetadata>(),
 
     // Computer attribution
@@ -283,6 +295,20 @@ export const caseOutputs = pgTable(
     completionTokens: integer("completion_tokens"),
     computeDurationMs: integer("compute_duration_ms"),
     costCents: bigint("cost_cents", { mode: "bigint" }),
+
+    // Versioning + approval (Stage 08)
+    /** Links this version to the row it was edited/regenerated from.
+     *  Null for the very first version of a (case, type, subgroup). */
+    parentId: uuid("parent_id"),
+    /** Attorney signed off on this version. Stage 08 approval action.
+     *  Auto-cleared on regenerate so the new version requires fresh
+     *  approval. */
+    attorneyApproved: boolean("attorney_approved").notNull().default(false),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    approvedBy: uuid("approved_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    approvalNotes: text("approval_notes"),
 
     rowRevision: integer("row_revision").notNull().default(1),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -294,22 +320,25 @@ export const caseOutputs = pgTable(
       .defaultNow(),
   },
   (t) => [
-    // At most one current row per (case, output_type).
-    uniqueIndex("case_outputs_current_uniq")
-      .on(t.caseId, t.outputType)
-      .where(sql`${t.isCurrent} = true and ${t.deletedAt} is null`),
+    // At most one current row per (case, output_type, subgroup_key).
+    // COALESCE-to-empty-string in raw SQL so `null` collapses into the
+    // same uniqueness bucket as the empty string (single-instance
+    // output types). Drizzle's index DSL doesn't model COALESCE in
+    // unique indexes, so this lives in `0012_output_review.sql` as a
+    // custom migration; the Drizzle-generated index name reflects the
+    // SQL one so introspection stays consistent.
     index("case_outputs_case_type_version_idx").on(
       t.caseId,
       t.outputType,
       t.outputVersion,
     ),
-    // Stage 07: idempotency safety net for the Inngest sub-functions.
-    // A retried `step.run("generate-X")` must NOT produce two rows; the
-    // service-layer `saveOutputVersion()` is the gate, this index is the
-    // catch — partial so soft-deleted versions don't block a fresh write.
-    uniqueIndex("case_outputs_case_type_version_uniq")
-      .on(t.caseId, t.outputType, t.outputVersion)
-      .where(sql`${t.deletedAt} is null`),
+    // "X of N approved" dashboard count — partial so the index stays
+    // small (only current+approved rows; soft-deleted excluded).
+    index("case_outputs_approved_idx")
+      .on(t.caseId)
+      .where(
+        sql`${t.attorneyApproved} = true and ${t.isCurrent} = true and ${t.deletedAt} is null`,
+      ),
   ],
 );
 
