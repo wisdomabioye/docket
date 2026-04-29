@@ -14,6 +14,7 @@ import {
   getOutputVersionHistory,
   restoreOutputVersion,
   setOutputApproval,
+  summarizeOutputApprovals,
   updateOutputContent,
 } from "@/server/services/output";
 import {
@@ -45,6 +46,12 @@ import { AppError, appErrorToTrpcCode } from "@/lib/errors";
 
 const ListInput = z.object({ caseId: z.uuid() });
 const GetInput = z.object({ outputId: z.uuid() });
+
+// Per-case approval tally for the dashboard's case list. Cap at 200 ids
+// so a malicious caller can't hit the DB with a huge IN-list.
+const SummarizeInput = z.object({
+  caseIds: z.array(z.uuid()).max(200),
+});
 const ListVersionsInput = z.object({
   caseId: z.uuid(),
   outputType: z.enum(outputTypeEnum.enumValues),
@@ -120,6 +127,27 @@ async function gateOutputAccess(args: {
 }
 
 export const outputRouter = router({
+  /**
+   * Per-case approval tally for the dashboard. RLS on `case_outputs`
+   * filters out cases the caller can't see, so unauthorized ids
+   * silently return an empty entry (no existence oracle).
+   *
+   * Returns a plain object map so superjson serializes cleanly across
+   * the wire — `Map` values are serializable but the Record shape is
+   * easier to consume in client components.
+   */
+  summarize: protectedProcedure
+    .input(SummarizeInput)
+    .query(async ({ ctx, input }) => {
+      const tally = await summarizeOutputApprovals({
+        db: ctx.db,
+        caseIds: input.caseIds,
+      });
+      const out: Record<string, { approved: number; total: number }> = {};
+      for (const [caseId, counts] of tally) out[caseId] = counts;
+      return out;
+    }),
+
   list: protectedProcedure.input(ListInput).query(async ({ ctx, input }) => {
     // Slim projection — the grid card view doesn't need full prose.
     // RLS hides outputs the caller can't see; result is the slim

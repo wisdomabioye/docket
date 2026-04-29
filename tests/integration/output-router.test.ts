@@ -610,6 +610,109 @@ describe("output.downloadPdf / downloadPackage", () => {
   });
 });
 
+describe("output.summarize", () => {
+  it("returns approved/total tallies keyed by caseId", async (ctx) => {
+    const d = gate(ctx);
+    await d.insert(caseOutputs).values([
+      {
+        caseId: CASE_ID,
+        outputType: "personal_statement",
+        outputVersion: 1,
+        isCurrent: true,
+        author: "computer",
+        content: "x",
+        attorneyApproved: true,
+      },
+      {
+        caseId: CASE_ID,
+        outputType: "petition_letter",
+        outputVersion: 1,
+        isCurrent: true,
+        author: "computer",
+        content: "y",
+        attorneyApproved: false,
+      },
+    ]);
+    const r = await callAs(ATTORNEY).output.summarize({
+      caseIds: [CASE_ID],
+    });
+    expect(r[CASE_ID]).toEqual({ approved: 1, total: 2 });
+  });
+
+  it("returns empty object when caseIds is empty (no DB hit)", async (ctx) => {
+    gate(ctx);
+    const r = await callAs(ATTORNEY).output.summarize({ caseIds: [] });
+    expect(r).toEqual({});
+  });
+
+  it("omits caseIds with zero current outputs (UI renders dash)", async (ctx) => {
+    gate(ctx);
+    const r = await callAs(ATTORNEY).output.summarize({ caseIds: [CASE_ID] });
+    expect(r[CASE_ID]).toBeUndefined();
+  });
+
+  it("excludes outputs the caller can't see (RLS — no entry in result)", async (ctx) => {
+    const d = gate(ctx);
+    await d.insert(caseOutputs).values({
+      caseId: CASE_ID,
+      outputType: "personal_statement",
+      outputVersion: 1,
+      isCurrent: true,
+      author: "computer",
+      content: "x",
+      attorneyApproved: true,
+    });
+    const r = await callAs(STRANGER).output.summarize({ caseIds: [CASE_ID] });
+    expect(r[CASE_ID]).toBeUndefined();
+  });
+
+  it("excludes soft-deleted + non-current rows from the tally", async (ctx) => {
+    const d = gate(ctx);
+    await d.insert(caseOutputs).values([
+      {
+        caseId: CASE_ID,
+        outputType: "personal_statement",
+        outputVersion: 1,
+        isCurrent: false, // not current → excluded
+        author: "computer",
+        content: "v1",
+        attorneyApproved: true,
+      },
+      {
+        caseId: CASE_ID,
+        outputType: "personal_statement",
+        outputVersion: 2,
+        isCurrent: true,
+        author: "computer",
+        content: "v2",
+        attorneyApproved: true,
+      },
+      {
+        caseId: CASE_ID,
+        outputType: "petition_letter",
+        outputVersion: 1,
+        isCurrent: true,
+        author: "computer",
+        content: "deleted",
+        attorneyApproved: true,
+        deletedAt: new Date(), // soft-deleted → excluded
+      },
+    ]);
+    const r = await callAs(ATTORNEY).output.summarize({ caseIds: [CASE_ID] });
+    expect(r[CASE_ID]).toEqual({ approved: 1, total: 1 });
+  });
+
+  it("validation: rejects more than 200 caseIds", async (ctx) => {
+    gate(ctx);
+    const ids = Array.from({ length: 201 }, (_, i) =>
+      `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    );
+    await expect(
+      callAs(ATTORNEY).output.summarize({ caseIds: ids }),
+    ).rejects.toThrow();
+  });
+});
+
 describe("UNAUTHORIZED + FORBIDDEN gates", () => {
   it("UNAUTHORIZED for unauthenticated update", async (ctx) => {
     const d = gate(ctx);

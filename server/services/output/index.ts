@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import {
   caseComputeLedger,
@@ -472,6 +472,45 @@ export async function getOutputVersionHistory(args: {
       ),
     )
     .orderBy(desc(caseOutputs.outputVersion));
+}
+
+/**
+ * Per-case "X of N approved" tally — used by the dashboard's case
+ * list to render output progress without an N+1 query (one
+ * `getCurrentOutputsForList` per case would balloon for an attorney
+ * with 50+ cases). Returns a `Map<caseId, { approved, total }>` so
+ * callers can do constant-time lookups.
+ *
+ * Empty `caseIds` → empty map (zero round-trips).
+ */
+export async function summarizeOutputApprovals(args: {
+  db: Db;
+  caseIds: ReadonlyArray<string>;
+}): Promise<Map<string, { approved: number; total: number }>> {
+  const result = new Map<string, { approved: number; total: number }>();
+  if (args.caseIds.length === 0) return result;
+  // Single round-trip via `count(*) FILTER`. Filters the same shape as
+  // `getCurrentOutputsForList` (current + non-deleted) so the tally
+  // matches what the user would see on `/case/[id]/outputs`.
+  const rows = await args.db
+    .select({
+      caseId: caseOutputs.caseId,
+      total: sql<number>`count(*)::int`,
+      approved: sql<number>`count(*) filter (where ${caseOutputs.attorneyApproved} = true)::int`,
+    })
+    .from(caseOutputs)
+    .where(
+      and(
+        inArray(caseOutputs.caseId, [...args.caseIds]),
+        eq(caseOutputs.isCurrent, true),
+        isNull(caseOutputs.deletedAt),
+      ),
+    )
+    .groupBy(caseOutputs.caseId);
+  for (const r of rows) {
+    result.set(r.caseId, { approved: r.approved, total: r.total });
+  }
+  return result;
 }
 
 /**

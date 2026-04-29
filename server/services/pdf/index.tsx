@@ -3,7 +3,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@/server/db/client";
 import { caseParticipants, cases, users } from "@/server/db/schema";
 import { AppError } from "@/lib/errors";
-import { OUTPUT_TYPE_DISPLAY } from "@/lib/output-types";
+import { OUTPUT_TYPE_DISPLAY, readRecommenderName } from "@/lib/output-types";
 import type { OutputType } from "@/server/services/computer/types";
 import { getCurrentOutputs } from "@/server/services/output";
 import {
@@ -100,7 +100,10 @@ function bodyDescriptorFor(args: {
   // Recommendation letters get a per-recommender subtitle from
   // metadata so each letter is self-identifying in the package.
   if (args.outputType === "recommendation_letter_template") {
-    const recommenderName = readRecommenderName(args.metadata);
+    const recommenderName = readRecommenderName({
+      outputType: args.outputType,
+      metadata: args.metadata,
+    });
     return {
       kind: "prose",
       runningHeading: OUTPUT_TYPE_DISPLAY[args.outputType],
@@ -123,18 +126,6 @@ function readExhibitCount(metadata: unknown): number | null {
   ) {
     const v = (metadata as { exhibitCount?: unknown }).exhibitCount;
     return typeof v === "number" && Number.isFinite(v) ? v : null;
-  }
-  return null;
-}
-
-function readRecommenderName(metadata: unknown): string | null {
-  if (
-    metadata !== null &&
-    typeof metadata === "object" &&
-    "recommenderName" in metadata
-  ) {
-    const v = (metadata as { recommenderName?: unknown }).recommenderName;
-    return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
   }
   return null;
 }

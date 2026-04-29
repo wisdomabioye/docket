@@ -65,9 +65,12 @@ export default async function CaseDetailPage({ params }: Props) {
         >
           Documents
         </Link>
-        <span className="py-2 text-[var(--color-ink-muted)]/50" title="Stage 08">
+        <Link
+          href={APP_ROUTES.caseOutputs(data.id)}
+          className="py-2 text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+        >
           Outputs
-        </span>
+        </Link>
       </nav>
 
       <section className="grid gap-6 sm:grid-cols-2">

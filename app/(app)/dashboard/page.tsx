@@ -25,6 +25,12 @@ export default async function DashboardPage() {
   if (status !== "active") redirect(APP_ROUTES.onboarding);
 
   const cases = await api.case.list({});
+  const approvals =
+    cases.items.length === 0
+      ? ({} as Record<string, { approved: number; total: number }>)
+      : await api.output.summarize({
+          caseIds: cases.items.map((c) => c.id),
+        });
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-12 space-y-8">
@@ -67,6 +73,7 @@ export default async function DashboardPage() {
                 <th className="pb-2 font-medium">Beneficiary</th>
                 <th className="pb-2 font-medium">Visa</th>
                 <th className="pb-2 font-medium">Status</th>
+                <th className="pb-2 font-medium">Outputs</th>
                 <th className="pb-2 font-medium">Updated</th>
               </tr>
             </thead>
@@ -90,6 +97,31 @@ export default async function DashboardPage() {
                     <td className="py-3 font-mono text-xs">{c.visaType}</td>
                     <td className="py-3 text-xs capitalize">
                       {c.status.replace(/_/g, " ")}
+                    </td>
+                    <td className="py-3 text-xs">
+                      {(() => {
+                        const tally = approvals[c.id];
+                        if (!tally || tally.total === 0) {
+                          return (
+                            <span className="text-[var(--color-ink-muted)]">
+                              —
+                            </span>
+                          );
+                        }
+                        return (
+                          <span
+                            className="font-mono"
+                            style={{
+                              color:
+                                tally.approved === tally.total
+                                  ? "var(--success, var(--color-ink))"
+                                  : "var(--color-ink)",
+                            }}
+                          >
+                            {tally.approved} of {tally.total}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="py-3 text-xs text-[var(--color-ink-muted)]">
                       {new Date(c.updatedAt).toLocaleDateString()}
