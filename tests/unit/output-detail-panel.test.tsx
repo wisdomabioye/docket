@@ -31,7 +31,20 @@ const useUpdateMock = vi.hoisted(() =>
   vi.fn(() => ({ mutate: updateMutate, isPending: false })),
 );
 const useGetMock = vi.hoisted(() =>
-  vi.fn(() => ({ data: undefined })),
+  vi.fn(
+    (): {
+      data:
+        | {
+            id: string;
+            attorneyApproved: boolean;
+            outputVersion: number;
+            approvedAt: Date | null;
+            content: string;
+            updatedAt: Date;
+          }
+        | undefined;
+    } => ({ data: undefined }),
+  ),
 );
 const utilsMock = vi.hoisted(() => ({
   output: {
@@ -287,10 +300,12 @@ describe("OutputDetailPanel — live data refresh from output.get", () => {
 
 describe("OutputDetailPanel — successful save reset (act-driven)", () => {
   it("calls onSuccess → invalidates → resets dirty + mode", async () => {
-    let capturedOnSuccess: (() => Promise<void> | void) | null = null;
+    const captured: {
+      onSuccess: (() => Promise<void> | void) | null;
+    } = { onSuccess: null };
     useUpdateMock.mockImplementation(
       (opts?: { onSuccess?: () => Promise<void> | void }) => {
-        capturedOnSuccess = opts?.onSuccess ?? null;
+        captured.onSuccess = opts?.onSuccess ?? null;
         return { mutate: updateMutate, isPending: false };
       },
     );
@@ -300,7 +315,7 @@ describe("OutputDetailPanel — successful save reset (act-driven)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
     fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
     await act(async () => {
-      await capturedOnSuccess?.();
+      await captured.onSuccess?.();
     });
     expect(utilsMock.output.get.invalidate).toHaveBeenCalledWith({
       outputId: "out-1",

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { PageHeader } from "@/components/admin/PageHeader";
@@ -24,7 +25,10 @@ export default async function AdminRevenuePage(props: {
 }): Promise<React.ReactElement> {
   const params = await props.searchParams;
   const period = parseEnum<Period>(params.period, PERIODS) ?? "QTD";
-  const data = await api.admin.getRevenueMetrics({ period });
+  const [data, byAttorney] = await Promise.all([
+    api.admin.getRevenueMetrics({ period }),
+    api.admin.getRevenueByAttorney({ period }),
+  ]);
 
   const empty = data.totals.filings === 0;
   const chips: Chip[] = PERIOD_CHIPS.map((c) => ({
@@ -90,6 +94,45 @@ export default async function AdminRevenuePage(props: {
                   </li>
                 );
               })}
+            </ul>
+          )}
+        </Card>
+      </div>
+
+      <div className="mt-6">
+        <Card title={`Top attorneys by docket share · ${period}`}>
+          {byAttorney.items.length === 0 ? (
+            <EmptyState
+              title="No filings attributed to attorneys yet."
+              subtitle="Per-attorney rollup populates from filed cases."
+            />
+          ) : (
+            <ul className="space-y-2 text-sm">
+              {byAttorney.items.map((row, idx) => (
+                <li
+                  key={row.userId}
+                  className="flex items-center justify-between border-b py-2 text-xs last:border-0"
+                  style={{ borderColor: "var(--border)" }}
+                >
+                  <span className="flex items-center gap-2">
+                    <span
+                      className="mono text-[var(--ink-muted)]"
+                      style={{ width: "1.5em" }}
+                    >
+                      {String(idx + 1).padStart(2, "0")}
+                    </span>
+                    <Link
+                      href={`${APP_ROUTES.adminAttorneys}/${row.userId}`}
+                      className="underline-offset-2 hover:underline"
+                    >
+                      {row.name ?? row.email}
+                    </Link>
+                  </span>
+                  <span className="mono">
+                    {formatCents(row.docketCents)} · {row.filings} filings
+                  </span>
+                </li>
+              ))}
             </ul>
           )}
         </Card>

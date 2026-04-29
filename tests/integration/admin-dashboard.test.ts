@@ -415,6 +415,267 @@ describe("admin.getComputeMetrics", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+// Stage 09 Phase B + C — new procedures
+// ─────────────────────────────────────────────────────────────────────
+
+describe("admin.suspendAttorney", () => {
+  it("flips status to suspended + writes audit row", async (ctx) => {
+    const d = gate(ctx);
+    await callAs(ADMIN).admin.suspendAttorney({
+      userId: ATTORNEY_A,
+      reason: "Test suspension",
+    });
+    const [profile] = await d
+      .select({ status: attorneyProfiles.status })
+      .from(attorneyProfiles)
+      .where(eq(attorneyProfiles.userId, ATTORNEY_A));
+    expect(profile?.status).toBe("suspended");
+
+    const [audit] = await d
+      .select({
+        action: auditLog.action,
+        actorUserId: auditLog.actorUserId,
+        targetId: auditLog.targetId,
+        details: auditLog.details,
+      })
+      .from(auditLog)
+      .where(eq(auditLog.action, "attorney.suspend"));
+    expect(audit?.actorUserId).toBe(ADMIN);
+    expect(audit?.targetId).toBe(ATTORNEY_A);
+    expect(audit?.details).toMatchObject({
+      reason: "Test suspension",
+      previousStatus: "active",
+    });
+  });
+
+  it("CONFLICT when already suspended (idempotent rejection)", async (ctx) => {
+    gate(ctx);
+    await callAs(ADMIN).admin.suspendAttorney({
+      userId: ATTORNEY_A,
+      reason: "First time",
+    });
+    await expect(
+      callAs(ADMIN).admin.suspendAttorney({
+        userId: ATTORNEY_A,
+        reason: "Second time",
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("NOT_FOUND when attorney profile is missing", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(ADMIN).admin.suspendAttorney({
+        userId: "00000000-0000-4000-8000-000000000000",
+        reason: "Phantom",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("VALIDATION error when reason is empty", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(ADMIN).admin.suspendAttorney({
+        userId: ATTORNEY_A,
+        reason: "",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects non-admin callers with FORBIDDEN", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(NON_ADMIN).admin.suspendAttorney({
+        userId: ATTORNEY_A,
+        reason: "Should fail",
+      }),
+    ).rejects.toThrow(/admin role required/i);
+  });
+});
+
+describe("admin.getAttorney", () => {
+  it("returns user + profile + recent cases", async (ctx) => {
+    gate(ctx);
+    const r = await callAs(ADMIN).admin.getAttorney({ userId: ATTORNEY_A });
+    expect(r.userId).toBe(ATTORNEY_A);
+    expect(r.email).toBe("test-att-a@docket.local");
+    expect(r.profile?.status).toBe("active");
+    // Three seeded cases participate ATTORNEY_A.
+    expect(r.recentCases).toHaveLength(3);
+    expect(r.recentCases.map((c) => c.id).sort()).toEqual(
+      [CASE_INTAKE, CASE_DRAFT, CASE_FILED].sort(),
+    );
+  });
+
+  it("returns profile=null for a user with no attorney profile", async (ctx) => {
+    gate(ctx);
+    const r = await callAs(ADMIN).admin.getAttorney({ userId: NON_ADMIN });
+    expect(r.profile).toBeNull();
+    expect(r.recentCases).toEqual([]);
+  });
+
+  it("NOT_FOUND for a non-existent user", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(ADMIN).admin.getAttorney({
+        userId: "00000000-0000-4000-8000-000000000000",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("rejects non-admin callers", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(NON_ADMIN).admin.getAttorney({ userId: ATTORNEY_A }),
+    ).rejects.toThrow(/admin role required/i);
+  });
+});
+
+describe("admin.getRevenueByAttorney", () => {
+  it("aggregates docket share per primary attorney", async (ctx) => {
+    gate(ctx);
+    const r = await callAs(ADMIN).admin.getRevenueByAttorney({
+      period: "ALL",
+    });
+    // Only CASE_FILED has filedAt; ATTORNEY_A is its primary.
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0]?.userId).toBe(ATTORNEY_A);
+    expect(r.items[0]?.docketCents).toBe(75000n);
+    expect(r.items[0]?.filings).toBe(1);
+  });
+
+  it("returns empty when no filed cases in window", async (ctx) => {
+    const d = gate(ctx);
+    await d.update(cases).set({ filedAt: null }).where(eq(cases.id, CASE_FILED));
+    const r = await callAs(ADMIN).admin.getRevenueByAttorney({
+      period: "ALL",
+    });
+    expect(r.items).toEqual([]);
+  });
+
+  it("rejects non-admin callers", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(NON_ADMIN).admin.getRevenueByAttorney({ period: "MTD" }),
+    ).rejects.toThrow(/admin role required/i);
+  });
+});
+
+describe("admin.getComputeBreakdown", () => {
+  it("returns top cases + per-attorney aggregates", async (ctx) => {
+    const d = gate(ctx);
+    await d.insert(caseComputeLedger).values([
+      {
+        caseId: CASE_DRAFT,
+        entryType: "compute_spend",
+        amountCents: 250n,
+        metadata: {},
+      },
+      {
+        caseId: CASE_FILED,
+        entryType: "compute_spend",
+        amountCents: 100n,
+        metadata: {},
+      },
+    ]);
+    const r = await callAs(ADMIN).admin.getComputeBreakdown({
+      period: "ALL",
+    });
+    expect(r.topCases).toHaveLength(2);
+    // Sorted by spend desc.
+    expect(r.topCases[0]?.caseId).toBe(CASE_DRAFT);
+    expect(r.topCases[0]?.spentCents).toBe(250n);
+    expect(r.topCases[1]?.caseId).toBe(CASE_FILED);
+
+    expect(r.byAttorney).toHaveLength(1);
+    expect(r.byAttorney[0]?.userId).toBe(ATTORNEY_A);
+    expect(r.byAttorney[0]?.spentCents).toBe(350n);
+    expect(r.byAttorney[0]?.cases).toBe(2);
+  });
+
+  it("returns empty arrays when ledger is empty", async (ctx) => {
+    gate(ctx);
+    const r = await callAs(ADMIN).admin.getComputeBreakdown({
+      period: "ALL",
+    });
+    expect(r.topCases).toEqual([]);
+    expect(r.byAttorney).toEqual([]);
+  });
+
+  it("rejects non-admin callers", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(NON_ADMIN).admin.getComputeBreakdown({ period: "MTD" }),
+    ).rejects.toThrow(/admin role required/i);
+  });
+});
+
+describe("admin.getComputerHealthSnapshot", () => {
+  it("returns unknown when Redis is unconfigured (test env)", async (ctx) => {
+    gate(ctx);
+    // The test env doesn't set UPSTASH_* — getRedis returns null →
+    // procedure returns the unknown shape.
+    const r = await callAs(ADMIN).admin.getComputerHealthSnapshot();
+    expect(r.status).toBe("unknown");
+    expect(r.checkedAt).toBeNull();
+    expect(r.lastError).toBeNull();
+  });
+
+  it("rejects non-admin callers", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(NON_ADMIN).admin.getComputerHealthSnapshot(),
+    ).rejects.toThrow(/admin role required/i);
+  });
+});
+
+describe("admin.viewCase", () => {
+  it("returns case detail + writes admin.viewed_case audit row", async (ctx) => {
+    const d = gate(ctx);
+    const result = await callAs(ADMIN).admin.viewCase({ caseId: CASE_INTAKE });
+    expect(result.id).toBe(CASE_INTAKE);
+    expect(result.visaType).toBe("O-1A");
+
+    const [audit] = await d
+      .select({
+        action: auditLog.action,
+        actorUserId: auditLog.actorUserId,
+        targetType: auditLog.targetType,
+        targetId: auditLog.targetId,
+      })
+      .from(auditLog)
+      .where(eq(auditLog.action, "admin.viewed_case"));
+    expect(audit?.actorUserId).toBe(ADMIN);
+    expect(audit?.targetType).toBe("case");
+    expect(audit?.targetId).toBe(CASE_INTAKE);
+  });
+
+  it("NOT_FOUND when case is missing — no phantom audit row written", async (ctx) => {
+    const d = gate(ctx);
+    await expect(
+      callAs(ADMIN).admin.viewCase({
+        caseId: "00000000-0000-4000-8000-000000000000",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    // Defense-in-depth: the withAudit pattern fires AFTER the inner
+    // function — so a NOT_FOUND throw must NOT leave a viewed_case row.
+    const rows = await d
+      .select({ id: auditLog.id })
+      .from(auditLog)
+      .where(eq(auditLog.action, "admin.viewed_case"));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("rejects non-admin callers", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(NON_ADMIN).admin.viewCase({ caseId: CASE_INTAKE }),
+    ).rejects.toThrow(/admin role required/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
 // Fixtures
 // ─────────────────────────────────────────────────────────────────────
 

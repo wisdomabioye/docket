@@ -49,16 +49,18 @@ describe("PackageDownloadButton", () => {
   });
 
   it("opens signed URL in new tab on success", () => {
-    let capturedOnSuccess: ((data: { url: string }) => void) | null = null;
+    const captured: {
+      onSuccess: ((data: { url: string }) => void) | null;
+    } = { onSuccess: null };
     useDownloadMock.mockImplementation(
       (opts?: { onSuccess?: (d: { url: string }) => void }) => {
-        capturedOnSuccess = opts?.onSuccess ?? null;
+        captured.onSuccess = opts?.onSuccess ?? null;
         return { mutate: downloadMutate, isPending: false };
       },
     );
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
     render(<PackageDownloadButton caseId="c-1" />);
-    capturedOnSuccess?.({ url: "/pkg-signed-stub" });
+    captured.onSuccess?.({ url: "/pkg-signed-stub" });
     expect(openSpy).toHaveBeenCalledWith(
       "/pkg-signed-stub",
       "_blank",
@@ -68,17 +70,19 @@ describe("PackageDownloadButton", () => {
   });
 
   it("renders error message via role=alert when mutation fails", () => {
-    let capturedOnError: ((err: { message: string }) => void) | null = null;
+    const captured: {
+      onError: ((err: { message: string }) => void) | null;
+    } = { onError: null };
     useDownloadMock.mockImplementation(
       (opts?: { onError?: (e: { message: string }) => void }) => {
-        capturedOnError = opts?.onError ?? null;
+        captured.onError = opts?.onError ?? null;
         return { mutate: downloadMutate, isPending: false };
       },
     );
     render(<PackageDownloadButton caseId="c-1" />);
     // Wrap in act() so React flushes the setState the onError triggers.
     act(() => {
-      capturedOnError?.({ message: "Approve at least one output" });
+      captured.onError?.({ message: "Approve at least one output" });
     });
     expect(screen.getByRole("alert")).toHaveTextContent(
       /approve at least one output/i,

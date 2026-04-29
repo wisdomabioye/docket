@@ -1,8 +1,9 @@
+import Link from "next/link";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { KpiCard, KpiGrid } from "@/components/kpi";
-import { Card, EmptyState } from "@/components/ui";
+import { Badge, Card, EmptyState } from "@/components/ui";
 import { Filters, type Chip } from "@/components/table";
 import { formatCents } from "@/lib/utils";
 import { parseEnum } from "@/lib/url-params";
@@ -24,7 +25,11 @@ export default async function AdminComputePage(props: {
 }): Promise<React.ReactElement> {
   const params = await props.searchParams;
   const period = parseEnum<Period>(params.period, PERIODS) ?? "MTD";
-  const data = await api.admin.getComputeMetrics({ period });
+  const [data, breakdown, health] = await Promise.all([
+    api.admin.getComputeMetrics({ period }),
+    api.admin.getComputeBreakdown({ period }),
+    api.admin.getComputerHealthSnapshot(),
+  ]);
 
   const empty = data.totals.entries === 0;
   const chips: Chip[] = PERIOD_CHIPS.map((c) => ({
@@ -43,7 +48,7 @@ export default async function AdminComputePage(props: {
 
       <Filters chips={chips} right={`Period: ${period}`} />
 
-      <KpiGrid cols={2}>
+      <KpiGrid cols={3}>
         <KpiCard
           label={`Total spend · ${period}`}
           value={formatCents(data.totals.totalCents)}
@@ -60,7 +65,94 @@ export default async function AdminComputePage(props: {
           dim={empty}
           sub={empty ? "—" : "Across all model calls"}
         />
+        <KpiCard
+          label="Sonar status"
+          value={health.status === "up" ? "Up" : health.status === "down" ? "Down" : "Unknown"}
+          dim={health.status === "unknown"}
+          sub={
+            health.checkedAt
+              ? `Checked ${new Date(health.checkedAt).toLocaleTimeString()}`
+              : "No cron data yet"
+          }
+        />
       </KpiGrid>
+
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
+        <Card title={`Top cases by spend · ${period}`}>
+          {breakdown.topCases.length === 0 ? (
+            <EmptyState
+              title="No cases with compute spend in this window."
+              subtitle="Once attorneys run builds, the top spenders will appear here."
+            />
+          ) : (
+            <ul className="space-y-2 text-sm">
+              {breakdown.topCases.map((row, idx) => (
+                <li
+                  key={row.caseId}
+                  className="flex items-center justify-between border-b py-2 text-xs last:border-0"
+                  style={{ borderColor: "var(--border)" }}
+                >
+                  <span className="flex items-center gap-2">
+                    <span
+                      className="mono text-[var(--ink-muted)]"
+                      style={{ width: "1.5em" }}
+                    >
+                      {String(idx + 1).padStart(2, "0")}
+                    </span>
+                    <Link
+                      href={APP_ROUTES.case(row.caseId)}
+                      className="mono underline-offset-2 hover:underline"
+                    >
+                      {row.caseId.slice(0, 8)}
+                    </Link>
+                    <Badge variant="neutral">{row.visaType}</Badge>
+                  </span>
+                  <span className="mono">
+                    {formatCents(row.spentCents)} · {row.entries}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card title={`Top attorneys by compute spend · ${period}`}>
+          {breakdown.byAttorney.length === 0 ? (
+            <EmptyState
+              title="No attorney has billable spend in this window."
+              subtitle="Per-attorney aggregates show once builds run."
+            />
+          ) : (
+            <ul className="space-y-2 text-sm">
+              {breakdown.byAttorney.map((row, idx) => (
+                <li
+                  key={row.userId}
+                  className="flex items-center justify-between border-b py-2 text-xs last:border-0"
+                  style={{ borderColor: "var(--border)" }}
+                >
+                  <span className="flex items-center gap-2">
+                    <span
+                      className="mono text-[var(--ink-muted)]"
+                      style={{ width: "1.5em" }}
+                    >
+                      {String(idx + 1).padStart(2, "0")}
+                    </span>
+                    <Link
+                      href={`${APP_ROUTES.adminAttorneys}/${row.userId}`}
+                      className="underline-offset-2 hover:underline"
+                    >
+                      {row.name ?? row.email}
+                    </Link>
+                  </span>
+                  <span className="mono">
+                    {formatCents(row.spentCents)} · {row.cases} cases
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
 
       <div className="mt-6">
         <Card title={`Cost by category · ${period}`}>
@@ -73,4 +165,3 @@ export default async function AdminComputePage(props: {
     </>
   );
 }
-

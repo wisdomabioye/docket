@@ -28,11 +28,17 @@ type ListVersionsRow = {
 
 const restoreMutate = vi.hoisted(() => vi.fn());
 const useListVersionsMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    data: [] as ListVersionsRow[],
-    isLoading: false,
-    isError: false,
-  })),
+  vi.fn(
+    (): {
+      data: ListVersionsRow[] | undefined;
+      isLoading: boolean;
+      isError: boolean;
+    } => ({
+      data: [] as ListVersionsRow[],
+      isLoading: false,
+      isError: false,
+    }),
+  ),
 );
 const useRestoreMock = vi.hoisted(() =>
   vi.fn(() => ({ mutate: restoreMutate, isPending: false })),

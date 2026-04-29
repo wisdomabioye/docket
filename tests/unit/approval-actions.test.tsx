@@ -139,12 +139,17 @@ describe("ApprovalActions — approve gate", () => {
 
 describe("ApprovalActions — downloadPdf", () => {
   it("opens the signed URL in a new tab on success", () => {
-    // Capture the onSuccess passed to useMutation so we can fire it.
-    let capturedOnSuccess: ((data: { url: string }) => void) | null = null;
-    useDownloadMock.mockImplementation((opts?: { onSuccess?: (d: { url: string }) => void }) => {
-      capturedOnSuccess = opts?.onSuccess ?? null;
-      return { mutate: downloadMutate, isPending: false };
-    });
+    // Capture the onSuccess via an object cell — bare `let` would narrow
+    // to `null` because TS can't see assignments inside the mock cb.
+    const captured: {
+      onSuccess: ((data: { url: string }) => void) | null;
+    } = { onSuccess: null };
+    useDownloadMock.mockImplementation(
+      (opts?: { onSuccess?: (d: { url: string }) => void }) => {
+        captured.onSuccess = opts?.onSuccess ?? null;
+        return { mutate: downloadMutate, isPending: false };
+      },
+    );
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
 
     render(
@@ -156,7 +161,7 @@ describe("ApprovalActions — downloadPdf", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /download pdf/i }));
     expect(downloadMutate).toHaveBeenCalledWith({ outputId: "o-1" });
-    capturedOnSuccess?.({ url: "/signed-url-stub" });
+    captured.onSuccess?.({ url: "/signed-url-stub" });
     expect(openSpy).toHaveBeenCalledWith(
       "/signed-url-stub",
       "_blank",

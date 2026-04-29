@@ -17,6 +17,10 @@ import {
   waitlistEntries,
 } from "@/server/db/schema";
 import { adminProcedure, router } from "@/server/api/trpc";
+import { withAudit } from "@/server/services/audit";
+import { getRedis } from "@/server/services/redis";
+import type { Db as AdminDb } from "@/server/db/client";
+import type { AttorneyStatus } from "@/lib/constants";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Module-level constants + helpers used by Stage 09 procedures. Declared
@@ -64,6 +68,43 @@ function summarizeAuditAction(e: {
     default:
       return `${e.action} on ${e.targetType}`;
   }
+}
+
+/** Read an attorney profile by `userId` or throw NOT_FOUND. Used by
+ *  both `activateAttorney` and `suspendAttorney` — the shape of the
+ *  read + the error semantics are identical. Without this helper,
+ *  every new admin mutation that targets an attorney would re-implement
+ *  the same select + null check, drifting in subtle ways (e.g. one
+ *  call site forgetting `isNull(deletedAt)`). */
+async function fetchAttorneyProfileOrThrow(
+  db: AdminDb,
+  userId: string,
+): Promise<{
+  id: string;
+  status: AttorneyStatus;
+  submittedAt: Date | null;
+}> {
+  const [profile] = await db
+    .select({
+      id: attorneyProfiles.id,
+      status: attorneyProfiles.status,
+      submittedAt: attorneyProfiles.submittedAt,
+    })
+    .from(attorneyProfiles)
+    .where(
+      and(
+        eq(attorneyProfiles.userId, userId),
+        isNull(attorneyProfiles.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (!profile) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Attorney profile not found",
+    });
+  }
+  return profile;
 }
 
 /**
@@ -121,28 +162,8 @@ export const adminRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { db, userId: adminId } = ctx;
+      const profile = await fetchAttorneyProfileOrThrow(db, input.userId);
 
-      const [profile] = await db
-        .select({
-          id: attorneyProfiles.id,
-          status: attorneyProfiles.status,
-          submittedAt: attorneyProfiles.submittedAt,
-        })
-        .from(attorneyProfiles)
-        .where(
-          and(
-            eq(attorneyProfiles.userId, input.userId),
-            isNull(attorneyProfiles.deletedAt),
-          ),
-        )
-        .limit(1);
-
-      if (!profile) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Attorney profile not found",
-        });
-      }
       if (profile.status === "active") {
         throw new TRPCError({
           code: "CONFLICT",
@@ -156,21 +177,25 @@ export const adminRouter = router({
         });
       }
 
-      await db
-        .update(attorneyProfiles)
-        .set({ status: "active" })
-        .where(eq(attorneyProfiles.id, profile.id));
-
-      await db.insert(auditLog).values({
-        actorType: "user",
-        actorUserId: adminId,
-        action: "attorney.activate",
-        targetType: "user",
-        targetId: input.userId,
-        details: input.reason ? { reason: input.reason } : null,
-      });
-
-      return { ok: true as const };
+      return await withAudit(
+        {
+          db,
+          adminId,
+          action: "attorney.activate",
+          targetType: "user",
+          targetId: input.userId,
+          ...(input.reason !== undefined
+            ? { detailsFrom: () => ({ reason: input.reason }) }
+            : {}),
+        },
+        async () => {
+          await db
+            .update(attorneyProfiles)
+            .set({ status: "active" })
+            .where(eq(attorneyProfiles.id, profile.id));
+          return { ok: true as const };
+        },
+      );
     }),
 
   /**
@@ -299,14 +324,20 @@ export const adminRouter = router({
       }
 
       const row = updated[0]!;
-      await db.insert(auditLog).values({
-        actorType: "user",
-        actorUserId: adminId,
-        action: "waitlist.approve",
-        targetType: "waitlist_entry",
-        targetId: row.id,
-        details: { email: row.email },
-      });
+      // Wrap the audit insert in `withAudit` for parity with the other
+      // admin mutations. The row update already committed above; we
+      // just write the log for the now-completed action.
+      await withAudit(
+        {
+          db,
+          adminId,
+          action: "waitlist.approve",
+          targetType: "waitlist_entry",
+          targetId: row.id,
+          detailsFrom: () => ({ email: row.email }),
+        },
+        async () => row,
+      );
 
       return { ok: true as const };
     }),
@@ -886,5 +917,395 @@ export const adminRouter = router({
           storageCents: 0n,
         },
       };
+    }),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Stage 09 — additional procedures (suspend, attorney detail,
+  // breakdowns, computer health timeline, admin-viewed-case audit).
+  // ─────────────────────────────────────────────────────────────────────
+
+  /**
+   * Suspend an attorney. Sets `attorney_profiles.status = 'suspended'`.
+   * Idempotent on already-suspended (returns CONFLICT). Active cases
+   * remain accessible (RLS doesn't gate on profile status); the
+   * attorney just can't start new builds — `attorneyProcedure` rejects
+   * non-active profiles.
+   *
+   * Spec §15.4 mandate. Reason text required (audit trail) — unlike
+   * activate where it's optional.
+   */
+  suspendAttorney: adminProcedure
+    .input(
+      z.object({
+        userId: z.uuid(),
+        reason: z.string().min(1).max(500),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { db, userId: adminId } = ctx;
+      const profile = await fetchAttorneyProfileOrThrow(db, input.userId);
+
+      if (profile.status === "suspended") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Attorney is already suspended",
+        });
+      }
+
+      return await withAudit(
+        {
+          db,
+          adminId,
+          action: "attorney.suspend",
+          targetType: "user",
+          targetId: input.userId,
+          detailsFrom: () => ({
+            reason: input.reason,
+            previousStatus: profile.status,
+          }),
+        },
+        async () => {
+          await db
+            .update(attorneyProfiles)
+            .set({ status: "suspended" })
+            .where(eq(attorneyProfiles.id, profile.id));
+          return { ok: true as const };
+        },
+      );
+    }),
+
+  /**
+   * Full attorney detail for the admin drawer / detail page. Joins the
+   * user row, attorney profile, and the most recent N cases the
+   * attorney participates in.
+   *
+   * Pure read — no audit row. (Spec §22 reserves the "viewed attorney"
+   * audit for a future privacy-tightening. Phase 1 doesn't track view
+   * events for attorneys.)
+   */
+  getAttorney: adminProcedure
+    .input(z.object({ userId: z.uuid() }))
+    .query(async ({ ctx, input }) => {
+      const { db } = ctx;
+
+      const [row] = await db
+        .select({
+          userId: users.id,
+          name: users.name,
+          email: users.email,
+          createdAt: users.createdAt,
+          profileId: attorneyProfiles.id,
+          status: attorneyProfiles.status,
+          barNumber: attorneyProfiles.barNumber,
+          barStates: attorneyProfiles.barStates,
+          submittedAt: attorneyProfiles.submittedAt,
+          agreementSignedAt: attorneyProfiles.agreementSignedAt,
+        })
+        .from(users)
+        .leftJoin(
+          attorneyProfiles,
+          and(
+            eq(attorneyProfiles.userId, users.id),
+            isNull(attorneyProfiles.deletedAt),
+          ),
+        )
+        .where(and(eq(users.id, input.userId), isNull(users.deletedAt)))
+        .limit(1);
+
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "User not found",
+        });
+      }
+
+      // Most recent 10 cases the attorney participates in.
+      const recentCases = await db
+        .select({
+          id: cases.id,
+          visaType: cases.visaType,
+          status: cases.status,
+          updatedAt: cases.updatedAt,
+        })
+        .from(cases)
+        .innerJoin(
+          caseParticipants,
+          and(
+            eq(caseParticipants.caseId, cases.id),
+            isNull(caseParticipants.removedAt),
+          ),
+        )
+        .where(
+          and(
+            eq(caseParticipants.userId, input.userId),
+            isNull(cases.deletedAt),
+          ),
+        )
+        .orderBy(desc(cases.updatedAt))
+        .limit(10);
+
+      return {
+        userId: row.userId,
+        name: row.name,
+        email: row.email,
+        joinedAt: row.createdAt,
+        // When the leftJoin matched a profile row, `status` is non-null
+        // (NOT NULL column with a default). TS infers `status: status |
+        // null` from the join, so we narrow on both fields together.
+        profile:
+          row.profileId && row.status
+            ? {
+                id: row.profileId,
+                status: row.status,
+                barNumber: row.barNumber,
+                barStates: row.barStates ?? [],
+                submittedAt: row.submittedAt,
+                agreementSignedAt: row.agreementSignedAt,
+              }
+            : null,
+        recentCases,
+      };
+    }),
+
+  /**
+   * Per-attorney revenue breakdown — top 10 attorneys by docket-share
+   * cents in the period. Complements `getRevenueMetrics` (which gives
+   * totals + per-visa). Pages joining the two queries get both
+   * breakdowns without a payload-bloating mega-query.
+   */
+  getRevenueByAttorney: adminProcedure
+    .input(z.object({ period: z.enum(PERIODS).default("MTD") }))
+    .query(async ({ ctx, input }) => {
+      const { db } = ctx;
+      const interval = PERIOD_INTERVAL[input.period];
+
+      const filters = [isNull(cases.deletedAt), isNotNull(cases.filedAt)];
+      if (interval) {
+        filters.push(
+          sql`${cases.filedAt} >= now() - interval '${sql.raw(interval)}'`,
+        );
+      }
+
+      const rows = await db
+        .select({
+          userId: users.id,
+          email: users.email,
+          name: users.name,
+          docketCents: sql<bigint>`coalesce(sum(${cases.docketShareCents}), 0)::bigint`,
+          attorneyCents: sql<bigint>`coalesce(sum(${cases.attorneyShareCents}), 0)::bigint`,
+          filings: sql<number>`count(*)::int`,
+        })
+        .from(cases)
+        .innerJoin(
+          caseParticipants,
+          and(
+            eq(caseParticipants.caseId, cases.id),
+            eq(caseParticipants.isPrimary, true),
+            isNull(caseParticipants.removedAt),
+          ),
+        )
+        .innerJoin(users, eq(users.id, caseParticipants.userId))
+        .where(and(...filters))
+        .groupBy(users.id, users.email, users.name)
+        .orderBy(desc(sql`coalesce(sum(${cases.docketShareCents}), 0)`))
+        .limit(10);
+
+      return {
+        period: input.period,
+        items: rows.map((r) => ({
+          userId: r.userId,
+          email: r.email,
+          name: r.name,
+          docketCents: bn(r.docketCents),
+          attorneyCents: bn(r.attorneyCents),
+          filings: r.filings,
+        })),
+      };
+    }),
+
+  /**
+   * Top-N case spend + per-attorney aggregate from the compute ledger.
+   * Drives `/admin/compute`'s "where the money goes" tables. Period
+   * applies to ledger entry timestamps (when the spend happened), not
+   * case creation.
+   */
+  getComputeBreakdown: adminProcedure
+    .input(z.object({ period: z.enum(PERIODS).default("MTD") }))
+    .query(async ({ ctx, input }) => {
+      const { db } = ctx;
+      const interval = PERIOD_INTERVAL[input.period];
+
+      const ledgerFilters = [];
+      if (interval) {
+        ledgerFilters.push(
+          sql`${caseComputeLedger.occurredAt} >= now() - interval '${sql.raw(interval)}'`,
+        );
+      }
+
+      const [topCases, byAttorney] = await Promise.all([
+        // Top 10 cases by spend in window.
+        db
+          .select({
+            caseId: cases.id,
+            visaType: cases.visaType,
+            spentCents: sql<bigint>`coalesce(sum(${caseComputeLedger.amountCents}), 0)::bigint`,
+            entries: sql<number>`count(*)::int`,
+          })
+          .from(caseComputeLedger)
+          .innerJoin(cases, eq(cases.id, caseComputeLedger.caseId))
+          .where(
+            ledgerFilters.length > 0
+              ? and(...ledgerFilters, isNull(cases.deletedAt))
+              : isNull(cases.deletedAt),
+          )
+          .groupBy(cases.id, cases.visaType)
+          .orderBy(
+            desc(sql`coalesce(sum(${caseComputeLedger.amountCents}), 0)`),
+          )
+          .limit(10),
+
+        // Per-attorney rollup (joined via the case's primary participant).
+        db
+          .select({
+            userId: users.id,
+            email: users.email,
+            name: users.name,
+            spentCents: sql<bigint>`coalesce(sum(${caseComputeLedger.amountCents}), 0)::bigint`,
+            cases: sql<number>`count(distinct ${cases.id})::int`,
+          })
+          .from(caseComputeLedger)
+          .innerJoin(cases, eq(cases.id, caseComputeLedger.caseId))
+          .innerJoin(
+            caseParticipants,
+            and(
+              eq(caseParticipants.caseId, cases.id),
+              eq(caseParticipants.isPrimary, true),
+              isNull(caseParticipants.removedAt),
+            ),
+          )
+          .innerJoin(users, eq(users.id, caseParticipants.userId))
+          .where(
+            ledgerFilters.length > 0
+              ? and(...ledgerFilters, isNull(cases.deletedAt))
+              : isNull(cases.deletedAt),
+          )
+          .groupBy(users.id, users.email, users.name)
+          .orderBy(
+            desc(sql`coalesce(sum(${caseComputeLedger.amountCents}), 0)`),
+          )
+          .limit(10),
+      ]);
+
+      return {
+        period: input.period,
+        topCases: topCases.map((r) => ({
+          caseId: r.caseId,
+          visaType: r.visaType,
+          spentCents: bn(r.spentCents),
+          entries: r.entries,
+        })),
+        byAttorney: byAttorney.map((r) => ({
+          userId: r.userId,
+          email: r.email,
+          name: r.name,
+          spentCents: bn(r.spentCents),
+          cases: r.cases,
+        })),
+      };
+    }),
+
+  /**
+   * Computer-health snapshot. Reads the single `computer:health:status`
+   * key the Stage 07 cron writes (every 5 min). Phase 1 ships a
+   * snapshot, not a multi-point timeline — Stage 11 polish would
+   * persist a small `computer_health_events` table for the sparkline.
+   *
+   * Returns:
+   *   - `status`: "up" | "down" | "unknown" (Redis missing or empty).
+   *   - `checkedAt`: ISO timestamp of the cron's last write.
+   *   - `lastError`: optional error string when the cron last saw down.
+   *
+   * Defense in depth: rejects when Redis isn't configured (no false
+   * "up" / "down" answer). The `/admin/compute` page renders the
+   * "unknown" branch as a placeholder.
+   */
+  getComputerHealthSnapshot: adminProcedure.query(async () => {
+    const redis = getRedis();
+    if (!redis) {
+      return {
+        status: "unknown" as const,
+        checkedAt: null as string | null,
+        lastError: null as string | null,
+      };
+    }
+    const cached = await redis.get<{
+      status: "up" | "down";
+      checkedAt: string;
+      lastError?: string;
+    }>("computer:health:status");
+    if (!cached) {
+      return {
+        status: "unknown" as const,
+        checkedAt: null as string | null,
+        lastError: null as string | null,
+      };
+    }
+    return {
+      status: cached.status,
+      checkedAt: cached.checkedAt,
+      lastError: cached.lastError ?? null,
+    };
+  }),
+
+  /**
+   * Admin reads a case detail. Pure read but writes an
+   * `admin_viewed_case` audit row so attorneys can see when an admin
+   * has accessed their case data (spec §15.4 + edge case in 09 spec).
+   * Returns the same shape as `case.get` minus the events tail (admin
+   * gets a focused detail; events come from `listAuditEvents`).
+   */
+  viewCase: adminProcedure
+    .input(z.object({ caseId: z.uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { db, userId: adminId } = ctx;
+
+      const [row] = await db
+        .select({
+          id: cases.id,
+          organizationId: cases.organizationId,
+          visaType: cases.visaType,
+          status: cases.status,
+          beneficiaryData: cases.beneficiaryData,
+          caseFeeCents: cases.caseFeeCents,
+          docketShareCents: cases.docketShareCents,
+          revenueStatus: cases.revenueStatus,
+          createdAt: cases.createdAt,
+          updatedAt: cases.updatedAt,
+        })
+        .from(cases)
+        .where(and(eq(cases.id, input.caseId), isNull(cases.deletedAt)))
+        .limit(1);
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Case not found",
+        });
+      }
+
+      // Audit even in the read path — attorney can see when an admin
+      // accessed their case data. Wrapped via withAudit so a phantom
+      // log row never lands if the row above 404'd.
+      await withAudit(
+        {
+          db,
+          adminId,
+          action: "admin.viewed_case",
+          targetType: "case",
+          targetId: row.id,
+        },
+        async () => row,
+      );
+
+      return row;
     }),
 });

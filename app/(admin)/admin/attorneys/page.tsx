@@ -13,7 +13,9 @@ import {
   parsePaginationParams,
 } from "@/lib/keyset-pagination";
 import { parseEnum } from "@/lib/url-params";
+import Link from "next/link";
 import { ActivateButton } from "./ActivateButton";
+import { SuspendButton } from "./SuspendButton";
 
 // Auth + admin-role gating happens in `app/(admin)/layout.tsx` (sole
 // owner of `await auth()` and the `admin.ping` probe). Pages assume an
@@ -125,12 +127,15 @@ export default async function AdminAttorneysPage(props: {
           switch (col.key) {
             case "name":
               return (
-                <div>
+                <Link
+                  href={`${APP_ROUTES.adminAttorneys}/${row.userId}`}
+                  className="block hover:underline"
+                >
                   <div className="font-medium">{row.name ?? "—"}</div>
                   <div className="mono text-xs text-[var(--ink-muted)]">
                     {row.email}
                   </div>
-                </div>
+                </Link>
               );
             case "bar":
               return (
@@ -154,9 +159,13 @@ export default async function AdminAttorneysPage(props: {
                 </span>
               );
             case "actions":
-              return row.status === "pending" && row.submittedAt ? (
-                <ActivateButton userId={row.userId} />
-              ) : null;
+              if (row.status === "pending" && row.submittedAt) {
+                return <ActivateButton userId={row.userId} />;
+              }
+              if (row.status === "active") {
+                return <SuspendButton userId={row.userId} />;
+              }
+              return null;
             default:
               return null;
           }
