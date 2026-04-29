@@ -66,6 +66,42 @@ Surfaced: 2026-04-30 (Stage 03 review)
 
 ---
 
+### #20 — Multi-recommender letter `is_current` semantics
+
+Status: Documented; deferred to Stage 08.
+Surfaced: 2026-04-29 (Stage 07 Phase 9 — sub-function build)
+
+`saveOutputVersion` (Stage 07 Phase 7) flips every prior `is_current=true`
+row in `(case_id, output_type)` to `false` before inserting the new row.
+This is correct for single-output types (`evidence_plan`,
+`personal_statement`, `petition_letter`, `exhibit_index`,
+`criteria_analysis`) but wrong for `recommendation_letter_template`,
+which fans out one row per recommender — so only the LAST letter saved
+ends up `is_current`, and earlier recommenders' letters disappear from
+the current set.
+
+Phase 9 ships the lossy behavior intentionally: the version history
+still retains every letter, and the parent's per-case concurrency=1
+serialization makes the order deterministic. Stage 08 (output review)
+needs to pick one of:
+
+   a. **Per-recommender stable id on `case_outputs`.** Add a column
+      (e.g. `subgroup_key text`) and scope the partial unique index +
+      the is_current flip to `(case_id, output_type, subgroup_key)`.
+      Cleanest semantics; small migration.
+   b. **Bundle into one output.** Parent waits for every recommender
+      letter, then writes a single `recommendation_letter_template` row
+      whose content is a concatenation. Lose per-letter regenerate
+      granularity but keep the schema unchanged.
+   c. **Relax `is_current` for this type only.** Service-layer rule:
+      "skip flip when outputType=recommendation_letter_template." Cheap
+      but creates an asymmetric invariant that's easy to forget.
+
+Recommendation: (a). Aligns with how Stage 08's review UI will need to
+identify each letter individually anyway.
+
+---
+
 ### #19 — Stage 07 cleanup-pass deferrals
 
 Status: Documented; surfaced during Phase 7.5 cleanup before Phase 8.
