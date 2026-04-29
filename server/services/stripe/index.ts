@@ -74,9 +74,17 @@ export function __resetStripeForTest(): void {
 
 /**
  * Read the attorney's saved Stripe Customer id. Creates one in Stripe
- * (and persists the id) if absent. Idempotent: a concurrent call with
- * the same userId returns the same customer id (the second call sees
- * the row already populated).
+ * (and persists the id) if absent. Idempotent under concurrency: the
+ * read holds a row-level lock on attorney_profiles for the duration
+ * of the customer-create + UPDATE, so two simultaneous first-time
+ * generates serialize — the second call sees the freshly-written
+ * customer id and skips Stripe entirely. Without the lock both calls
+ * would create distinct Stripe customers and the losing UPDATE would
+ * orphan one.
+ *
+ * Must run inside a transaction (the caller's `db` should be a `tx`
+ * handle when concurrency-sensitive). When no `db` is supplied, opens
+ * its own transaction off the owner pool.
  *
  * Surfaces `AppError("NOT_FOUND")` when the user has no attorney
  * profile, and `AppError("BAD_REQUEST")` when the user has no email
@@ -88,49 +96,59 @@ export async function getOrCreateCustomer(args: {
   db?: Db;
 }): Promise<{ customerId: string; created: boolean }> {
   const conn = args.db ?? db;
-  const [row] = await conn
-    .select({
-      profileId: attorneyProfiles.id,
-      stripeCustomerId: attorneyProfiles.stripeCustomerId,
-      email: users.email,
-      name: users.name,
-    })
-    .from(attorneyProfiles)
-    .innerJoin(users, eq(users.id, attorneyProfiles.userId))
-    .where(
-      and(
-        eq(attorneyProfiles.userId, args.attorneyUserId),
-        isNull(attorneyProfiles.deletedAt),
-      ),
-    )
-    .limit(1);
-  if (!row) {
-    throw new AppError(
-      "NOT_FOUND",
-      `No attorney profile for user ${args.attorneyUserId}`,
-    );
-  }
-  if (row.stripeCustomerId) {
-    return { customerId: row.stripeCustomerId, created: false };
-  }
-  if (!row.email) {
-    throw new AppError(
-      "BAD_REQUEST",
-      "Attorney has no email — Stripe Customer requires an email for invoice delivery.",
-    );
-  }
-  const customer = await getStripe().customers.create({
-    email: row.email,
-    ...(row.name ? { name: row.name } : {}),
-    metadata: {
-      docketUserId: args.attorneyUserId,
-    },
+  return await conn.transaction(async (tx) => {
+    const [profileRow] = await tx
+      .select({
+        profileId: attorneyProfiles.id,
+        stripeCustomerId: attorneyProfiles.stripeCustomerId,
+      })
+      .from(attorneyProfiles)
+      .where(
+        and(
+          eq(attorneyProfiles.userId, args.attorneyUserId),
+          isNull(attorneyProfiles.deletedAt),
+        ),
+      )
+      .limit(1)
+      .for("update");
+    if (!profileRow) {
+      throw new AppError(
+        "NOT_FOUND",
+        `No attorney profile for user ${args.attorneyUserId}`,
+      );
+    }
+    if (profileRow.stripeCustomerId) {
+      return { customerId: profileRow.stripeCustomerId, created: false };
+    }
+
+    // Email/name lookup is unlocked — users.email never mutates after
+    // sign-up via SSO. Pulled here (after the lock) so we don't hold
+    // the join's read while waiting for the lock.
+    const [userRow] = await tx
+      .select({ email: users.email, name: users.name })
+      .from(users)
+      .where(eq(users.id, args.attorneyUserId))
+      .limit(1);
+    if (!userRow?.email) {
+      throw new AppError(
+        "BAD_REQUEST",
+        "Attorney has no email — Stripe Customer requires an email for invoice delivery.",
+      );
+    }
+
+    const customer = await getStripe().customers.create({
+      email: userRow.email,
+      ...(userRow.name ? { name: userRow.name } : {}),
+      metadata: {
+        docketUserId: args.attorneyUserId,
+      },
+    });
+    await tx
+      .update(attorneyProfiles)
+      .set({ stripeCustomerId: customer.id })
+      .where(eq(attorneyProfiles.id, profileRow.profileId));
+    return { customerId: customer.id, created: true };
   });
-  await conn
-    .update(attorneyProfiles)
-    .set({ stripeCustomerId: customer.id })
-    .where(eq(attorneyProfiles.id, row.profileId));
-  return { customerId: customer.id, created: true };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -269,81 +287,165 @@ export type CreateMonthlyInvoiceResult = {
  *      total, and Stripe's status.
  *   6. Update each case's `revenue_status = invoiced` and `invoice_id`.
  *
- * Idempotency: the unique index makes step 3 atomic; a concurrent
- * call returns CONFLICT. If a Stripe call later fails, the catch block
- * deletes the placeholder DB row AND deletes the draft Stripe invoice
- * (which removes any attached items along with it) so the admin can
- * retry without orphans on either side. Cases stay in their previous
- * state (no `revenue_status` flip happens until step 6).
+ * Concurrency model. Two simultaneous writers we have to defend against:
+ *   (a) two `adminGenerateInvoice` clicks for the same (attorney, year,
+ *       month) — the partial unique index on `(attorney_id, year, month)
+ *       WHERE deleted_at IS NULL` makes the second insert raise 23505,
+ *       which we translate to CONFLICT.
+ *   (b) `logCaseFee` updating a case's fee while we're mid-flight —
+ *       resolved by SELECT FOR UPDATE on the eligible cases inside the
+ *       reservation transaction below, AND by flipping the cases to
+ *       `revenue_status = 'invoiced'` BEFORE releasing the lock. After
+ *       commit, a concurrent `logCaseFee` sees `invoiced` and returns
+ *       CONFLICT — its read happens through a separate transaction and
+ *       blocks on the lock until ours commits.
  *
- * Stripe item ownership: items are created with `invoice: invoice.id`
- * (attached, not floating on the customer). This means a partial
- * failure mid-loop can be cleaned up by deleting the invoice — Stripe
- * cascades the delete to attached items. Without this, items live on
- * the customer and pollute the next retry's invoice.
+ * Stripe failure rollback. If Stripe rejects (network, validation, etc.)
+ * after we've already flipped cases to `invoiced`, the catch path
+ * restores each case to its pre-snapshot status (`pending` or `failed`)
+ * and clears the `invoice_id`, then deletes the placeholder DB row so
+ * the period-unique index frees up. Stripe-side: if the invoice was
+ * still draft, `invoices.del` cascades through attached items; if we
+ * had progressed to finalize, `del` fails and we fall back to
+ * `voidInvoice` (the only legal teardown post-finalize).
  */
 export async function createMonthlyInvoice(
   args: CreateMonthlyInvoiceArgs,
 ): Promise<CreateMonthlyInvoiceResult> {
   validatePeriod(args.periodYear, args.periodMonth);
 
-  // 1. Customer
+  // 1. Customer (own internal lock — concurrent first-time generates
+  // serialize and resolve to a single Stripe customer).
   const { customerId } = await getOrCreateCustomer({
     attorneyUserId: args.attorneyUserId,
     db: args.db,
   });
 
-  // 2. Eligible cases
-  const eligible = await listEligibleCasesForPeriod({
-    db: args.db,
-    attorneyUserId: args.attorneyUserId,
-    periodYear: args.periodYear,
-    periodMonth: args.periodMonth,
-  });
-  if (eligible.length === 0) {
-    throw new AppError(
-      "BAD_REQUEST",
-      `No eligible cases for ${args.attorneyUserId} in ${args.periodYear}-${String(args.periodMonth).padStart(2, "0")}.`,
-    );
-  }
-
-  const totalCents = eligible.reduce(
-    (sum, c) => sum + Number(c.docketShareCents),
-    0,
-  );
-
-  // 3. Reserve the period (INSERT first; unique index catches races).
-  // We use a temporary placeholder for `stripe_invoice_id` so the row
-  // satisfies the NOT NULL on insert; updated in step 5 with the real
-  // Stripe id. The placeholder includes the period so two concurrent
-  // attempts on different periods can't collide on the unique
-  // `stripe_invoice_id` index either.
+  // 2+3. Reserve the period AND lock the eligible cases in one tx.
+  // Holding the lock through the case-status flip means a concurrent
+  // `logCaseFee` blocks on its row read; once we commit, it sees
+  // `revenue_status = 'invoiced'` and returns CONFLICT. The Stripe
+  // calls in step 4 happen AFTER the tx commits — locks released —
+  // so a slow Stripe response can't block other writers.
   const placeholderStripeId = `pending_${args.attorneyUserId}_${args.periodYear}_${args.periodMonth}`;
   let createdInvoice: { id: string };
+  let snapshot: ReadonlyArray<{
+    id: string;
+    visaType: string;
+    beneficiaryFullName: string | null;
+    docketShareCents: bigint;
+    previousStatus: "pending" | "failed";
+  }>;
+  let totalCents: number;
   try {
-    const [inserted] = await args.db
-      .insert(invoices)
-      .values({
-        attorneyId: args.attorneyUserId,
-        stripeInvoiceId: placeholderStripeId,
-        periodYear: args.periodYear,
-        periodMonth: args.periodMonth,
-        totalCents,
-        status: "draft",
-      })
-      .returning({ id: invoices.id });
-    if (!inserted) {
-      throw new AppError("INTERNAL", "invoices insert returned no row");
-    }
-    createdInvoice = inserted;
-  } catch (err) {
-    if (isUniqueViolation(err)) {
-      throw new AppError(
-        "CONFLICT",
-        `An invoice already exists for ${args.attorneyUserId} ${args.periodYear}-${String(args.periodMonth).padStart(2, "0")}.`,
+    const tx0 = await args.db.transaction(async (tx) => {
+      const start = new Date(Date.UTC(args.periodYear, args.periodMonth - 1, 1));
+      const end = new Date(Date.UTC(args.periodYear, args.periodMonth, 1));
+      const lockedRows = await tx
+        .select({
+          id: cases.id,
+          visaType: cases.visaType,
+          beneficiaryData: cases.beneficiaryData,
+          docketShareCents: cases.docketShareCents,
+          revenueStatus: cases.revenueStatus,
+        })
+        .from(cases)
+        .innerJoin(
+          sql`${sql.raw('"case_participants"')}`,
+          sql`${cases.id} = "case_participants"."case_id"
+            AND "case_participants"."user_id" = ${args.attorneyUserId}
+            AND "case_participants"."is_primary" = true
+            AND "case_participants"."removed_at" IS NULL`,
+        )
+        .where(
+          and(
+            isNull(cases.deletedAt),
+            inArray(cases.revenueStatus, ["pending", "failed"]),
+            sql`${cases.caseFeeCents} > 0`,
+            gte(cases.filedAt, start),
+            lt(cases.filedAt, end),
+          ),
+        )
+        .orderBy(cases.id)
+        .for("update");
+
+      if (lockedRows.length === 0) {
+        throw new AppError(
+          "BAD_REQUEST",
+          `No eligible cases for ${args.attorneyUserId} in ${args.periodYear}-${String(args.periodMonth).padStart(2, "0")}.`,
+        );
+      }
+
+      const snap = lockedRows.map((r) => ({
+        id: r.id,
+        visaType: r.visaType,
+        beneficiaryFullName: extractFullName(r.beneficiaryData),
+        docketShareCents: r.docketShareCents ?? 0n,
+        // Narrowed by the inArray filter above. The cast localizes
+        // the runtime invariant to one place.
+        previousStatus: r.revenueStatus as "pending" | "failed",
+      }));
+      const total = snap.reduce(
+        (sum, c) => sum + Number(c.docketShareCents),
+        0,
       );
-    }
-    throw err;
+
+      let inserted: { id: string } | undefined;
+      try {
+        [inserted] = await tx
+          .insert(invoices)
+          .values({
+            attorneyId: args.attorneyUserId,
+            stripeInvoiceId: placeholderStripeId,
+            periodYear: args.periodYear,
+            periodMonth: args.periodMonth,
+            totalCents: total,
+            status: "draft",
+          })
+          .returning({ id: invoices.id });
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          throw new AppError(
+            "CONFLICT",
+            `An invoice already exists for ${args.attorneyUserId} ${args.periodYear}-${String(args.periodMonth).padStart(2, "0")}.`,
+          );
+        }
+        throw err;
+      }
+      if (!inserted) {
+        throw new AppError("INTERNAL", "invoices insert returned no row");
+      }
+
+      // Flip the locked cases to `invoiced` + attach the invoice id
+      // BEFORE releasing the lock. Concurrent `logCaseFee` reads will
+      // see `invoiced` after commit and CONFLICT.
+      await tx
+        .update(cases)
+        .set({
+          revenueStatus: "invoiced",
+          invoiceId: inserted.id,
+        })
+        .where(
+          inArray(
+            cases.id,
+            snap.map((c) => c.id),
+          ),
+        );
+
+      return { invoiceId: inserted.id, snap, totalCents: total };
+    });
+    createdInvoice = { id: tx0.invoiceId };
+    snapshot = tx0.snap;
+    totalCents = tx0.totalCents;
+  } catch (err) {
+    // Reservation failed before any Stripe contact. Errors here are
+    // already AppError-shaped (BAD_REQUEST / CONFLICT / INTERNAL).
+    if (err instanceof AppError) throw err;
+    throw new AppError(
+      "INTERNAL",
+      `Invoice reservation failed: ${err instanceof Error ? err.message : String(err)}`,
+      err,
+    );
   }
 
   // 4. Stripe — Invoice (empty draft) → attached InvoiceItems → finalize → send.
@@ -353,6 +455,7 @@ export async function createMonthlyInvoice(
   // customer would survive cleanup and pollute the next retry.
   const stripe = getStripe();
   let stripeInvoiceIdToCleanup: string | null = null;
+  let stripeInvoiceFinalized = false;
   try {
     const invoice = await stripe.invoices.create({
       customer: customerId,
@@ -373,7 +476,7 @@ export async function createMonthlyInvoice(
     }
     stripeInvoiceIdToCleanup = invoice.id;
 
-    for (const c of eligible) {
+    for (const c of snapshot) {
       await stripe.invoiceItems.create({
         customer: customerId,
         invoice: invoice.id,
@@ -388,57 +491,55 @@ export async function createMonthlyInvoice(
     }
 
     const finalized = await stripe.invoices.finalizeInvoice(invoice.id);
+    stripeInvoiceFinalized = true;
     await stripe.invoices.sendInvoice(invoice.id);
 
-    // 5+6. Persist the real Stripe id + link cases atomically. Two
-    // separate UPDATEs in a single transaction: a row-level failure
-    // here would otherwise leave the invoice row populated but cases
-    // unlinked (webhook arriving for invoice.paid would no-op on cases).
-    const caseIds = eligible.map((c) => c.id);
-    await args.db.transaction(async (tx) => {
-      await tx
-        .update(invoices)
-        .set({
-          stripeInvoiceId: finalized.id ?? invoice.id,
-          hostedInvoiceUrl: finalized.hosted_invoice_url ?? null,
-          status: stripeStatusToColumn(finalized.status),
-          updatedAt: sql`now()`,
-        })
-        .where(eq(invoices.id, createdInvoice.id));
-      if (caseIds.length > 0) {
-        await tx
-          .update(cases)
-          .set({
-            revenueStatus: "invoiced",
-            invoiceId: createdInvoice.id,
-          })
-          .where(inArray(cases.id, [...caseIds]));
-      }
-    });
+    // 5. Persist the real Stripe id + status. Cases were already
+    // flipped to `invoiced` in step 2+3, so this is a single UPDATE
+    // on the `invoices` row (no longer needs a multi-statement tx).
+    await args.db
+      .update(invoices)
+      .set({
+        stripeInvoiceId: finalized.id ?? invoice.id,
+        hostedInvoiceUrl: finalized.hosted_invoice_url ?? null,
+        status: stripeStatusToColumn(finalized.status),
+        updatedAt: sql`now()`,
+      })
+      .where(eq(invoices.id, createdInvoice.id));
 
     return {
       invoiceId: createdInvoice.id,
       stripeInvoiceId: finalized.id ?? invoice.id,
       hostedInvoiceUrl: finalized.hosted_invoice_url ?? null,
       totalCents,
-      caseIds,
+      caseIds: snapshot.map((c) => c.id),
     };
   } catch (err) {
-    // Stripe failed mid-flight. Best-effort cleanup on BOTH sides:
-    //   - delete the Stripe invoice (cascades to attached items),
-    //   - delete the placeholder DB row (so the unique-period index
-    //     doesn't block a retry).
-    // Each cleanup tolerates its own failure; the original error is
-    // what the caller cares about.
-    if (stripeInvoiceIdToCleanup) {
-      await stripe.invoices
-        .del(stripeInvoiceIdToCleanup)
-        .catch(() => undefined);
-    }
+    // Stripe failed mid-flight. Cleanup must:
+    //   1. Restore each case to its pre-snapshot status + clear invoiceId.
+    //   2. Delete the placeholder DB row (frees the unique-period index).
+    //   3. Tear down whatever we created on Stripe's side. `del` works on
+    //      drafts; finalized invoices require `voidInvoice` instead.
+    // Each step is best-effort and tolerates its own failure; the
+    // original error is what we ultimately surface to the caller.
+    await rollbackCaseStatuses(args.db, createdInvoice.id, snapshot).catch(
+      () => undefined,
+    );
     await args.db
       .delete(invoices)
       .where(eq(invoices.id, createdInvoice.id))
       .catch(() => undefined);
+    if (stripeInvoiceIdToCleanup) {
+      if (stripeInvoiceFinalized) {
+        await stripe.invoices
+          .voidInvoice(stripeInvoiceIdToCleanup)
+          .catch(() => undefined);
+      } else {
+        await stripe.invoices
+          .del(stripeInvoiceIdToCleanup)
+          .catch(() => undefined);
+      }
+    }
     if (err instanceof AppError) throw err;
     throw new AppError(
       "INTERNAL",
@@ -446,6 +547,46 @@ export async function createMonthlyInvoice(
       err,
     );
   }
+}
+
+/** Restore each case to its pre-reservation status + drop the invoice
+ *  link. Used by `createMonthlyInvoice`'s catch path. Two passes (one
+ *  per source status) keep this expressible without raw SQL CASE. */
+async function rollbackCaseStatuses(
+  conn: Db,
+  invoiceId: string,
+  snapshot: ReadonlyArray<{ id: string; previousStatus: "pending" | "failed" }>,
+): Promise<void> {
+  const pendingIds = snapshot
+    .filter((c) => c.previousStatus === "pending")
+    .map((c) => c.id);
+  const failedIds = snapshot
+    .filter((c) => c.previousStatus === "failed")
+    .map((c) => c.id);
+  await conn.transaction(async (tx) => {
+    if (pendingIds.length > 0) {
+      await tx
+        .update(cases)
+        .set({ revenueStatus: "pending", invoiceId: null })
+        .where(
+          and(
+            inArray(cases.id, pendingIds),
+            eq(cases.invoiceId, invoiceId),
+          ),
+        );
+    }
+    if (failedIds.length > 0) {
+      await tx
+        .update(cases)
+        .set({ revenueStatus: "failed", invoiceId: null })
+        .where(
+          and(
+            inArray(cases.id, failedIds),
+            eq(cases.invoiceId, invoiceId),
+          ),
+        );
+    }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────

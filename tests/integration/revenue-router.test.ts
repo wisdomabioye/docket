@@ -11,6 +11,7 @@ import {
 import { eq } from "drizzle-orm";
 import {
   attorneyProfiles,
+  auditLog,
   caseEvents,
   caseParticipants,
   cases,
@@ -238,6 +239,49 @@ describe("revenue.adjustCaseFee", () => {
         reason: "x",
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("audit log distinguishes previously-waived (0n) from never-set (null)", async (ctx) => {
+    const d = gate(ctx);
+    // Two adjusts: one on a previously-waived case (caseFeeCents = 0n),
+    // one on a freshly-created case where caseFeeCents was never set
+    // (still null in the column). The audit details must record `"0"`
+    // and `null` respectively — not both as `null`. Regression guard
+    // for the truthy-vs-nullish bug at revenue.ts:237.
+    const waivedCase = await seedAliceCase(d, {
+      revenueStatus: "waived",
+      caseFeeCents: 0n,
+      docketShareCents: 0n,
+      attorneyShareCents: 0n,
+    });
+    const freshCase = await seedAliceCase(d, { revenueStatus: "pending" });
+    await callAs(ADMIN).revenue.adjustCaseFee({
+      caseId: waivedCase,
+      feeCents: 100_000,
+      reason: "client agreed to bill",
+    });
+    await callAs(ADMIN).revenue.adjustCaseFee({
+      caseId: freshCase,
+      feeCents: 100_000,
+      reason: "first fee",
+    });
+    const rows = await d
+      .select({
+        targetId: auditLog.targetId,
+        details: auditLog.details,
+      })
+      .from(auditLog)
+      .where(eq(auditLog.action, "revenue.admin_adjust"));
+    const waivedRow = rows.find((r) => r.targetId === waivedCase);
+    const freshRow = rows.find((r) => r.targetId === freshCase);
+    expect(
+      (waivedRow?.details as { previousFeeCents: string | null } | null)
+        ?.previousFeeCents,
+    ).toBe("0");
+    expect(
+      (freshRow?.details as { previousFeeCents: string | null } | null)
+        ?.previousFeeCents,
+    ).toBeNull();
   });
 
   it("requires reason (Zod min(1))", async (ctx) => {

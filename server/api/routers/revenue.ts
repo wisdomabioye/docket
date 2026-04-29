@@ -234,9 +234,14 @@ export const revenueRouter = router({
               targetId: input.caseId,
               detailsFrom: () => ({
                 reason: input.reason,
-                previousFeeCents: existing.previousFeeCents
-                  ? existing.previousFeeCents.toString()
-                  : null,
+                // Nullish — not truthy — check: a previously-waived case
+                // has feeCents = 0n, which is falsy. Logging null there
+                // would conflate "never had a fee" with "fee was zero
+                // (pro-bono)" in the audit history.
+                previousFeeCents:
+                  existing.previousFeeCents != null
+                    ? existing.previousFeeCents.toString()
+                    : null,
                 previousStatus: existing.previousStatus,
                 feeCents: split.feeCents,
                 docketShareCents: split.docketShareCents,
