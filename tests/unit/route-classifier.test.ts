@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isPublicRoute } from "@/server/auth/route-classifier";
 import { APP_ROUTES } from "@/config";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 /**
  * URL classifier used by `proxy.ts` to decide which paths bypass auth.
@@ -45,5 +49,18 @@ describe("isPublicRoute", () => {
     // starting with that string. Acceptable risk — we don't have other
     // routes starting with /api/auth — but document.
     expect(isPublicRoute("/api/authentication-stuff")).toBe(true);
+  });
+
+  it("/dev/* is public when NODE_ENV is 'development' (and 'test')", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    expect(isPublicRoute("/dev/components")).toBe(true);
+    vi.stubEnv("NODE_ENV", "test");
+    expect(isPublicRoute("/dev/components")).toBe(true);
+  });
+
+  it("/dev/* is private in production (storybook also returns notFound there)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    expect(isPublicRoute("/dev/components")).toBe(false);
+    expect(isPublicRoute("/dev/anything-else")).toBe(false);
   });
 });

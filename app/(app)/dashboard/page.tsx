@@ -1,16 +1,22 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { auth, signOut } from "@/server/auth/config";
+import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { RevenueCard } from "@/components/revenue/RevenueCard";
+import { AppPageHeader, SignOutForm } from "@/components/layout";
+import { PendingApprovalCard } from "@/components/onboarding";
 
 export const metadata = { title: pageTitle("Dashboard") };
 
 /**
  * Attorney dashboard — case list + new-case CTA.
- * Suspended / inactive accounts go straight to the error page (not via
- * onboarding) to avoid a two-hop redirect.
+ *
+ * Status routing per Stage 03:
+ *   - no profile yet            → redirect to /onboarding
+ *   - status='pending'          → render PendingApprovalCard inline (NOT redirect)
+ *   - status∈{suspended,inactive} → redirect to /auth/error
+ *   - status='active'           → render the case list
  */
 export default async function DashboardPage() {
   const session = await auth();
@@ -22,6 +28,24 @@ export default async function DashboardPage() {
   const status = me.attorneyProfile?.status;
   if (status === "suspended" || status === "inactive") {
     redirect(APP_ROUTES.authError + `?error=${status}`);
+  }
+  if (!me.attorneyProfile) redirect(APP_ROUTES.onboarding);
+  if (status === "pending") {
+    return (
+      <main className="mx-auto max-w-4xl px-6 py-12 space-y-8">
+        <AppPageHeader
+          eyebrow="Dashboard"
+          title={me.user.name ?? me.user.email}
+        />
+        <PendingApprovalCard
+          email={me.user.email}
+          submittedAt={me.attorneyProfile.submittedAt}
+        />
+        <footer className="pt-6 border-t border-[var(--color-ink)]/10">
+          <SignOutForm />
+        </footer>
+      </main>
+    );
   }
   if (status !== "active") redirect(APP_ROUTES.onboarding);
 
@@ -35,25 +59,18 @@ export default async function DashboardPage() {
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-12 space-y-8">
-      <header className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-[var(--color-ink-muted)]">
-            Dashboard
-          </p>
-          <h1
-            className="mt-2 text-3xl tracking-tight"
-            style={{ fontFamily: "var(--font-serif)" }}
+      <AppPageHeader
+        eyebrow="Dashboard"
+        title={me.user.name ?? me.user.email}
+        actions={
+          <Link
+            href={APP_ROUTES.newCase}
+            className="rounded-md border border-[var(--color-ink)] bg-[var(--color-ink)] px-4 py-2 text-sm font-medium text-[var(--color-cream)]"
           >
-            {me.user.name ?? me.user.email}
-          </h1>
-        </div>
-        <Link
-          href={APP_ROUTES.newCase}
-          className="rounded-md border border-[var(--color-ink)] bg-[var(--color-ink)] px-4 py-2 text-sm font-medium text-[var(--color-cream)]"
-        >
-          + New case
-        </Link>
-      </header>
+            + New case
+          </Link>
+        }
+      />
 
       <RevenueCard />
 
@@ -138,19 +155,7 @@ export default async function DashboardPage() {
       </section>
 
       <footer className="pt-6 border-t border-[var(--color-ink)]/10">
-        <form
-          action={async () => {
-            "use server";
-            await signOut({ redirectTo: APP_ROUTES.home });
-          }}
-        >
-          <button
-            type="submit"
-            className="text-xs text-[var(--color-ink-muted)] underline"
-          >
-            Sign out
-          </button>
-        </form>
+        <SignOutForm />
       </footer>
     </main>
   );

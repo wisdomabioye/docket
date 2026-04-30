@@ -1,18 +1,20 @@
 import { redirect } from "next/navigation";
-import { auth, signIn } from "@/server/auth/config";
+import { auth } from "@/server/auth/config";
 import { safeCallbackUrl } from "@/server/auth/callback-url";
 import { APP_INFO, APP_ROUTES } from "@/config";
 import { env } from "@/config/env";
+import { AuthShell } from "@/components/layout";
+import { SsoButton } from "@/components/form";
 
 /**
- * SSO-only sign-in page. Provider buttons are server-rendered + use a
- * server-action signIn — no client JS required.
+ * SSO-only sign-in page. Composed from `AuthShell` (centered card
+ * skeleton) + `SsoButton` (server-action OAuth button). Both extracted
+ * in Stage 00c so other auth-area pages (`/auth/error`, future
+ * `/onboarding-pending`) share the same chrome.
  *
  * If the user is already signed in we bounce to /dashboard.
  *
- * Mockup: `Docket-Meridian-UI/hifi/login.html` — Stage 00b/c will replace
- * this with the polished primitive layout. Stage 02 ships the functional
- * minimum.
+ * Mockup: `Docket-Meridian-UI/hifi/login.html`.
  */
 
 type Props = {
@@ -25,55 +27,15 @@ export default async function LoginPage({ searchParams }: Props) {
 
   const params = await searchParams;
   const callbackUrl = safeCallbackUrl(params.callbackUrl);
+  const noProvidersConfigured = !env.AUTH_GOOGLE_ID && !env.AUTH_MICROSOFT_ID;
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-6">
-      <div className="w-full max-w-sm space-y-8 text-center">
-        <header>
-          <p className="text-xs uppercase tracking-[0.3em] text-[var(--color-ink-muted)]">
-            Sign in
-          </p>
-          <h1
-            className="mt-3 text-4xl tracking-tight"
-            style={{ fontFamily: "var(--font-serif)" }}
-          >
-            {APP_INFO.displayName}
-          </h1>
-          <p className="mt-3 text-sm text-[var(--color-ink-muted)]">
-            Continue with your work account.
-          </p>
-        </header>
-
-        {params.error && (
-          <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-            {humanizeError(params.error)}
-          </p>
-        )}
-
-        <div className="space-y-3">
-          {env.AUTH_GOOGLE_ID && (
-            <ProviderButton
-              provider="google"
-              label="Continue with Google"
-              callbackUrl={callbackUrl}
-            />
-          )}
-          {env.AUTH_MICROSOFT_ID && (
-            <ProviderButton
-              provider="microsoft-entra-id"
-              label="Continue with Microsoft"
-              callbackUrl={callbackUrl}
-            />
-          )}
-          {!env.AUTH_GOOGLE_ID && !env.AUTH_MICROSOFT_ID && (
-            <p className="text-sm text-[var(--color-ink-muted)]">
-              No SSO providers are configured. Set <code>AUTH_GOOGLE_ID</code>
-              or <code>AUTH_MICROSOFT_ID</code> in <code>.env.local</code>.
-            </p>
-          )}
-        </div>
-
-        <p className="text-xs text-[var(--color-ink-muted)]">
+    <AuthShell
+      eyebrow="Sign in"
+      title={APP_INFO.displayName}
+      subtitle="Continue with your work account."
+      footer={
+        <>
           By continuing you agree to our{" "}
           <a href={APP_ROUTES.terms} className="underline">
             terms
@@ -83,31 +45,41 @@ export default async function LoginPage({ searchParams }: Props) {
             privacy policy
           </a>
           .
-        </p>
-      </div>
-    </main>
-  );
-}
-
-function ProviderButton(props: {
-  provider: string;
-  label: string;
-  callbackUrl: string;
-}) {
-  return (
-    <form
-      action={async () => {
-        "use server";
-        await signIn(props.provider, { redirectTo: props.callbackUrl });
-      }}
+        </>
+      }
     >
-      <button
-        type="submit"
-        className="w-full rounded-md border border-[var(--color-ink)] bg-white px-4 py-3 text-sm font-medium text-[var(--color-ink)] transition hover:bg-[var(--color-ink)] hover:text-[var(--color-cream)]"
-      >
-        {props.label}
-      </button>
-    </form>
+      {params.error ? (
+        <p
+          role="alert"
+          className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+        >
+          {humanizeError(params.error)}
+        </p>
+      ) : null}
+
+      <div className="space-y-3">
+        {env.AUTH_GOOGLE_ID ? (
+          <SsoButton
+            provider="google"
+            label="Continue with Google"
+            callbackUrl={callbackUrl}
+          />
+        ) : null}
+        {env.AUTH_MICROSOFT_ID ? (
+          <SsoButton
+            provider="microsoft-entra-id"
+            label="Continue with Microsoft"
+            callbackUrl={callbackUrl}
+          />
+        ) : null}
+        {noProvidersConfigured ? (
+          <p className="text-sm text-[var(--color-ink-muted)]">
+            No SSO providers are configured. Set <code>AUTH_GOOGLE_ID</code>
+            {" "}or <code>AUTH_MICROSOFT_ID</code> in <code>.env.local</code>.
+          </p>
+        ) : null}
+      </div>
+    </AuthShell>
   );
 }
 
