@@ -51,6 +51,7 @@ export default async function CaseDetailPage({
         {...(meta ? { meta } : {})}
         status={data.status}
         current="overview"
+        actions={<CaseHeaderActions caseId={data.id} status={data.status} />}
       />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
@@ -119,6 +120,72 @@ export default async function CaseDetailPage({
       </div>
     </div>
   );
+}
+
+/**
+ * Stage 11 case-header actions row — `⇣ Package` (always available
+ * deep-link) + status-aware primary CTA. Mockup `case-overview.html`
+ * l. 110-114 renders both as static buttons; we make the primary
+ * stage-aware so the wording matches the case's lifecycle position.
+ *
+ *   pre-build (intake → ready_to_build / build_failed)  → "Build →"
+ *   post-build (building → approved)                    → "Review drafts →"
+ *   terminal (package_ready → archived)                 → no primary
+ */
+function CaseHeaderActions(props: {
+  caseId: string;
+  status: string;
+}): React.ReactElement {
+  const primary = primaryActionFor(props.status, props.caseId);
+  return (
+    <div className="flex items-center gap-2">
+      <Link
+        href={APP_ROUTES.casePackage(props.caseId)}
+        className="rounded-md border px-3 py-1.5 text-xs font-medium"
+        style={{
+          borderColor: "var(--border, rgba(0,0,0,0.15))",
+          color: "var(--ink)",
+          background: "var(--surface, white)",
+        }}
+      >
+        ⇣ Package
+      </Link>
+      {primary ? (
+        <Link
+          href={primary.href}
+          className="rounded-md border px-3 py-1.5 text-xs font-medium text-[var(--cream)]"
+          style={{
+            borderColor: "var(--ink)",
+            background: "var(--ink)",
+          }}
+        >
+          {primary.label}
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+function primaryActionFor(
+  status: string,
+  caseId: string,
+): { label: string; href: string } | null {
+  switch (status) {
+    case "intake":
+    case "documents_pending":
+    case "extracting":
+    case "ready_to_build":
+    case "build_failed":
+      return { label: "Build →", href: APP_ROUTES.caseBuild(caseId) };
+    case "building":
+    case "draft_ready":
+    case "in_review":
+    case "needs_revision":
+    case "approved":
+      return { label: "Review drafts →", href: APP_ROUTES.caseOutputs(caseId) };
+    default:
+      return null;
+  }
 }
 
 function FieldRow(props: {

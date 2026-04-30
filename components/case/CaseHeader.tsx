@@ -8,7 +8,11 @@ import { shortCaseId } from "@/lib/case-id";
  * eyebrow case-id + serif beneficiary name + meta sub-line + status
  * pill + tabs row.
  *
- * Tabs: Overview / Intake / Documents / Build / Outputs / Package.
+ * Tabs (5 — matches mockup): Overview / Intake / Documents / Outputs /
+ * Package. `Build` is intentionally NOT a top-level tab — the mockup
+ * surfaces the build page via the header's `Review drafts →` /
+ * `Build →` action button (passed in via `actions`), not the tab strip.
+ *
  * The active tab is matched by `current` prop (set by each child page).
  */
 
@@ -16,7 +20,6 @@ export type CaseTab =
   | "overview"
   | "intake"
   | "documents"
-  | "build"
   | "outputs"
   | "package";
 
@@ -84,7 +87,6 @@ function CaseTabs(props: {
       label: "Documents",
       href: APP_ROUTES.caseDocuments(props.caseId),
     },
-    { key: "build", label: "Build", href: APP_ROUTES.caseBuild(props.caseId) },
     {
       key: "outputs",
       label: "Outputs",
