@@ -18,6 +18,10 @@ import { trpc } from "@/lib/trpc/react";
 
 export function PackageDownloadButton(props: {
   caseId: string;
+  /** Server-driven gate from `case.preflight`. When true the button
+   *  renders disabled with a tooltip — the page header surfaces the
+   *  full reason; this prop just keeps the click suppressed. */
+  disabled?: boolean;
 }): ReactElement {
   const [error, setError] = useState<string | null>(null);
   const downloadMutation = trpc.output.downloadPackage.useMutation({
@@ -28,12 +32,15 @@ export function PackageDownloadButton(props: {
     onError: (err) => setError(err.message),
   });
 
+  const blocked = Boolean(props.disabled);
+
   return (
     <div className="flex flex-col items-end gap-2">
       <button
         type="button"
         onClick={() => downloadMutation.mutate({ caseId: props.caseId })}
-        disabled={downloadMutation.isPending}
+        disabled={blocked || downloadMutation.isPending}
+        title={blocked ? "Resolve pre-flight gates above before downloading." : undefined}
         className="rounded-sm border px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
         style={{
           borderColor: "var(--border-strong)",

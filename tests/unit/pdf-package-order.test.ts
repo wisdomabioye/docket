@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { packageOrderRank } from "@/server/services/pdf/package";
+import { packageKeyFor, packageOrderRank } from "@/server/services/pdf/package";
 
 /**
  * `packageOrderRank` defines the canonical filing order for the
@@ -45,5 +45,34 @@ describe("packageOrderRank", () => {
     expect(packageOrderRank("other")).toBe(sentinel);
     // Unlisted types sort AFTER every listed type.
     expect(sentinel).toBeGreaterThan(packageOrderRank("exhibit_index"));
+  });
+});
+
+/**
+ * `packageKeyFor` is the byte-for-byte contract between three call
+ * sites: `case.setPackageOrder` (persists keys), `PackageAssemblyCard`
+ * (DnD ids), and `compileFullPackagePdf` (sort lookup). A drift here
+ * silently breaks the persisted ordering.
+ */
+describe("packageKeyFor", () => {
+  it("formats unsubgrouped outputs as the bare outputType", () => {
+    expect(
+      packageKeyFor({ outputType: "petition_letter", subgroupKey: null }),
+    ).toBe("petition_letter");
+  });
+
+  it("joins outputType and subgroupKey with a single colon", () => {
+    expect(
+      packageKeyFor({
+        outputType: "recommendation_letter_template",
+        subgroupKey: "rec-a",
+      }),
+    ).toBe("recommendation_letter_template:rec-a");
+  });
+
+  it("treats empty-string subgroupKey as unsubgrouped (truthy check)", () => {
+    expect(
+      packageKeyFor({ outputType: "petition_letter", subgroupKey: "" }),
+    ).toBe("petition_letter");
   });
 });

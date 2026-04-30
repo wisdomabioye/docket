@@ -69,9 +69,9 @@ describe("CaseHeader — tabs", () => {
         status="ready_to_build"
         current="overview"
         actions={
-          <a href="/case/x/build" data-testid="build-cta">
+          <button type="button" data-testid="build-cta">
             Build →
-          </a>
+          </button>
         }
       />,
     );

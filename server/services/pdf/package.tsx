@@ -34,6 +34,22 @@ export function packageOrderRank(outputType: OutputType): number {
   return idx === -1 ? PACKAGE_ORDER.length : idx;
 }
 
+/**
+ * Stable identifier for a package row. Used as the persisted key in
+ * `cases.package_order`, the DnD id in `PackageAssemblyCard`, and the
+ * lookup key when the PDF service applies the saved order. Keep all
+ * three call sites importing THIS function — the formatting must stay
+ * byte-identical across them or the saved order silently misses rows.
+ */
+export function packageKeyFor(args: {
+  outputType: OutputType;
+  subgroupKey: string | null;
+}): string {
+  return args.subgroupKey
+    ? `${args.outputType}:${args.subgroupKey}`
+    : args.outputType;
+}
+
 /** Single output rendered as a standalone PDF document (cover +
  *  one body page). Used by `output.downloadPdf`. */
 export type PerOutputPdfProps = {

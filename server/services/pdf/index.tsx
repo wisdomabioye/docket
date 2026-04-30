@@ -9,6 +9,7 @@ import { getCurrentOutputs } from "@/server/services/output";
 import {
   PackagePdfDocument,
   PerOutputPdfDocument,
+  packageKeyFor,
   packageOrderRank,
   renderOutputBody,
   type OutputBodyDescriptor,
@@ -39,6 +40,10 @@ type CoverFields = {
   visaType: string;
   attorneyName: string;
   generatedDateLabel: string;
+  /** Attorney's persisted package order (`outputType:subgroupKey`
+   *  keys). Null when never set — the package compiler falls back to
+   *  the canonical `packageOrderRank` rank. */
+  packageOrder: ReadonlyArray<string> | null;
 };
 
 async function loadCoverFields(args: {
@@ -49,6 +54,7 @@ async function loadCoverFields(args: {
     .select({
       visaType: cases.visaType,
       beneficiaryData: cases.beneficiaryData,
+      packageOrder: cases.packageOrder,
     })
     .from(cases)
     .where(and(eq(cases.id, args.caseId), isNull(cases.deletedAt)))
@@ -77,6 +83,7 @@ async function loadCoverFields(args: {
     visaType: row.visaType,
     attorneyName: primary?.name ?? "Attorney",
     generatedDateLabel: new Date().toISOString().slice(0, 10),
+    packageOrder: row.packageOrder ?? null,
   };
 }
 
@@ -228,15 +235,41 @@ export async function compileFullPackagePdf(
     );
   }
 
-  // Stable canonical filing order. `output_type` rank first; secondary
-  // sort by subgroup (deterministic across re-renders so two
-  // consecutive package downloads contain letters in the same order).
+  // Order resolution:
+  //   1. If the attorney persisted a custom order (Stage 11 γ DnD),
+  //      sort by index in `cases.package_order`. Rows whose key is
+  //      missing from the saved array (e.g. a regenerate produced a
+  //      new subgroup after the order was saved) fall through to the
+  //      canonical rank — they won't silently disappear.
+  //   2. Otherwise use `packageOrderRank` + subgroup tiebreaker so
+  //      two consecutive package downloads stay deterministic.
+  const savedOrder = cover.packageOrder;
+  const savedIndex = (key: string): number => {
+    if (!savedOrder) return -1;
+    return savedOrder.indexOf(key);
+  };
   const sorted = [...approved].sort((a, b) => {
+    const aKey = packageKeyFor({
+      outputType: a.outputType,
+      subgroupKey: a.subgroupKey,
+    });
+    const bKey = packageKeyFor({
+      outputType: b.outputType,
+      subgroupKey: b.subgroupKey,
+    });
+    if (savedOrder) {
+      const ai = savedIndex(aKey);
+      const bi = savedIndex(bKey);
+      // Both present → saved order wins.
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      // One present, one new → present row sorts first.
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
+      // Fallthrough: neither in saved order — use canonical rank.
+    }
     const r = packageOrderRank(a.outputType) - packageOrderRank(b.outputType);
     if (r !== 0) return r;
-    const aSub = a.subgroupKey ?? "";
-    const bSub = b.subgroupKey ?? "";
-    return aSub.localeCompare(bSub);
+    return (a.subgroupKey ?? "").localeCompare(b.subgroupKey ?? "");
   });
 
   const bodies = sorted.map((o) => ({

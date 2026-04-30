@@ -1,8 +1,9 @@
 import { TRPCError } from "@trpc/server";
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
-import { keysetLt } from "@/server/db/helpers";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { bn, keysetLt } from "@/server/db/helpers";
 import { z } from "zod";
 import {
+  caseDocuments,
   caseEvents,
   caseParticipants,
   cases,
@@ -22,7 +23,10 @@ import {
   transitionCase,
 } from "@/server/services/cases/transition";
 import { meetsBuildRequirements } from "@/server/services/cases/readiness";
+import { computeCriteriaCoverage } from "@/server/services/cases/criteria-coverage";
+import { computePreflight } from "@/server/services/cases/preflight";
 import { canRequestBuild } from "@/lib/case-status";
+import { PER_CASE_STORAGE_BYTES, requiredDocsFor } from "@/lib/visa-criteria";
 import { rateLimit } from "@/server/services/ratelimit";
 import { inngest } from "@/server/jobs/client";
 import { AppError, appErrorToTrpcCode } from "@/lib/errors";
@@ -519,6 +523,175 @@ export const caseRouter = router({
         }
         throw err;
       }
+    }),
+
+  // ── Stage 11 β — case dashboards ──────────────────────────────────
+
+  /**
+   * Per-criterion exhibit count + strength rating for the Overview
+   * Evidence-strength card. RLS-engaged via `ctx.db`. Returns
+   * `visaSupported: false` for visas without a taxonomy yet so the UI
+   * renders an `EmptyState` instead of an empty grid.
+   */
+  criteriaCoverage: protectedProcedure
+    .input(GetInput)
+    .query(async ({ ctx, input }) => {
+      const [row] = await ctx.db
+        .select({ visaType: cases.visaType })
+        .from(cases)
+        .where(and(eq(cases.id, input.caseId), isNull(cases.deletedAt)))
+        .limit(1);
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
+      return await computeCriteriaCoverage({
+        db: ctx.db,
+        caseId: input.caseId,
+        visaType: row.visaType,
+      });
+    }),
+
+  /**
+   * Required-documents checklist for the Documents right rail. Each
+   * item carries `present: boolean` (≥ minCount documents of the
+   * matching type uploaded) plus the actual count so the UI can show
+   * `2 of 3` for partial progress.
+   */
+  requiredDocsCoverage: protectedProcedure
+    .input(GetInput)
+    .query(async ({ ctx, input }) => {
+      const [row] = await ctx.db
+        .select({ visaType: cases.visaType })
+        .from(cases)
+        .where(and(eq(cases.id, input.caseId), isNull(cases.deletedAt)))
+        .limit(1);
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
+      const required = requiredDocsFor(row.visaType);
+      if (required.length === 0) {
+        return { visaSupported: false as const, items: [] };
+      }
+      // Pull every live document's type once; tally per documentType.
+      const docs = await ctx.db
+        .select({ documentType: caseDocuments.documentType })
+        .from(caseDocuments)
+        .where(
+          and(
+            eq(caseDocuments.caseId, input.caseId),
+            isNull(caseDocuments.deletedAt),
+          ),
+        );
+      const counts = new Map<string, number>();
+      for (const d of docs) {
+        counts.set(d.documentType, (counts.get(d.documentType) ?? 0) + 1);
+      }
+      return {
+        visaSupported: true as const,
+        items: required.map((r) => {
+          const count = r.docType ? (counts.get(r.docType) ?? 0) : 0;
+          const min = r.minCount ?? 1;
+          return {
+            key: r.key,
+            label: r.label,
+            criterion: r.criterion ?? null,
+            count,
+            minCount: min,
+            // `present`: the auto-tick. `null` when the required doc
+            // has no enum mapping (passport bio, I-94 — manual gate).
+            present: r.docType === null ? null : count >= min,
+          };
+        }),
+      };
+    }),
+
+  /**
+   * Storage usage for the Documents StorageCard. Aggregate over
+   * `case_documents.size_bytes`; per-case cap exposed as a constant
+   * so the UI's progress-bar threshold lives in one place.
+   */
+  storageUsage: protectedProcedure
+    .input(GetInput)
+    .query(async ({ ctx, input }) => {
+      const [authz] = await ctx.db
+        .select({ id: cases.id })
+        .from(cases)
+        .where(and(eq(cases.id, input.caseId), isNull(cases.deletedAt)))
+        .limit(1);
+      if (!authz) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
+      const [agg] = await ctx.db
+        .select({
+          // postgres-js returns sum(bigint) as a string — coerce via bn().
+          totalBytes: sql<bigint>`coalesce(sum(${caseDocuments.sizeBytes}), 0)::bigint`,
+          docCount: sql<number>`count(*)::int`,
+        })
+        .from(caseDocuments)
+        .where(
+          and(
+            eq(caseDocuments.caseId, input.caseId),
+            isNull(caseDocuments.deletedAt),
+          ),
+        );
+      return {
+        usedBytes: bn(agg?.totalBytes),
+        documentCount: agg?.docCount ?? 0,
+        capBytes: BigInt(PER_CASE_STORAGE_BYTES),
+      };
+    }),
+
+  /**
+   * Package pre-flight gates. Returns one row per gate the package
+   * page renders + an aggregate `allOk` so the Download CTA can be
+   * disabled in a single boolean. RLS-engaged via `ctx.db`.
+   */
+  preflight: protectedProcedure
+    .input(GetInput)
+    .query(async ({ ctx, input }) => {
+      try {
+        return await computePreflight({ db: ctx.db, caseId: input.caseId });
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw new TRPCError({
+            code: appErrorToTrpcCode(err.code),
+            message: err.message,
+          });
+        }
+        throw err;
+      }
+    }),
+
+  /**
+   * Persist the attorney's drag-to-reorder choice for the package
+   * assembly. Keys are `outputType:subgroupKey` (or just `outputType`
+   * for unsubgrouped) — type-stable across regenerates, unlike output
+   * ids. Authz via RLS-engaged read; the UPDATE runs through ownerDb
+   * (cases UPDATE policy gates on `user_in_case`, which would reject
+   * the `app_user` write — the read above is the gate).
+   */
+  setPackageOrder: attorneyProcedure
+    .input(
+      z.object({
+        caseId: z.uuid(),
+        orderedKeys: z.array(z.string().min(1).max(120)).max(50),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [authz] = await ctx.db
+        .select({ id: cases.id })
+        .from(cases)
+        .where(and(eq(cases.id, input.caseId), isNull(cases.deletedAt)))
+        .limit(1);
+      if (!authz) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
+      const value = input.orderedKeys.length > 0 ? input.orderedKeys : null;
+      await ownerDb
+        .update(cases)
+        .set({ packageOrder: value })
+        .where(and(eq(cases.id, input.caseId), isNull(cases.deletedAt)));
+      return { ok: true as const, orderedKeys: value ?? [] };
     }),
 });
 

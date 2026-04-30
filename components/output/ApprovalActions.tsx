@@ -34,6 +34,10 @@ export function ApprovalActions(props: ApprovalActionsProps): ReactElement {
       await Promise.all([
         utils.output.get.invalidate({ outputId: props.outputId }),
         utils.output.list.invalidate(),
+        // Approval gates the package preflight ("approved outputs"
+        // and "recommender letters" rows). Without this invalidation
+        // the Package page sticks on stale gate state until refresh.
+        utils.case.preflight.invalidate(),
       ]);
       props.onApprovalChange?.();
     },
@@ -46,6 +50,7 @@ export function ApprovalActions(props: ApprovalActionsProps): ReactElement {
       await Promise.all([
         utils.output.get.invalidate({ outputId: props.outputId }),
         utils.output.list.invalidate(),
+        utils.case.preflight.invalidate(),
       ]);
       props.onApprovalChange?.();
     },

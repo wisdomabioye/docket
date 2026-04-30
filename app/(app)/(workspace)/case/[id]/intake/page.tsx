@@ -2,8 +2,11 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
-import { CaseHeader } from "@/components/case";
-import { IntakeForm } from "./IntakeForm";
+import { CaseHeader, IntakeWizard } from "@/components/case";
+import {
+  BeneficiaryDataSchema,
+  type BeneficiaryData,
+} from "@/server/db/schema/zod/beneficiary";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -13,13 +16,14 @@ export async function generateMetadata({ params }: Props) {
 }
 
 /**
- * Beneficiary intake form. Locked once status passes documents_pending
- * (the procedure rejects with CONFLICT in that case).
+ * Beneficiary intake. Renders the multi-section `IntakeWizard` (Stage
+ * 11 γ) inside the workspace `CaseHeader` chrome. Locks once status
+ * passes `documents_pending` — the procedure rejects writes in that
+ * case, the wizard surfaces a read-only state ahead of that.
  *
- * Stage 11 α — wraps with `CaseHeader` so the case-level tabs strip is
- * present on every case page (matches the mockup's `case-overview.html`
- * + `documents.html` chrome). Inner `<main>` removed; the workspace
- * shell (`app/(app)/(workspace)/layout.tsx`) provides it.
+ * Persisted shape stays flat (`BeneficiaryDataSchema` from
+ * `server/db/schema/zod/beneficiary.ts`); the wizard only groups fields
+ * into sections at the UI layer.
  */
 export default async function IntakePage({
   params,
@@ -31,14 +35,19 @@ export default async function IntakePage({
   const data = await api.case.get({ caseId: id });
   if (!data) notFound();
 
-  const locked = data.status !== "intake" && data.status !== "documents_pending";
-  const beneficiary =
-    (data.beneficiaryData as { fullName?: string; nationality?: string } | null) ??
-    {};
+  const locked =
+    data.status !== "intake" && data.status !== "documents_pending";
+  // Parse the persisted blob through the schema so the wizard receives
+  // a typed `BeneficiaryData`. Unknown / extra keys are stripped by
+  // `.strict()`; an unparseable blob falls back to empty (the wizard
+  // still renders so the attorney can re-fill).
+  const parsed = BeneficiaryDataSchema.safeParse(data.beneficiaryData ?? {});
+  const initial: BeneficiaryData = parsed.success ? parsed.data : {};
+  const beneficiary = initial;
   const meta = beneficiary.nationality ? beneficiary.nationality : undefined;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-5xl space-y-6">
       <CaseHeader
         caseId={data.id}
         beneficiaryName={beneficiary.fullName ?? "Unnamed beneficiary"}
@@ -48,26 +57,9 @@ export default async function IntakePage({
         current="intake"
       />
 
-      {locked ? (
-        <p
-          role="status"
-          className="rounded-md border p-3 text-xs"
-          style={{
-            borderColor: "var(--warning, #b1830e)",
-            background: "var(--warning-soft, rgba(177,131,14,0.08))",
-            color: "var(--warning, #8a4a13)",
-          }}
-        >
-          Read-only — beneficiary data is locked once status passes{" "}
-          <code className="mono">documents_pending</code>.
-        </p>
-      ) : null}
-
-      <IntakeForm
+      <IntakeWizard
         caseId={data.id}
-        initial={
-          (data.beneficiaryData as Record<string, string> | null) ?? {}
-        }
+        initial={initial}
         rowRevision={data.rowRevision}
         currentStatus={data.status}
         locked={locked}

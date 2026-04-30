@@ -4,9 +4,10 @@ import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { Card } from "@/components/ui";
-import { CaseHeader } from "@/components/case";
+import { CaseHeader, CriteriaCoverageCard } from "@/components/case";
 import { RevenuePanel } from "@/components/revenue/RevenuePanel";
-import { formatDate, formatRelative } from "@/lib/utils";
+import { formatRelative } from "@/lib/utils";
+import { visaCriteriaConfig } from "@/lib/visa-criteria";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -31,7 +32,10 @@ export default async function CaseDetailPage({
   if (!session?.user) redirect(APP_ROUTES.login);
 
   const { id } = await params;
-  const data = await api.case.get({ caseId: id });
+  const [data, coverage] = await Promise.all([
+    api.case.get({ caseId: id }),
+    api.case.criteriaCoverage({ caseId: id }),
+  ]);
   if (!data) notFound();
 
   const beneficiary =
@@ -41,6 +45,7 @@ export default async function CaseDetailPage({
     } | null) ?? {};
 
   const meta = beneficiary.nationality ? beneficiary.nationality : undefined;
+  const config = visaCriteriaConfig(data.visaType);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -56,23 +61,13 @@ export default async function CaseDetailPage({
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
         <div className="space-y-6">
-          <Card title="Beneficiary">
-            <FieldRow label="Name" value={beneficiary.fullName} />
-            <FieldRow label="Nationality" value={beneficiary.nationality} />
-            <Link
-              href={APP_ROUTES.caseIntake(data.id)}
-              className="mt-3 inline-block text-xs underline-offset-2 hover:underline"
-            >
-              Edit intake →
-            </Link>
-          </Card>
-
-          <Card title="Workflow">
-            <FieldRow label="Status" value={data.status.replace(/_/g, " ")} />
-            <FieldRow label="Visa type" value={data.visaType} />
-            <FieldRow label="Review SLA" value={`${data.reviewSlaHours}h`} />
-            <FieldRow label="Created" value={formatDate(data.createdAt)} />
-          </Card>
+          <CriteriaCoverageCard
+            visaType={data.visaType}
+            visaSupported={coverage.visaSupported}
+            rows={coverage.rows}
+            metCount={coverage.metCount}
+            minRequired={config?.minCriteriaMet ?? 0}
+          />
 
           <Card title="Recent activity">
             {data.events.length === 0 ? (
@@ -96,6 +91,7 @@ export default async function CaseDetailPage({
                     <span
                       className="text-xs"
                       style={{ color: "var(--ink-muted)" }}
+                      suppressHydrationWarning
                     >
                       {formatRelative(e.createdAt)}
                     </span>
@@ -188,19 +184,3 @@ function primaryActionFor(
   }
 }
 
-function FieldRow(props: {
-  label: string;
-  value?: string | null | undefined;
-}): React.ReactElement {
-  return (
-    <div className="grid grid-cols-[8rem_1fr] gap-3 py-1 text-sm">
-      <span
-        className="text-xs uppercase tracking-wider"
-        style={{ color: "var(--ink-muted)" }}
-      >
-        {props.label}
-      </span>
-      <span>{props.value || "—"}</span>
-    </div>
-  );
-}

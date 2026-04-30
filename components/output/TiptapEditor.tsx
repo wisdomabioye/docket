@@ -8,6 +8,7 @@ import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import Typography from "@tiptap/extension-typography";
 import { htmlToMd, mdToSafeHtml } from "@/lib/markdown";
+import { OutputEditorToolbar } from "./OutputEditorToolbar";
 
 /**
  * Stage 08 prose editor. Tiptap is the editing surface; we serialize
@@ -155,7 +156,15 @@ export function TiptapEditor(props: TiptapEditorProps): ReactElement {
     );
   }
 
-  return <EditorContent editor={editor} className="tiptap-output" />;
+  return (
+    <div
+      className="rounded-md border"
+      style={{ borderColor: "var(--border, rgba(0,0,0,0.08))" }}
+    >
+      <OutputEditorToolbar editor={editor} disabled={props.readOnly} />
+      <EditorContent editor={editor} className="tiptap-output" />
+    </div>
+  );
 }
 
 /** Convenience: set up React state for the panel's "is dirty" + a ref

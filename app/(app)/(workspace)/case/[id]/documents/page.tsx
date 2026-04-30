@@ -2,7 +2,11 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
-import { CaseHeader } from "@/components/case";
+import {
+  CaseHeader,
+  RequiredDocsCard,
+  StorageCard,
+} from "@/components/case";
 import { DocumentsPanel } from "./DocumentsPanel";
 
 type Props = { params: Promise<{ id: string }> };
@@ -31,7 +35,11 @@ export default async function DocumentsPage({
   const caseRow = await api.case.get({ caseId: id });
   if (!caseRow) notFound();
 
-  const docs = await api.document.list({ caseId: id });
+  const [docs, requiredDocs, storage] = await Promise.all([
+    api.document.list({ caseId: id }),
+    api.case.requiredDocsCoverage({ caseId: id }),
+    api.case.storageUsage({ caseId: id }),
+  ]);
   const beneficiary =
     (caseRow.beneficiaryData as {
       fullName?: string;
@@ -40,7 +48,7 @@ export default async function DocumentsPage({
   const meta = beneficiary.nationality ? beneficiary.nationality : undefined;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <CaseHeader
         caseId={caseRow.id}
         beneficiaryName={beneficiary.fullName ?? "Unnamed beneficiary"}
@@ -50,15 +58,30 @@ export default async function DocumentsPage({
         current="documents"
       />
 
-      <DocumentsPanel
-        caseId={id}
-        initialDocs={docs.map((d) => ({
-          ...d,
-          sizeBytes: Number(d.sizeBytes),
-          createdAt: d.createdAt.toISOString(),
-          extractedAt: d.extractedAt ? d.extractedAt.toISOString() : null,
-        }))}
-      />
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
+        <DocumentsPanel
+          caseId={id}
+          initialDocs={docs.map((d) => ({
+            ...d,
+            sizeBytes: Number(d.sizeBytes),
+            createdAt: d.createdAt.toISOString(),
+            extractedAt: d.extractedAt ? d.extractedAt.toISOString() : null,
+          }))}
+        />
+
+        <aside className="space-y-6">
+          <RequiredDocsCard
+            visaType={caseRow.visaType}
+            visaSupported={requiredDocs.visaSupported}
+            items={requiredDocs.items}
+          />
+          <StorageCard
+            usedBytes={storage.usedBytes}
+            capBytes={storage.capBytes}
+            documentCount={storage.documentCount}
+          />
+        </aside>
+      </div>
     </div>
   );
 }

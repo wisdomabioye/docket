@@ -83,6 +83,13 @@ export const cases = pgTable(
       .default("pending"),
     invoiceId: uuid("invoice_id"), // FK added in Stage 10 when `invoices` lands.
 
+    /** Stage 11 γ — persisted package order (drag-to-reorder). Array
+     *  of `outputType:subgroupKey` keys (or just `outputType` for
+     *  unsubgrouped). NULL → PDF service falls through to the
+     *  hardcoded `packageOrderRank`. Type+subgroup vs uuid because
+     *  `case_outputs` rows are versioned: regen produces new ids. */
+    packageOrder: text("package_order").array(),
+
     // Workflow
     reviewSlaHours: integer("review_sla_hours").notNull().default(72),
     filedAt: timestamp("filed_at", { withTimezone: true }),

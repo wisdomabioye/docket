@@ -13,6 +13,114 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #25 — IntakeWizard cleared text fields don't propagate to server
+
+Status: Tracked.
+Surfaced: 2026-04-30
+
+`components/case/IntakeWizard.tsx:175-186` — `flushSave` builds the
+patch from non-empty values only (Zod's `.min(1)` would reject an
+empty string). When the attorney clears a previously-saved text field
+(e.g. notes was "foo", now ""), the field is omitted from the patch,
+and the server's shallow-merge keeps "foo". The UI shows empty; the
+DB has stale data. Fix requires sending an explicit `null` (and
+schema accepting `null` to mean "clear"), or a wizard-level "delta"
+patch that distinguishes "field not edited" from "field cleared".
+Not blocking — attorneys rarely clear once typed — but logged for
+the polish pass.
+
+---
+
+### #26 — Package saved-order fallthrough buries new outputs at the bottom
+
+Status: Tracked.
+Surfaced: 2026-04-30
+
+`server/services/pdf/index.tsx:251-273` and
+`app/(app)/(workspace)/case/[id]/package/page.tsx:62-81` — when
+`cases.package_order` is populated and a regenerate produces a NEW
+output (key not in the saved array), the new output sorts AFTER every
+saved-order key, then by canonical rank within the unsaved cluster.
+Result: a new recommendation letter shows up at the bottom of the
+package even if its canonical position is mid-list. The attorney has
+to drag it back. Fix: insert new keys at their canonical rank
+position relative to the saved keys (interleave). Low frequency
+(only after regenerate-while-already-reordered).
+
+---
+
+### #27 — `PackageAssemblyCard` has no unit test
+
+Status: Tracked.
+Surfaced: 2026-04-30
+
+The Day 4.2 sweep added unit tests for every other Stage 11 γ
+component but skipped `components/case/PackageAssemblyCard.tsx`.
+DnD-kit's PointerSensor / KeyboardSensor doesn't render predictably
+under jsdom (no PointerEvent), and a meaningful test needs the
+`@dnd-kit/core` test utilities. Defer until either a Playwright path
+opens or `@dnd-kit` ships a vitest-compatible test harness. The
+mutation chain + rollback path can still be tested without the DnD
+event by exporting `onDragEnd` directly — that's the simpler win.
+
+---
+
+### #28 — `packageKeyFor` uses `:` separator that could collide with future enum values
+
+Status: Tracked.
+Surfaced: 2026-04-30
+
+`server/services/pdf/package.tsx:44-51` — `packageKeyFor` joins
+`outputType:subgroupKey`. If a future `OutputType` enum value
+contains a colon (e.g. `"i129:e"`), the parsed key would collide
+with a real subgroup key from a different output. Currently
+impossible (every enum value is `[a-z_]+`), but the contract should
+make the assumption explicit. Add a runtime assert (or a unit-test
+guard) that no `OutputType` contains `:`.
+
+---
+
+### #23 — Stage 11 γ wizard fields captured but unused downstream
+
+Status: Tracked.
+Surfaced: 2026-04-30
+
+`BeneficiaryDataSchema` (server/db/schema/zod/beneficiary.ts) gained
+`field`, `yearsActive`, `targetFilingDate`, `recommendersCount` for the
+new `IntakeWizard`. The wizard captures and persists them, but nothing
+downstream reads them — `recommendersCount` in particular is the
+attorney's planned letter count, yet:
+- `requiredDocsCoverage` keeps `rec_letters` hardcoded at `minCount: 3`
+  in `lib/visa-criteria.ts:135`.
+- `case.preflight`'s `recommender_letters` gate flips green at >0
+  approved letters (`server/services/cases/preflight.ts:143`).
+- `targetFilingDate` and `yearsActive` are not surfaced on the case
+  Overview, in any prompt's `_context.ts`, or on the package cover.
+
+Three sources of truth disagree on "how many recommenders". Either
+delete the unused fields or wire them into the checklist threshold +
+preflight gate + cover sheet. Default action: read `recommendersCount`
+into the `rec_letters` minCount and the recommender_letters preflight
+gate; surface `targetFilingDate` on the case header.
+
+---
+
+### #24 — IntakeWizard concurrent-save race on `revisionRef`
+
+Status: Tracked.
+Surfaced: 2026-04-30
+
+`components/case/IntakeWizard.tsx:200-205` increments `revisionRef` in
+`onSuccess`. If the user types fast enough that the second debounce
+fires before the first mutation resolves, both saves submit the same
+`expectedRowRevision` and the second hits CONFLICT (the error renders;
+the typing isn't lost but the toast surface is noisy). Fix: gate
+`flushSave` on `update.isPending`; the next keystroke re-schedules
+when the in-flight save returns. Low-frequency edge — only repros on
+slow networks with continuous typing.
+
+---
+
 ### #4 — RLS test coverage is canary-only on writes
 
 Status: Tracked.

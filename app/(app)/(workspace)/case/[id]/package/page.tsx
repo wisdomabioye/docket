@@ -2,10 +2,18 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
-import { OUTPUT_TYPE_DISPLAY, readRecommenderName } from "@/lib/output-types";
-import { Badge, Card } from "@/components/ui";
-import { CaseHeader } from "@/components/case";
+import { Card } from "@/components/ui";
+import {
+  CaseHeader,
+  PackageAssemblyCard,
+  PreflightCard,
+  type PackageAssemblyItem,
+} from "@/components/case";
 import { DisclaimerBanner } from "@/components/output";
+import {
+  packageKeyFor,
+  packageOrderRank,
+} from "@/server/services/pdf/package";
 import { PackageDownloadButton } from "./PackageDownloadButton";
 
 type Props = { params: Promise<{ id: string }> };
@@ -32,10 +40,12 @@ export default async function PackagePage({
   if (!session?.user) redirect(APP_ROUTES.login);
 
   const { id } = await params;
-  const caseRow = await api.case.get({ caseId: id });
+  const [caseRow, outputs, preflight] = await Promise.all([
+    api.case.get({ caseId: id }),
+    api.output.list({ caseId: id }),
+    api.case.preflight({ caseId: id }),
+  ]);
   if (!caseRow) notFound();
-
-  const outputs = await api.output.list({ caseId: id });
   const approved = outputs.filter((o) => o.attorneyApproved);
   const beneficiary =
     (caseRow.beneficiaryData as {
@@ -44,22 +54,42 @@ export default async function PackagePage({
     } | null) ?? {};
   const meta = beneficiary.nationality ? beneficiary.nationality : undefined;
 
-  const packageOrder: ReadonlyArray<string> = [
-    "petition_letter",
-    "personal_statement",
-    "recommendation_letter_template",
-    "criteria_analysis",
-    "evidence_plan",
-    "exhibit_index",
-  ];
+  // Mirror the PDF service's order resolution: saved order wins,
+  // missing keys fall through to the canonical rank. Keeping the
+  // resolution identical here means what the attorney sees in the
+  // assembly card is exactly what the compiler will lay out.
+  const savedOrder = caseRow.packageOrder ?? null;
   const sorted = [...approved].sort((a, b) => {
-    const ra = packageOrder.indexOf(a.outputType);
-    const rb = packageOrder.indexOf(b.outputType);
-    const rankA = ra === -1 ? packageOrder.length : ra;
-    const rankB = rb === -1 ? packageOrder.length : rb;
-    if (rankA !== rankB) return rankA - rankB;
+    const aKey = packageKeyFor({
+      outputType: a.outputType,
+      subgroupKey: a.subgroupKey,
+    });
+    const bKey = packageKeyFor({
+      outputType: b.outputType,
+      subgroupKey: b.subgroupKey,
+    });
+    if (savedOrder) {
+      const ai = savedOrder.indexOf(aKey);
+      const bi = savedOrder.indexOf(bKey);
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
+    }
+    const r = packageOrderRank(a.outputType) - packageOrderRank(b.outputType);
+    if (r !== 0) return r;
     return (a.subgroupKey ?? "").localeCompare(b.subgroupKey ?? "");
   });
+
+  const assemblyItems: ReadonlyArray<PackageAssemblyItem> = sorted.map((o) => ({
+    key: packageKeyFor({
+      outputType: o.outputType,
+      subgroupKey: o.subgroupKey,
+    }),
+    outputType: o.outputType,
+    outputVersion: o.outputVersion,
+    subgroupKey: o.subgroupKey,
+    metadata: o.metadata,
+  }));
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -94,57 +124,24 @@ export default async function PackagePage({
 
       <DisclaimerBanner />
 
-      <Card title="Approved outputs">
-        {sorted.length === 0 ? (
-          <p className="text-sm" style={{ color: "var(--ink-muted)" }}>
-            Nothing to bundle — approve drafts on the Outputs tab first.
-          </p>
-        ) : (
-          <ul className="space-y-3">
-            {sorted.map((o, idx) => (
-              <li
-                key={o.id}
-                className="grid grid-cols-[2rem_1fr_auto] items-baseline gap-3 border-b py-2 last:border-0"
-                style={{ borderColor: "var(--border, rgba(0,0,0,0.06))" }}
-              >
-                <span
-                  className="mono text-[10px] uppercase tracking-wider"
-                  style={{ color: "var(--ink-muted)" }}
-                >
-                  {String(idx + 1).padStart(2, "0")}
-                </span>
-                <div>
-                  <p className="text-sm font-medium">
-                    {OUTPUT_TYPE_DISPLAY[o.outputType]}
-                    {(() => {
-                      const rec = readRecommenderName({
-                        outputType: o.outputType,
-                        metadata: o.metadata,
-                      });
-                      return rec ? ` · ${rec}` : "";
-                    })()}
-                  </p>
-                  <p
-                    className="mt-0.5 text-xs"
-                    style={{ color: "var(--ink-muted)" }}
-                  >
-                    v{o.outputVersion} · approved
-                  </p>
-                </div>
-                <Badge variant="success">Ready</Badge>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      <PreflightCard allOk={preflight.allOk} gates={preflight.gates} />
+
+      <PackageAssemblyCard caseId={id} initialItems={assemblyItems} />
 
       {sorted.length > 0 ? (
         <Card title="Download" flush>
-          <div className="flex items-center justify-between gap-3 px-4 py-4">
-            <p className="text-sm" style={{ color: "var(--ink-soft)" }}>
-              The signed URL opens in a new tab and expires in five minutes.
+          <div className="flex flex-col gap-2 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <p
+              className="text-sm"
+              style={{
+                color: preflight.allOk ? "var(--ink-soft)" : "var(--warning, #8a4a13)",
+              }}
+            >
+              {preflight.allOk
+                ? "The signed URL opens in a new tab and expires in five minutes."
+                : "Resolve the pre-flight gates above before downloading the package."}
             </p>
-            <PackageDownloadButton caseId={id} />
+            <PackageDownloadButton caseId={id} disabled={!preflight.allOk} />
           </div>
         </Card>
       ) : null}
