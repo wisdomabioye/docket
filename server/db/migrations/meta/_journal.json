@@ -113,6 +113,13 @@
       "when": 1777495000000,
       "tag": "0015_invoices_soft_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1777526981384,
+      "tag": "0016_flimsy_purifiers",
+      "breakpoints": true
     }
   ]
 }
