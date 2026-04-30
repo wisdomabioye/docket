@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/admin/PageHeader";
 import { Badge } from "@/components/ui";
 import { DataTable, type Column } from "@/components/table";
 import { waitlistApprovalVariant } from "@/lib/status-style";
+import { formatDate, formatNumber } from "@/lib/utils";
 import {
   buildNextHref,
   buildPrevHref,
@@ -58,7 +59,7 @@ export default async function AdminWaitlistPage(props: {
         subtitle={
           data.totals.total === 0
             ? "Nobody on the waitlist yet."
-            : `${data.totals.total.toLocaleString()} total · ${data.totals.pending.toLocaleString()} awaiting approval`
+            : `${formatNumber(data.totals.total)} total · ${formatNumber(data.totals.pending)} awaiting approval`
         }
       />
 
@@ -92,7 +93,7 @@ export default async function AdminWaitlistPage(props: {
             case "joined":
               return (
                 <span className="mono text-xs text-[var(--ink-muted)]">
-                  {new Date(e.createdAt).toLocaleDateString()}
+                  {formatDate(e.createdAt)}
                 </span>
               );
             case "status": {

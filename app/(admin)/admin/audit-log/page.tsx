@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/admin/PageHeader";
 import { AuditRow } from "@/components/admin/AuditRow";
 import { Card, EmptyState } from "@/components/ui";
 import { Filters, PageLink, type Chip } from "@/components/table";
+import { formatNumber } from "@/lib/utils";
 import {
   buildNextHref,
   buildPrevHref,
@@ -78,14 +79,14 @@ export default async function AdminAuditLogPage(props: {
       <PageHeader
         breadcrumb={["Admin", "Audit log"]}
         title="Audit log"
-        subtitle={`${data.total24h.toLocaleString()} events in the last 24h. Append-only, retained 7 years.`}
+        subtitle={`${formatNumber(data.total24h)} events in the last 24h. Append-only, retained 7 years.`}
       />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_240px]">
         <div>
           <Filters
             chips={chips}
-            right={`${data.total24h.toLocaleString()} matching · 24h window`}
+            right={`${formatNumber(data.total24h)} matching · 24h window`}
           />
           <Card flush>
             {data.items.length === 0 ? (
@@ -126,7 +127,7 @@ export default async function AdminAuditLogPage(props: {
                       <dt className="capitalize text-[var(--ink-muted)]">
                         {key}
                       </dt>
-                      <dd className="mono">{count.toLocaleString()}</dd>
+                      <dd className="mono">{formatNumber(count)}</dd>
                     </div>
                   ))}
               </dl>
@@ -157,7 +158,7 @@ function AuditPagination(props: {
   if (!props.prevHref && !props.nextHref && !props.range) return null;
   const summary =
     props.range && props.total !== undefined
-      ? `Showing ${props.range} of ${props.total.toLocaleString()}`
+      ? `Showing ${props.range} of ${formatNumber(props.total)}`
       : null;
   return (
     <div

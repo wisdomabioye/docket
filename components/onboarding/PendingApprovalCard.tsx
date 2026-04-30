@@ -86,7 +86,10 @@ function formatSubmittedAt(input: Date | string | null | undefined): string | nu
   if (!input) return null;
   const d = typeof input === "string" ? new Date(input) : input;
   if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, {
+  // Pin locale to "en-US" — `undefined` here yields the runtime's
+  // default, which differs between Node SSR (server's locale) and the
+  // browser (user's locale), causing a hydration mismatch.
+  return d.toLocaleDateString("en-US", {
     year: "numeric",
     month: "short",
     day: "numeric",

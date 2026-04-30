@@ -63,3 +63,25 @@ export const DOCUMENT_TYPE_LABELS: Record<DocumentType, string> = {
 
 /** Cents columns are bigint at the DB; this is the per-file upload cap. */
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+/** Case workflow statuses. Mirror `server/db/schema/enums.ts:caseStatusEnum`.
+ *  Plain TS so client + server share the union without importing
+ *  server-only modules. Order is the lifecycle order (intake → archive). */
+export const CASE_STATUSES = [
+  "intake",
+  "documents_pending",
+  "extracting",
+  "ready_to_build",
+  "building",
+  "build_failed",
+  "draft_ready",
+  "in_review",
+  "needs_revision",
+  "approved",
+  "package_ready",
+  "delivered",
+  "filed",
+  "archived",
+] as const;
+
+export type CaseStatus = (typeof CASE_STATUSES)[number];

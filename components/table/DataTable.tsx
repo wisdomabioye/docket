@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { cn } from "@/lib/utils";
+import { cn, formatNumber } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PageLink } from "./PageLink";
 
@@ -145,11 +145,11 @@ export function DataTable<TRow>(props: {
 function PaginationFooter(p: Pagination): React.ReactElement {
   const summary =
     p.range && p.total !== undefined
-      ? `Showing ${p.range} of ${p.total.toLocaleString()}`
+      ? `Showing ${p.range} of ${formatNumber(p.total)}`
       : p.range
         ? `Showing ${p.range}`
         : p.total !== undefined
-          ? `${p.total.toLocaleString()} results`
+          ? `${formatNumber(p.total)} results`
           : null;
 
   return (

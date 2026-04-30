@@ -6,6 +6,7 @@ import { APP_ROUTES, pageTitle } from "@/config";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { Badge, Card } from "@/components/ui";
 import { attorneyStatusVariant } from "@/lib/status-style";
+import { formatDate } from "@/lib/utils";
 import { ActivateButton } from "../ActivateButton";
 import { SuspendButton } from "../SuspendButton";
 
@@ -39,8 +40,8 @@ export default async function AttorneyDetailPage({ params }: Props) {
         title={data.name ?? data.email}
         subtitle={
           data.profile
-            ? `Status: ${data.profile.status} · joined ${new Date(data.joinedAt).toLocaleDateString()}`
-            : `No profile submitted · joined ${new Date(data.joinedAt).toLocaleDateString()}`
+            ? `Status: ${data.profile.status} · joined ${formatDate(data.joinedAt)}`
+            : `No profile submitted · joined ${formatDate(data.joinedAt)}`
         }
       />
 
@@ -69,14 +70,14 @@ export default async function AttorneyDetailPage({ params }: Props) {
               <Field label="Submitted">
                 <span className="mono">
                   {data.profile.submittedAt
-                    ? new Date(data.profile.submittedAt).toLocaleString()
+                    ? formatDate(data.profile.submittedAt, { style: "full" })
                     : "—"}
                 </span>
               </Field>
               <Field label="Agreement signed">
                 <span className="mono">
                   {data.profile.agreementSignedAt
-                    ? new Date(data.profile.agreementSignedAt).toLocaleString()
+                    ? formatDate(data.profile.agreementSignedAt, { style: "full" })
                     : "—"}
                 </span>
               </Field>
@@ -123,7 +124,7 @@ export default async function AttorneyDetailPage({ params }: Props) {
                     {c.status.replace(/_/g, " ")}
                   </span>
                   <span className="text-[var(--ink-muted)]">
-                    {new Date(c.updatedAt).toLocaleDateString()}
+                    {formatDate(c.updatedAt)}
                   </span>
                 </li>
               ))}

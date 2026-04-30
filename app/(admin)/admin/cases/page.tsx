@@ -8,7 +8,7 @@ import { DataTable, type Column } from "@/components/table";
 import { type CaseStatus } from "@/lib/case-status";
 import { VISA_TYPES, type VisaType } from "@/lib/constants";
 import { caseStatusVariant } from "@/lib/status-style";
-import { formatCents } from "@/lib/utils";
+import { formatCents, formatNumber } from "@/lib/utils";
 import { parseEnum } from "@/lib/url-params";
 import {
   buildNextHref,
@@ -111,14 +111,14 @@ export default async function AdminCasesPage(props: {
 
   const cells: StatCell[] = STAT_GROUPS.map((g) => ({
     label: g.label,
-    value: (
+    value: formatNumber(
       g.statuses.length === 0
         ? data.totals.total
         : g.statuses.reduce(
             (acc, s) => acc + (data.totals.byStatus[s] ?? 0),
             0,
-          )
-    ).toLocaleString(),
+          ),
+    ),
     href: buildResetHref(
       APP_ROUTES.adminCases,
       g.key === "all" ? {} : { group: g.key },
@@ -163,7 +163,7 @@ export default async function AdminCasesPage(props: {
       <PageHeader
         breadcrumb={["Admin", "Cases"]}
         title="All cases"
-        subtitle={`${data.totals.total.toLocaleString()} across the platform`}
+        subtitle={`${formatNumber(data.totals.total)} across the platform`}
       />
 
       <StatBand cells={cells} />

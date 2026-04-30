@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui";
 import { DataTable, Filters, type Chip, type Column } from "@/components/table";
 import { ATTORNEY_STATUSES, type AttorneyStatus } from "@/lib/constants";
 import { attorneyStatusVariant } from "@/lib/status-style";
+import { formatDate, formatNumber } from "@/lib/utils";
 import {
   buildNextHref,
   buildPrevHref,
@@ -102,7 +103,7 @@ export default async function AdminAttorneysPage(props: {
         subtitle={`${data.totals.active} active · ${data.totals.pending} pending · ${data.totals.suspended} suspended`}
       />
 
-      <Filters chips={chips} right={`${total.toLocaleString()} total`} />
+      <Filters chips={chips} right={`${formatNumber(total)} total`} />
 
       <DataTable
         columns={COLUMNS}
@@ -155,7 +156,7 @@ export default async function AdminAttorneysPage(props: {
             case "joined":
               return (
                 <span className="mono text-xs">
-                  {new Date(row.joinedAt).toLocaleDateString()}
+                  {formatDate(row.joinedAt)}
                 </span>
               );
             case "actions":

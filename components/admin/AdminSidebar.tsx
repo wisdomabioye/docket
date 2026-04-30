@@ -1,29 +1,22 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { APP_ROUTES } from "@/config";
-import { Icon, type IconName } from "@/components/ui/Icon";
-import { cn } from "@/lib/utils";
+import {
+  Sidebar,
+  type SidebarSectionDef,
+} from "@/components/layout/Sidebar";
 
 /**
- * Navigation for `/admin/*`. Two presentations driven by viewport:
+ * Admin-area sidebar — thin wrapper that supplies the admin nav
+ * structure to the generic `Sidebar` primitive. Visual chrome,
+ * desktop-vs-mobile drawer logic, and a11y plumbing all live in
+ * `components/layout/Sidebar.tsx`; this file only owns the section
+ * definitions + brand block.
  *
- *   - **lg+**: fixed left rail, 216px, always visible.
- *   - **<lg**: top bar with a hamburger that opens a slide-over drawer.
- *
- * One component owns both modes so the nav definition (SECTIONS) doesn't
- * duplicate. Drawer state is local — closes on navigation, on Escape, and
- * on backdrop click. Body scroll-lock while open.
- *
- * Routes pull from `APP_ROUTES`; active highlight via `usePathname`.
+ * Server component now — Sidebar handles its own client surface.
+ * Drives a route rename to APP_ROUTES updates from the source-of-truth
+ * (avoids hardcoded paths per CLAUDE.md §7).
  */
 
-type NavItem = { label: string; href: string; icon: IconName };
-type NavSection = { label: string; items: readonly NavItem[] };
-
-const SECTIONS: readonly NavSection[] = [
+const SECTIONS: ReadonlyArray<SidebarSectionDef> = [
   {
     label: "Operate",
     items: [
@@ -42,102 +35,27 @@ const SECTIONS: readonly NavSection[] = [
   },
   {
     label: "Compliance",
-    items: [{ label: "Audit log", href: APP_ROUTES.adminAuditLog, icon: "shield" }],
+    items: [
+      { label: "Audit log", href: APP_ROUTES.adminAuditLog, icon: "shield" },
+    ],
   },
 ];
 
 export function AdminSidebar(): React.ReactElement {
-  const pathname = usePathname();
-  // Track the pathname the drawer was opened for. The drawer is "open"
-  // exactly when that pathname still matches — so a Link navigation
-  // closes the drawer automatically (pathname changes → mismatch → closed).
-  // Derived rather than effect-driven, which keeps `react-hooks/set-state-in-effect`
-  // happy and avoids a flicker on route change.
-  const [openPath, setOpenPath] = useState<string | null>(null);
-  const open = openPath !== null && openPath === pathname;
-  const closeDrawer = () => setOpenPath(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeDrawer();
-    };
-    document.addEventListener("keydown", onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [open]);
-
   return (
-    <>
-      {/* Desktop rail */}
-      <aside
-        className="sticky top-0 hidden h-screen w-[216px] flex-col px-3 py-5 text-[var(--cream)] lg:flex"
-        style={{ background: "var(--ink)" }}
-      >
-        <Brand />
-        <Nav pathname={pathname} />
-      </aside>
-
-      {/* Mobile top bar */}
-      <header
-        className="sticky top-0 z-20 flex h-12 items-center justify-between px-3 text-[var(--cream)] lg:hidden"
-        style={{ background: "var(--ink)" }}
-      >
-        <Brand />
-        <button
-          type="button"
-          onClick={() => setOpenPath(pathname)}
-          aria-label="Open admin menu"
-          aria-expanded={open}
-          className="rounded-sm p-2 text-[var(--cream)] hover:bg-[rgba(245,241,232,0.08)]"
-        >
-          <Icon name="menu" size={18} />
-        </button>
-      </header>
-
-      {/* Mobile drawer */}
-      {open ? (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <button
-            type="button"
-            aria-label="Close menu"
-            onClick={() => closeDrawer()}
-            className="absolute inset-0 bg-black/40"
-          />
-          <aside
-            className="absolute left-0 top-0 flex h-full w-[260px] flex-col px-3 py-5 text-[var(--cream)] shadow-xl"
-            style={{ background: "var(--ink)" }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Admin navigation"
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <Brand />
-              <button
-                type="button"
-                onClick={() => closeDrawer()}
-                aria-label="Close menu"
-                className="rounded-sm p-1.5 hover:bg-[rgba(245,241,232,0.08)]"
-              >
-                <Icon name="x" size={18} />
-              </button>
-            </div>
-            <Nav pathname={pathname} />
-          </aside>
-        </div>
-      ) : null}
-    </>
+    <Sidebar
+      brand={<AdminBrand />}
+      ariaLabel="Admin navigation"
+      mobileMenuLabel="Open admin menu"
+      sections={SECTIONS}
+    />
   );
 }
 
-function Brand() {
+function AdminBrand(): React.ReactElement {
   return (
     <div
-      className="flex items-center gap-2 px-2.5 text-[22px] tracking-[-0.01em]"
+      className="flex items-center gap-2 text-[22px] tracking-[-0.01em]"
       style={{ fontFamily: "var(--font-serif), Georgia, serif" }}
     >
       Docket<span style={{ color: "var(--accent-ink)" }}>.</span>
@@ -151,43 +69,5 @@ function Brand() {
         ADMIN
       </span>
     </div>
-  );
-}
-
-function Nav({ pathname }: { pathname: string }) {
-  return (
-    <nav className="flex flex-1 flex-col overflow-y-auto">
-      {SECTIONS.map((section) => (
-        <div key={section.label}>
-          <div
-            className="px-2.5 pb-1.5 pt-3 text-[10px] font-medium uppercase tracking-[0.14em]"
-            style={{ color: "rgba(245,241,232,0.45)" }}
-          >
-            {section.label}
-          </div>
-          {section.items.map((item) => {
-            const active =
-              item.href === APP_ROUTES.admin
-                ? pathname === item.href
-                : pathname.startsWith(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "mb-px flex items-center gap-2.5 rounded-sm px-2.5 py-1.5 text-[13px] font-medium transition",
-                  active
-                    ? "bg-[rgba(245,241,232,0.10)] text-[var(--cream)]"
-                    : "text-[rgba(245,241,232,0.72)] hover:bg-[rgba(245,241,232,0.06)] hover:text-[var(--cream)]",
-                )}
-              >
-                <Icon name={item.icon} size={14} className="opacity-80" />
-                {item.label}
-              </Link>
-            );
-          })}
-        </div>
-      ))}
-    </nav>
   );
 }

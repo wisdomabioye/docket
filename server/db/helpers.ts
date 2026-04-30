@@ -49,6 +49,29 @@ export function keysetLt(
 }
 
 /**
+ * Pull a beneficiary's `fullName` out of a JSONB blob (as stored on
+ * `cases.beneficiary_data`). Returns `null` when the blob isn't an
+ * object, the field is missing, or the trimmed value is empty.
+ *
+ * Lives here (not in any single router) because the same predicate
+ * shows up in both the revenue/Stripe service (line-item description)
+ * and `me.*` (dashboard activity feed + today list). One source of
+ * truth keeps the runtime narrowing identical across both paths.
+ */
+export function extractBeneficiaryFullName(blob: unknown): string | null {
+  if (
+    blob !== null &&
+    typeof blob === "object" &&
+    "fullName" in blob &&
+    typeof (blob as { fullName?: unknown }).fullName === "string"
+  ) {
+    const v = (blob as { fullName: string }).fullName.trim();
+    return v.length > 0 ? v : null;
+  }
+  return null;
+}
+
+/**
  * Coerce a postgres-js aggregation result to `bigint`.
  *
  * `sum(int8)::bigint` comes back as a string under postgres-js's default

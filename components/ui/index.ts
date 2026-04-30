@@ -7,3 +7,8 @@ export { Card } from "./Card";
 export { EmptyState } from "./EmptyState";
 export { ProgressBar, type ProgressTone } from "./ProgressBar";
 export { Icon, type IconName } from "./Icon";
+export {
+  Segmented,
+  type SegmentedOption,
+  type SegmentedProps,
+} from "./Segmented";

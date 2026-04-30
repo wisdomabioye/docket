@@ -97,7 +97,7 @@ vi.mock("@/components/output", async () => {
   };
 });
 
-import { OutputDetailPanel } from "@/app/(app)/case/[id]/outputs/[outputId]/OutputDetailPanel";
+import { OutputDetailPanel } from "@/app/(app)/(workspace)/case/[id]/outputs/[outputId]/OutputDetailPanel";
 
 afterEach(() => {
   cleanup();

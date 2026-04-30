@@ -37,6 +37,12 @@ export function formatCents(
  * Format a date as a short relative label suitable for admin tables and
  * audit rows: `"2m ago"`, `"4h ago"`, `"3d ago"`, then absolute date for
  * anything older than a week.
+ *
+ * Locale pinned to `en-US` on the absolute fallback so SSR + browser
+ * agree (the relative branches are language-agnostic). Note: `Date.now()`
+ * still differs by milliseconds between server and client, so a value
+ * straddling a "minute ago" boundary can briefly mismatch — accepted
+ * trade-off; relative time is inherently approximate.
  */
 export function formatRelative(input: Date | string | null): string {
   if (!input) return "—";
@@ -49,5 +55,46 @@ export function formatRelative(input: Date | string | null): string {
   if (diffHr < 24) return `${diffHr}h ago`;
   const diffDay = Math.floor(diffHr / 24);
   if (diffDay < 7) return `${diffDay}d ago`;
-  return d.toLocaleDateString();
+  return formatDate(d);
+}
+
+/**
+ * Format an absolute date as `"Apr 30, 2026"` (default) or `"Apr 30"`
+ * (when `style: "compact"`). Locale pinned to `en-US` so the SSR + the
+ * browser produce the same string (the runtime default differs across
+ * Node and the browser → hydration mismatch).
+ */
+export function formatDate(
+  input: Date | string | null,
+  opts?: { style?: "default" | "compact" | "full" },
+): string {
+  if (!input) return "—";
+  const d = typeof input === "string" ? new Date(input) : input;
+  const style = opts?.style ?? "default";
+  if (style === "compact") {
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+  if (style === "full") {
+    return d.toLocaleString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+  return d.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/** Pin number formatting to `en-US` so the thousands separator matches
+ *  across SSR + browser (no `1.000` vs `1,000` hydration drift). */
+export function formatNumber(
+  n: number | bigint | null | undefined,
+): string {
+  if (n === null || n === undefined) return "—";
+  return new Intl.NumberFormat("en-US").format(n);
 }

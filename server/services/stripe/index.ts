@@ -4,6 +4,7 @@ import { and, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import { env } from "@/config/env";
 import { AppError } from "@/lib/errors";
 import { db, type Db } from "@/server/db/client";
+import { extractBeneficiaryFullName } from "@/server/db/helpers";
 import {
   attorneyProfiles,
   cases,
@@ -222,25 +223,12 @@ export async function listEligibleCasesForPeriod(args: {
   return rows.map((r) => ({
     id: r.id,
     visaType: r.visaType,
-    beneficiaryFullName: extractFullName(r.beneficiaryData),
+    beneficiaryFullName: extractBeneficiaryFullName(r.beneficiaryData),
     caseFeeCents: r.caseFeeCents ?? 0n,
     docketShareCents: r.docketShareCents ?? 0n,
     attorneyShareCents: r.attorneyShareCents ?? 0n,
     filedAt: r.filedAt,
   }));
-}
-
-function extractFullName(blob: unknown): string | null {
-  if (
-    blob !== null &&
-    typeof blob === "object" &&
-    "fullName" in blob &&
-    typeof (blob as { fullName?: unknown }).fullName === "string"
-  ) {
-    const v = (blob as { fullName: string }).fullName.trim();
-    return v.length > 0 ? v : null;
-  }
-  return null;
 }
 
 function validatePeriod(year: number, month: number): void {
@@ -379,7 +367,7 @@ export async function createMonthlyInvoice(
       const snap = lockedRows.map((r) => ({
         id: r.id,
         visaType: r.visaType,
-        beneficiaryFullName: extractFullName(r.beneficiaryData),
+        beneficiaryFullName: extractBeneficiaryFullName(r.beneficiaryData),
         docketShareCents: r.docketShareCents ?? 0n,
         // Narrowed by the inArray filter above. The cast localizes
         // the runtime invariant to one place.

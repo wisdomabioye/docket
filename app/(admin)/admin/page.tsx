@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/admin/PageHeader";
 import { AuditRow } from "@/components/admin/AuditRow";
 import { KpiCard, KpiGrid } from "@/components/kpi";
 import { Card, EmptyState } from "@/components/ui";
-import { formatCents } from "@/lib/utils";
+import { formatCents, formatNumber } from "@/lib/utils";
 import Link from "next/link";
 
 export const metadata = { title: pageTitle("Admin overview") };
@@ -30,7 +30,7 @@ export default async function AdminOverviewPage(): Promise<React.ReactElement> {
       <PageHeader
         breadcrumb={["Admin"]}
         title="Platform overview"
-        subtitle={`${data.attorneys.active} active attorneys · ${data.attorneys.pending} pending · ${data.cases.total.toLocaleString()} total cases`}
+        subtitle={`${data.attorneys.active} active attorneys · ${data.attorneys.pending} pending · ${formatNumber(data.cases.total)} total cases`}
       />
 
       <KpiGrid>
@@ -52,7 +52,7 @@ export default async function AdminOverviewPage(): Promise<React.ReactElement> {
         />
         <KpiCard
           label="Active attorneys"
-          value={data.attorneys.active.toLocaleString()}
+          value={formatNumber(data.attorneys.active)}
           sub={
             data.attorneys.pending > 0
               ? `${data.attorneys.pending} awaiting activation`
@@ -61,12 +61,12 @@ export default async function AdminOverviewPage(): Promise<React.ReactElement> {
         />
         <KpiCard
           label="Cases in flight"
-          value={(
+          value={formatNumber(
             data.cases.total -
-            (data.cases.byStatus.filed ?? 0) -
-            (data.cases.byStatus.archived ?? 0)
-          ).toLocaleString()}
-          sub={`${(data.cases.byStatus.filed ?? 0).toLocaleString()} filed lifetime`}
+              (data.cases.byStatus.filed ?? 0) -
+              (data.cases.byStatus.archived ?? 0),
+          )}
+          sub={`${formatNumber(data.cases.byStatus.filed ?? 0)} filed lifetime`}
         />
       </KpiGrid>
 
@@ -163,7 +163,7 @@ function PipelineRow(props: {
     <div className="flex items-baseline justify-between gap-3">
       <dt className="text-[var(--ink-muted)]">{props.label}</dt>
       <dd className="mono font-medium" style={{ color: valueColor }}>
-        {props.value.toLocaleString()}
+        {formatNumber(props.value)}
       </dd>
     </div>
   );

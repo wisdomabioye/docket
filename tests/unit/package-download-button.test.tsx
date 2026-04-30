@@ -22,7 +22,7 @@ vi.mock("@/lib/trpc/react", () => ({
   },
 }));
 
-import { PackageDownloadButton } from "@/app/(app)/case/[id]/package/PackageDownloadButton";
+import { PackageDownloadButton } from "@/app/(app)/(workspace)/case/[id]/package/PackageDownloadButton";
 
 afterEach(() => {
   cleanup();
