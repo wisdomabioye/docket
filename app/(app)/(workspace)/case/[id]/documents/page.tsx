@@ -2,20 +2,28 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
+import { CaseHeader } from "@/components/case";
 import { DocumentsPanel } from "./DocumentsPanel";
 
 type Props = { params: Promise<{ id: string }> };
 
 export async function generateMetadata({ params }: Props) {
   const { id } = await params;
-  return { title: pageTitle(`Documents · ${id.slice(0, 8)}`) };
+  return { title: pageTitle(`Documents · ${id.slice(0, 4)}`) };
 }
 
 /**
  * Per-case documents tab. Drop-zone for upload + list of existing files
  * with extraction status pills.
+ *
+ * Stage 11 α — wraps with `CaseHeader` so the tab strip + status pill
+ * are present (mockup `documents.html` shows the same `.case-hdr` +
+ * `.tabs` block as `case-overview.html`). Inner `<main>` dropped; the
+ * workspace shell owns it.
  */
-export default async function DocumentsPage({ params }: Props) {
+export default async function DocumentsPage({
+  params,
+}: Props): Promise<React.ReactElement> {
   const session = await auth();
   if (!session?.user) redirect(APP_ROUTES.login);
 
@@ -24,24 +32,23 @@ export default async function DocumentsPage({ params }: Props) {
   if (!caseRow) notFound();
 
   const docs = await api.document.list({ caseId: id });
+  const beneficiary =
+    (caseRow.beneficiaryData as {
+      fullName?: string;
+      nationality?: string;
+    } | null) ?? {};
+  const meta = beneficiary.nationality ? beneficiary.nationality : undefined;
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10 space-y-8">
-      <header>
-        <p className="text-xs uppercase tracking-[0.3em] text-[var(--color-ink-muted)]">
-          Documents · {caseRow.visaType}
-        </p>
-        <h1
-          className="mt-2 text-2xl tracking-tight"
-          style={{ fontFamily: "var(--font-serif)" }}
-        >
-          Evidence files
-        </h1>
-        <p className="mt-2 text-sm text-[var(--color-ink-muted)]">
-          PDF and DOCX supported. Files are extracted on upload so the
-          drafting AI can read them.
-        </p>
-      </header>
+    <div className="mx-auto max-w-5xl space-y-6">
+      <CaseHeader
+        caseId={caseRow.id}
+        beneficiaryName={beneficiary.fullName ?? "Unnamed beneficiary"}
+        visaType={caseRow.visaType}
+        {...(meta ? { meta } : {})}
+        status={caseRow.status}
+        current="documents"
+      />
 
       <DocumentsPanel
         caseId={id}
@@ -52,6 +59,6 @@ export default async function DocumentsPage({ params }: Props) {
           extractedAt: d.extractedAt ? d.extractedAt.toISOString() : null,
         }))}
       />
-    </main>
+    </div>
   );
 }
