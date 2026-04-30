@@ -8,7 +8,10 @@ import {
   type BeneficiaryData,
 } from "@/server/db/schema/zod/beneficiary";
 
-type Props = { params: Promise<{ id: string }> };
+type Props = {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ section?: string }>;
+};
 
 export async function generateMetadata({ params }: Props) {
   const { id } = await params;
@@ -27,11 +30,13 @@ export async function generateMetadata({ params }: Props) {
  */
 export default async function IntakePage({
   params,
+  searchParams,
 }: Props): Promise<React.ReactElement> {
   const session = await auth();
   if (!session?.user) redirect(APP_ROUTES.login);
 
   const { id } = await params;
+  const { section } = await searchParams;
   const data = await api.case.get({ caseId: id });
   if (!data) notFound();
 
@@ -63,6 +68,7 @@ export default async function IntakePage({
         rowRevision={data.rowRevision}
         currentStatus={data.status}
         locked={locked}
+        {...(section ? { initialSection: section } : {})}
       />
     </div>
   );

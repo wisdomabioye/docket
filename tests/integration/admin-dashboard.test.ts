@@ -17,6 +17,20 @@ vi.mock("@/server/auth/config", () => ({
   auth: vi.fn(() => Promise.resolve(null)),
 }));
 
+// Mock the Redis singleton so the health-snapshot test is independent
+// of the local `.env.local` (a developer with UPSTASH_REDIS_REST_URL
+// set would otherwise see `getRedis()` return a real client and the
+// "unknown when unconfigured" assertion would fail). The mock is
+// reconfigured per-test via `getRedisMock.mockReturnValue(...)`.
+const getRedisMock = vi.hoisted(() => vi.fn<() => unknown>(() => null));
+vi.mock("@/server/services/redis", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/server/services/redis")>(
+      "@/server/services/redis",
+    );
+  return { ...actual, getRedis: getRedisMock };
+});
+
 import { createCallerFactory } from "@/server/api/trpc";
 import { appRouter } from "@/server/api/root";
 import {

@@ -11,6 +11,8 @@ import {
 } from "@/server/services/computer/types";
 import type { PromptSpec } from "@/server/services/computer/prompts/context";
 import { isAppError } from "@/lib/errors";
+import { EvidencePlanSchema } from "@/server/db/schema/zod";
+import { ExhibitIndexSchema } from "@/server/services/computer/prompts/exhibit-index";
 
 /**
  * Shared per-output runner. The 5 sub-functions (evidence-plan,
@@ -98,6 +100,15 @@ export async function runOutputJob(
   }
   const computeDurationMs = Date.now() - startedAt;
 
+  // Schema-validate the producer's output BEFORE persisting. Catches
+  // model drift / malformed JSON at the producing job (where Inngest's
+  // per-function retry can re-roll the call) instead of letting a
+  // corrupt row land in `case_outputs.content` and surface as a
+  // misleading downstream "evidencePlan must be populated" cascade.
+  // Only structured outputs (`evidence_plan`, `exhibit_index`) are
+  // validated; prose outputs have no schema to check.
+  validateStructuredOutput(outputType, out.text);
+
   // Field-precedence rule: caller's `extraMetadata` is for typed-branch
   // fields (e.g. `recommenderName` on `recommendation_letter_template`),
   // NOT for overriding the runner's authoritative attribution. So
@@ -171,3 +182,52 @@ export const OUTPUT_JOB_CONCURRENCY = {
   key: "event.data.caseId",
   limit: 1,
 } as const;
+
+/**
+ * Validates structured-output content against its Zod schema before
+ * persistence. Throws a plain `Error` on failure so Inngest's per-job
+ * `retries` (default 2) gets a chance to re-roll the model — same
+ * pattern Inngest uses for transient API failures. If every retry
+ * fails, the parent build's `onFailure` cleans up to `build_failed`
+ * with an actionable error message.
+ *
+ * Prose outputs (`personal_statement`, `petition_letter`, etc.) have no
+ * schema and are skipped — there's nothing to validate against.
+ *
+ * Exporting for direct test coverage so we can pin the contract
+ * without instantiating the whole runner.
+ */
+export function validateStructuredOutput(
+  outputType: OutputType,
+  text: string,
+): void {
+  let schema: typeof EvidencePlanSchema | typeof ExhibitIndexSchema | null;
+  switch (outputType) {
+    case "evidence_plan":
+      schema = EvidencePlanSchema;
+      break;
+    case "exhibit_index":
+      schema = ExhibitIndexSchema;
+      break;
+    default:
+      return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `${outputType} output is not valid JSON — model returned non-JSON text. Retrying.`,
+    );
+  }
+  const result = schema.safeParse(parsed);
+  if (!result.success) {
+    const firstIssue = result.error.issues[0];
+    const detail = firstIssue
+      ? `${firstIssue.path.join(".") || "<root>"}: ${firstIssue.message}`
+      : "unknown schema error";
+    throw new Error(
+      `${outputType} output failed schema validation (${detail}). Retrying.`,
+    );
+  }
+}

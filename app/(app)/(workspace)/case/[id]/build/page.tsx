@@ -137,7 +137,7 @@ export default async function CaseBuildPage({
         </ul>
       </Card>
 
-      <Card title="Generate" flush>
+      <Card title="Build" flush>
         <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-sm" style={{ color: "var(--ink-soft)" }}>
             {readiness.ok ? (
@@ -148,7 +148,7 @@ export default async function CaseBuildPage({
               </>
             ) : (
               <>
-                Resolve the gaps above before generating.{" "}
+                Resolve the gaps above before building.{" "}
                 <span style={{ color: "var(--ink-muted)" }}>
                   The button stays disabled until every check is green.
                 </span>

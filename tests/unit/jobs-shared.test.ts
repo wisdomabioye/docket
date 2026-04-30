@@ -69,7 +69,7 @@ async function callRunner(args?: {
   const { runOutputJob } = await import("@/server/jobs/_shared");
   return runOutputJob({
     caseId: "c1",
-    outputType: "evidence_plan",
+    outputType: "personal_statement",
     prompt: promptStub,
     sessionId: "sess",
   });
@@ -93,7 +93,7 @@ describe("runOutputJob — happy path", () => {
       expect.objectContaining({
         systemPrompt: "sys",
         userPrompt: "usr",
-        metadata: { caseId: "c1", outputType: "evidence_plan", sessionId: "sess" },
+        metadata: { caseId: "c1", outputType: "personal_statement", sessionId: "sess" },
       }),
     );
   });
@@ -169,5 +169,67 @@ describe("runOutputJob — error classification", () => {
   it("non-Error rejections get wrapped (no swallowing)", async () => {
     await expect(callRunner({ generateRejection: "string-rejection" }))
       .rejects.toBeInstanceOf(Error);
+  });
+});
+
+describe("validateStructuredOutput", () => {
+  // Producer-side schema enforcement. Catches model drift / malformed
+  // JSON at the writing job (where Inngest's per-function retries can
+  // re-roll the call) instead of letting a corrupt row land in
+  // case_outputs.content and surface as a confusing downstream
+  // "evidencePlan must be populated" cascade.
+
+  it("accepts evidence_plan content that conforms to EvidencePlanSchema", async () => {
+    const { validateStructuredOutput } = await import("@/server/jobs/_shared");
+    const valid = JSON.stringify({
+      visaType: "O-1A",
+      overallStrength: "moderate",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      criteria: [
+        { criterion: "Awards", assessment: "moderate", summary: "ok", gaps: [] },
+      ],
+    });
+    expect(() => validateStructuredOutput("evidence_plan", valid)).not.toThrow();
+  });
+
+  it("rejects evidence_plan content that fails the schema (regression: prevents the bug we just fixed)", async () => {
+    const { validateStructuredOutput } = await import("@/server/jobs/_shared");
+    const wrongShape = JSON.stringify({ _mock: true, items: [] });
+    expect(() => validateStructuredOutput("evidence_plan", wrongShape)).toThrow(
+      /failed schema validation/,
+    );
+  });
+
+  it("rejects non-JSON content with a clear message (model returned prose)", async () => {
+    const { validateStructuredOutput } = await import("@/server/jobs/_shared");
+    expect(() =>
+      validateStructuredOutput("evidence_plan", "not even json"),
+    ).toThrow(/not valid JSON/);
+  });
+
+  it("accepts exhibit_index content that conforms to ExhibitIndexSchema", async () => {
+    const { validateStructuredOutput } = await import("@/server/jobs/_shared");
+    const valid = JSON.stringify({
+      entries: [
+        {
+          label: "Exhibit A",
+          documentId: "doc-1",
+          filename: "x.pdf",
+          description: "ok",
+          supportsCriteria: ["Awards"],
+        },
+      ],
+    });
+    expect(() => validateStructuredOutput("exhibit_index", valid)).not.toThrow();
+  });
+
+  it("skips validation for prose outputs (no schema to check against)", async () => {
+    const { validateStructuredOutput } = await import("@/server/jobs/_shared");
+    expect(() =>
+      validateStructuredOutput("personal_statement", "any prose at all"),
+    ).not.toThrow();
+    expect(() =>
+      validateStructuredOutput("petition_letter", "{not even valid json"),
+    ).not.toThrow();
   });
 });

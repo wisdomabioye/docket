@@ -118,7 +118,7 @@ export function DocumentsPanel(props: {
 
       <div
         {...dz.getRootProps()}
-        className={`rounded-md border-2 border-dashed p-8 text-center text-sm transition ${
+        className={`cursor-pointer rounded-md border-2 border-dashed p-8 text-center text-sm transition ${
           dz.isDragActive
             ? "border-[var(--color-ink)] bg-[var(--color-ink)]/5"
             : "border-[var(--color-ink)]/20"

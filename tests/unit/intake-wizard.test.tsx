@@ -134,7 +134,14 @@ describe("IntakeWizard — auto-save", () => {
       target: { value: "Test Beneficiary 001" },
     });
     // Click the Practice section in the side nav (no debounce wait).
-    fireEvent.click(screen.getByRole("button", { name: /practice/i }));
+    // Both the sidebar item and the footer "Next: Practice →" CTA match
+    // /practice/i — pick the sidebar one (it has the section-stats span
+    // showing 1/3 filled because we just typed into Full name).
+    const sidebarLink = screen
+      .getAllByRole("button", { name: /practice/i })
+      .find((btn) => btn.textContent?.includes("/"));
+    if (!sidebarLink) throw new Error("sidebar Practice button not found");
+    fireEvent.click(sidebarLink);
     expect(updateMutateMock).toHaveBeenCalledTimes(1);
     expect(routerPushMock).toHaveBeenCalledWith(
       expect.stringContaining("?section=practice"),
@@ -163,8 +170,23 @@ describe("IntakeWizard — locked", () => {
   });
 });
 
-describe("IntakeWizard — completeIntake", () => {
-  it("submit button only fires when currentStatus === 'intake'", () => {
+describe("IntakeWizard — per-section CTA", () => {
+  it("non-final sections render a 'Next: <Section>' button that advances the URL", () => {
+    render(<IntakeWizard {...baseProps} />);
+    // Default section is `profile`; the next is `practice`.
+    const next = screen.getByRole("button", { name: /next: practice/i });
+    fireEvent.click(next);
+    expect(routerPushMock).toHaveBeenCalledWith(
+      expect.stringContaining("?section=practice"),
+      expect.objectContaining({ scroll: false }),
+    );
+    expect(completeMutateMock).not.toHaveBeenCalled();
+  });
+
+  it("final section renders the Submit intake CTA, which fires completeIntake", () => {
+    searchParamsMock.get.mockImplementation((k: string) =>
+      k === "section" ? "narrative" : null,
+    );
     render(<IntakeWizard {...baseProps} />);
     fireEvent.click(screen.getByRole("button", { name: /submit intake/i }));
     expect(completeMutateMock).toHaveBeenCalledWith(
@@ -173,12 +195,13 @@ describe("IntakeWizard — completeIntake", () => {
     );
   });
 
-  it("disables (and skips) the submit button once status is past intake", () => {
+  it("Submit intake disables (and skips) once status is past intake", () => {
+    searchParamsMock.get.mockImplementation((k: string) =>
+      k === "section" ? "narrative" : null,
+    );
     render(
       <IntakeWizard {...baseProps} currentStatus="documents_pending" />,
     );
-    // The CTA isn't rendered as 'Complete intake' once status moved on,
-    // OR it's rendered disabled — either way clicking shouldn't mutate.
     const btn = screen.queryByRole("button", { name: /submit intake/i });
     if (btn) fireEvent.click(btn);
     expect(completeMutateMock).not.toHaveBeenCalled();

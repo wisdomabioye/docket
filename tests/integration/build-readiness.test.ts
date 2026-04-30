@@ -20,7 +20,11 @@ import {
   type TestDb,
 } from "../helpers/db";
 import { truncateAllAppTables } from "../helpers/truncate";
-import { meetsBuildRequirements } from "@/server/services/cases/readiness";
+import {
+  meetsBuildRequirements,
+  reconcileCaseAfterExtraction,
+} from "@/server/services/cases/readiness";
+import { caseEvents } from "@/server/db/schema";
 
 /**
  * Direct unit test for `meetsBuildRequirements` against a real DB.
@@ -225,6 +229,125 @@ describe("meetsBuildRequirements", () => {
   });
 });
 
+describe("reconcileCaseAfterExtraction", () => {
+  it("documents_pending → extracting when at least one doc is processing", async (ctx) => {
+    const d = gate(ctx);
+    await d
+      .update(cases)
+      .set({ status: "documents_pending" })
+      .where(eq(cases.id, CASE_ID));
+    await insertDocWithStatus(d, "a", "processing");
+
+    await reconcileCaseAfterExtraction({ conn: d as never, caseId: CASE_ID });
+
+    const [row] = await d
+      .select({ status: cases.status })
+      .from(cases)
+      .where(eq(cases.id, CASE_ID));
+    expect(row?.status).toBe("extracting");
+  });
+
+  it("extracting → ready_to_build once every doc is completed-with-text", async (ctx) => {
+    const d = gate(ctx);
+    await d
+      .update(cases)
+      .set({ status: "extracting" })
+      .where(eq(cases.id, CASE_ID));
+    await insertCompletedDoc(d, "a");
+    await insertCompletedDoc(d, "b");
+
+    await reconcileCaseAfterExtraction({ conn: d as never, caseId: CASE_ID });
+
+    const [row] = await d
+      .select({ status: cases.status })
+      .from(cases)
+      .where(eq(cases.id, CASE_ID));
+    expect(row?.status).toBe("ready_to_build");
+
+    // status_changed event written so the activity feed sees the flip.
+    const events = await d
+      .select({ eventType: caseEvents.eventType })
+      .from(caseEvents)
+      .where(eq(caseEvents.caseId, CASE_ID));
+    expect(events.some((e) => e.eventType === "case.status_changed")).toBe(true);
+  });
+
+  it("extracting → build_failed when every extraction failed (zero text)", async (ctx) => {
+    const d = gate(ctx);
+    await d
+      .update(cases)
+      .set({ status: "extracting" })
+      .where(eq(cases.id, CASE_ID));
+    await insertDocWithStatus(d, "a", "failed");
+
+    await reconcileCaseAfterExtraction({ conn: d as never, caseId: CASE_ID });
+
+    const [row] = await d
+      .select({ status: cases.status })
+      .from(cases)
+      .where(eq(cases.id, CASE_ID));
+    expect(row?.status).toBe("build_failed");
+  });
+
+  it("does not promote past extracting while pending docs remain", async (ctx) => {
+    const d = gate(ctx);
+    await d
+      .update(cases)
+      .set({ status: "extracting" })
+      .where(eq(cases.id, CASE_ID));
+    await insertCompletedDoc(d, "a");
+    await insertDocWithStatus(d, "b", "processing");
+
+    await reconcileCaseAfterExtraction({ conn: d as never, caseId: CASE_ID });
+
+    const [row] = await d
+      .select({ status: cases.status })
+      .from(cases)
+      .where(eq(cases.id, CASE_ID));
+    expect(row?.status).toBe("extracting");
+  });
+
+  it("leaves later lifecycle statuses alone (no auto-revert)", async (ctx) => {
+    const d = gate(ctx);
+    // building / draft_ready / approved etc. are not driven by
+    // extraction; reconcile must not flip them backward.
+    await d
+      .update(cases)
+      .set({ status: "draft_ready" })
+      .where(eq(cases.id, CASE_ID));
+    await insertCompletedDoc(d, "a");
+
+    await reconcileCaseAfterExtraction({ conn: d as never, caseId: CASE_ID });
+
+    const [row] = await d
+      .select({ status: cases.status })
+      .from(cases)
+      .where(eq(cases.id, CASE_ID));
+    expect(row?.status).toBe("draft_ready");
+  });
+
+  it("is idempotent — calling twice in a row is a no-op the second time", async (ctx) => {
+    const d = gate(ctx);
+    await d
+      .update(cases)
+      .set({ status: "extracting" })
+      .where(eq(cases.id, CASE_ID));
+    await insertCompletedDoc(d, "a");
+
+    await reconcileCaseAfterExtraction({ conn: d as never, caseId: CASE_ID });
+    await reconcileCaseAfterExtraction({ conn: d as never, caseId: CASE_ID });
+
+    const events = await d
+      .select({ eventType: caseEvents.eventType })
+      .from(caseEvents)
+      .where(eq(caseEvents.caseId, CASE_ID));
+    // Exactly one status_changed event despite two reconcile calls.
+    expect(
+      events.filter((e) => e.eventType === "case.status_changed"),
+    ).toHaveLength(1);
+  });
+});
+
 async function seedBase(d: TestDb): Promise<void> {
   await d.insert(users).values({
     id: ATTORNEY,
@@ -262,5 +385,23 @@ async function insertCompletedDoc(d: TestDb, suffix: string): Promise<void> {
     storagePath: `/t/cv-${suffix}.pdf`,
     extractionStatus: "completed",
     extractedText: "extracted prose",
+  });
+}
+
+async function insertDocWithStatus(
+  d: TestDb,
+  suffix: string,
+  status: "pending" | "processing" | "completed" | "failed",
+): Promise<void> {
+  await d.insert(caseDocuments).values({
+    caseId: CASE_ID,
+    uploadedBy: ATTORNEY,
+    documentType: "cv_resume",
+    originalFilename: `cv-${suffix}.pdf`,
+    mimeType: "application/pdf",
+    sizeBytes: 1n,
+    sha256: suffix.padEnd(64, "0"),
+    storagePath: `/t/cv-${suffix}.pdf`,
+    extractionStatus: status,
   });
 }

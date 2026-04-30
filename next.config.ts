@@ -2,7 +2,13 @@ import { withSentryConfig } from "@sentry/nextjs";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Keep PDF / OCR / docx parsers out of Next's server bundle. They
+  // resolve their own worker / asset paths via Node `require` at
+  // runtime; Next's chunking rewrites those paths to non-existent
+  // .next/dev/server/chunks/* files and the loader fails ("Setting up
+  // fake worker failed: Cannot find module ...pdf.worker.mjs").
+  // Listing them here uses native node module resolution instead.
+  serverExternalPackages: ["pdf-parse", "pdfjs-dist"],
 };
 
 export default withSentryConfig(nextConfig, {

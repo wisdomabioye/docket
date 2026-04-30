@@ -4,6 +4,8 @@ import {
   ComputerOutputSchema,
   type ComputerInput,
 } from "@/server/services/computer/types";
+import { EvidencePlanSchema } from "@/server/db/schema/zod";
+import { ExhibitIndexSchema } from "@/server/services/computer/prompts/exhibit-index";
 
 /**
  * `MockComputerClient` is the dev default until `PERPLEXITY_API_KEY` is
@@ -55,22 +57,54 @@ describe("MockComputerClient", () => {
     expect(out.usage.usdCents).toBeGreaterThan(0);
   });
 
-  it("returns JSON when jsonSchema is provided", async () => {
+  it("returns evidence_plan JSON that conforms to EvidencePlanSchema", async () => {
+    // REGRESSION TEST: prior mock returned `{ _mock: true, ... }`, which
+    // failed `EvidencePlanSchema.safeParse` in `loadBuildContext`. That
+    // returned `evidencePlan: null`, and every dependent prompt
+    // (personal-statement, petition-letter, exhibit-index,
+    // recommendation-letter) threw "evidencePlan must be populated".
+    // The mock MUST produce a payload that round-trips through the
+    // schema or the entire dev-mode build pipeline is broken.
     const client = new MockComputerClient();
     const out = await client.generate({
       ...baseInput,
       jsonSchema: {
         name: "evidence_plan",
-        schema: { type: "object", properties: { items: { type: "array" } } },
+        schema: { type: "object" },
       },
-      metadata: {
-        ...baseInput.metadata,
-        outputType: "evidence_plan",
-      },
+      metadata: { ...baseInput.metadata, outputType: "evidence_plan" },
     });
+    const parsed: unknown = JSON.parse(out.text);
+    const result = EvidencePlanSchema.safeParse(parsed);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.criteria.length).toBeGreaterThan(0);
+      expect(result.data.visaType).toBe("O-1A");
+    }
+  });
+
+  it("returns exhibit_index JSON that conforms to ExhibitIndexSchema", async () => {
+    const client = new MockComputerClient();
+    const out = await client.generate({
+      ...baseInput,
+      jsonSchema: { name: "exhibit_index", schema: { type: "object" } },
+      metadata: { ...baseInput.metadata, outputType: "exhibit_index" },
+    });
+    const parsed: unknown = JSON.parse(out.text);
+    expect(ExhibitIndexSchema.safeParse(parsed).success).toBe(true);
+  });
+
+  it("falls back to a generic _mock blob for unknown structured types", async () => {
+    const client = new MockComputerClient();
+    const out = await client.generate({
+      ...baseInput,
+      jsonSchema: { name: "future_thing", schema: { type: "object" } },
+      metadata: { ...baseInput.metadata, outputType: "petition_letter" },
+    });
+    // petition_letter currently uses prose, not JSON — but the test
+    // targets the fallback path: any structured outputType we haven't
+    // stubbed should still produce parseable JSON, not crash.
     expect(() => JSON.parse(out.text)).not.toThrow();
-    const parsed = JSON.parse(out.text) as { _mock: boolean };
-    expect(parsed._mock).toBe(true);
   });
 
   it("ping always resolves ok", async () => {

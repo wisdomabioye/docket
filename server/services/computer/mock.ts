@@ -58,8 +58,9 @@ export class MockComputerClient implements ComputerClient {
 }
 
 /** Per-output stamp that makes mock-generated content obvious in the UI
- *  and gives just enough realistic structure (lorem-ish prose / a JSON
- *  scaffold) for downstream code to render against. */
+ *  and gives just enough realistic structure (schema-conforming JSON for
+ *  the structured outputs / lorem prose for the rest) for downstream
+ *  code to render against. */
 function generateMockText(args: {
   caseId: string;
   outputType: string;
@@ -69,10 +70,16 @@ function generateMockText(args: {
 
   if (args.hasJsonSchema) {
     // The structured-output sub-functions (evidence-plan, exhibit-index,
-    // criteria-analysis) parse the response as JSON. Return a minimal
-    // skeleton that round-trips through any JSON.parse caller; specific
-    // schemas can stub real values once the pipeline integration test
-    // pins the shape.
+    // criteria-analysis) re-parse the response with a Zod schema in
+    // `_context.ts` / the prompt builders. A generic `{ _mock: true }`
+    // payload fails `safeParse`, returns null, and every downstream
+    // prompt that depends on it (personal-statement, petition-letter,
+    // exhibit-index, recommendation-letter) throws "evidencePlan must
+    // be populated". Return per-type minimal-but-conforming payloads.
+    const conforming = mockStructuredPayload(args);
+    if (conforming) return conforming;
+    // Fallback for unknown structured types — keep the legacy shape so
+    // any caller that doesn't hard-validate still gets something sensible.
     return JSON.stringify(
       { _mock: true, stamp, caseId: args.caseId, outputType: args.outputType, items: [] },
       null,
@@ -96,6 +103,67 @@ function generateMockText(args: {
     `(Stand-in body for ${args.outputType} on case ${args.caseId}. Real`,
     "Perplexity Sonar output replaces this once PERPLEXITY_API_KEY is set.)",
   ].join("\n");
+}
+
+/** Stable timestamp baked into structured mocks. A live `new Date()` would
+ *  break the per-(caseId, outputType) determinism the partial-unique
+ *  idempotency index depends on; a hardcoded value keeps the same input
+ *  → same content invariant regardless of when the build runs. */
+const MOCK_GENERATED_AT = "2026-01-01T00:00:00.000Z";
+
+/** Per-output JSON payload that conforms to the corresponding Zod
+ *  schema. Returns `null` for outputType we haven't stubbed — the caller
+ *  falls back to the generic `_mock` blob. */
+function mockStructuredPayload(args: {
+  caseId: string;
+  outputType: string;
+}): string | null {
+  switch (args.outputType) {
+    case "evidence_plan":
+      // Conforms to `EvidencePlanSchema` (server/db/schema/zod/evidence-plan.ts).
+      // 8 O-1A criteria — matches `lib/visa-criteria.ts` so attorneys see
+      // a familiar shape in dev. visaType is hardcoded "O-1A" because the
+      // mock has no access to the case row; Phase 1 only ships O-1A
+      // anyway.
+      return JSON.stringify({
+        visaType: "O-1A",
+        overallStrength: "moderate",
+        generatedAt: MOCK_GENERATED_AT,
+        criteria: [
+          { criterion: "Prizes & awards", assessment: "weak", summary: `[MOCK ${args.caseId}] Stand-in assessment for prizes & awards.`, gaps: ["Add awards documentation."] },
+          { criterion: "Association membership", assessment: "moderate", summary: "[MOCK] Stand-in association membership summary.", gaps: [] },
+          { criterion: "Published material", assessment: "weak", summary: "[MOCK] Press coverage stub.", gaps: ["Identify additional press."] },
+          { criterion: "Scholarly contributions", assessment: "moderate", summary: "[MOCK] Publication summary stub.", gaps: [] },
+          { criterion: "Peer review", assessment: "absent", summary: "[MOCK] Peer review stub.", gaps: ["Document peer review participation."] },
+          { criterion: "Original research", assessment: "moderate", summary: "[MOCK] Original research stub.", gaps: [] },
+          { criterion: "Critical role", assessment: "strong", summary: "[MOCK] Critical role stub.", gaps: [] },
+          { criterion: "High remuneration", assessment: "weak", summary: "[MOCK] Remuneration stub.", gaps: ["Add salary evidence."] },
+        ],
+      });
+    case "exhibit_index":
+      // Conforms to `ExhibitIndexSchema` (server/services/computer/prompts/exhibit-index.ts).
+      return JSON.stringify({
+        entries: [
+          {
+            label: "Exhibit A",
+            documentId: `mock-doc-${args.caseId.slice(0, 8)}`,
+            filename: "mock-stand-in.pdf",
+            description: `[MOCK ${args.caseId}] Stand-in exhibit description for the dev pipeline.`,
+            supportsCriteria: ["Critical role"],
+          },
+        ],
+      });
+    case "criteria_analysis":
+      // Generic minimal shape; criteria_analysis isn't currently in the
+      // build fan-out, but if a future caller validates with a schema
+      // they'll get a parseable payload.
+      return JSON.stringify({
+        visaType: "O-1A",
+        analyses: [],
+      });
+    default:
+      return null;
+  }
 }
 
 function wait(ms: number): Promise<void> {

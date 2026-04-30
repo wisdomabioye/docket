@@ -45,8 +45,16 @@ describe("case status state machine", () => {
     }
   });
 
-  it("build_failed → ready_to_build allows retry", () => {
+  it("build_failed → ready_to_build allows retry (admin / reset path)", () => {
     expect(canTransition("build_failed", "ready_to_build")).toBe(true);
+  });
+
+  it("build_failed → building allows the retry path the build CTA uses", () => {
+    // BUILDABLE_STATUSES says `build_failed` is buildable; without this
+    // edge the requestBuild mutation throws "illegal status transition
+    // build_failed → building" the moment an attorney clicks Build
+    // after a watchdog sweep.
+    expect(canTransition("build_failed", "building")).toBe(true);
   });
 
   it("needs_revision → in_review allows resume", () => {

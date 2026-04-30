@@ -49,7 +49,11 @@ const TRANSITIONS: Readonly<Record<CaseStatus, readonly CaseStatus[]>> = {
   extracting: ["ready_to_build", "build_failed", "archived"], // Stage 06/07
   ready_to_build: ["building", "archived"], // Stage 07
   building: ["draft_ready", "build_failed", "archived"], // Stage 07
-  build_failed: ["ready_to_build", "archived"], // Stage 07 (retry)
+  // `build_failed → building` is the retry edge: requestBuild kicks
+  // a fresh run directly. Threading through ready_to_build first
+  // would be a no-op hop. `→ ready_to_build` stays legal so an admin /
+  // future "reset" tool can rewind to the pre-build state.
+  build_failed: ["building", "ready_to_build", "archived"], // Stage 07 (retry)
   draft_ready: ["in_review", "archived"], // Stage 08
   in_review: ["needs_revision", "approved", "archived"], // Stage 08
   needs_revision: ["in_review", "archived"], // Stage 08

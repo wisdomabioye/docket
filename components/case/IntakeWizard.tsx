@@ -142,12 +142,26 @@ export type IntakeWizardProps = {
   rowRevision: number;
   currentStatus: string;
   locked: boolean;
+  /** Server-resolved active section key (from `?section=` on the URL).
+   *  Seeded by the page from its server-side searchParams so the SSR
+   *  render and the client hydrate produce identical HTML. The
+   *  `useSearchParams` hook is still used for soft-navigation updates
+   *  AFTER hydration (see below). */
+  initialSection?: string;
 };
 
 export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const sectionParam = searchParams.get("section");
+  // Resolve the active section key once per render. On the server-side
+  // pass we read the prop (server-supplied via the page's searchParams);
+  // on the client we read from the hook so navigation via router.push
+  // updates the active section without a full refresh. Both sources
+  // agree on the first render because the prop is exactly what the URL
+  // says — no SSR/CSR mismatch.
+  const hookSection = searchParams.get("section");
+  const propSection = props.initialSection ?? null;
+  const sectionParam = hookSection ?? propSection;
   const activeKey =
     SECTIONS.find((s) => s.key === sectionParam)?.key ?? DEFAULT_SECTION_KEY;
   const activeSection =
@@ -333,6 +347,8 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
           updatePending={update.isPending}
           submitPending={complete.isPending}
           canComplete={props.currentStatus === "intake"}
+          nextSection={nextSectionAfter(activeSection.key)}
+          onNext={(key) => navigateToSection(key)}
           onSubmit={onSubmit}
         />
 
@@ -478,8 +494,15 @@ function FooterBar(props: {
   updatePending: boolean;
   submitPending: boolean;
   canComplete: boolean;
+  /** Next section after the current one, or `null` on the last section.
+   *  When non-null, the primary CTA advances the wizard instead of
+   *  firing `completeIntake`. Auto-save means data persists either way;
+   *  the CTA's only job is page navigation up to section 4. */
+  nextSection: SectionDef | null;
+  onNext: (key: string) => void;
   onSubmit: () => void;
 }): React.ReactElement {
+  const onLastSection = props.nextSection === null;
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="text-xs" style={{ color: "var(--ink-muted)" }}>
@@ -492,18 +515,31 @@ function FooterBar(props: {
               : "Auto-saves as you type."}
       </p>
       {!props.locked ? (
-        <button
-          type="button"
-          onClick={props.onSubmit}
-          disabled={props.busy || !props.canComplete}
-          className="rounded-md border px-4 py-2 text-sm font-medium text-[var(--cream)] disabled:opacity-50"
-          style={{ borderColor: "var(--ink)", background: "var(--ink)" }}
-          title={
-            !props.canComplete ? "Intake already submitted" : "Submit intake"
-          }
-        >
-          {props.submitPending ? "Submitting…" : "Submit intake →"}
-        </button>
+        onLastSection ? (
+          <button
+            type="button"
+            onClick={props.onSubmit}
+            disabled={props.busy || !props.canComplete}
+            className="rounded-md border px-4 py-2 text-sm font-medium text-[var(--cream)] disabled:opacity-50"
+            style={{ borderColor: "var(--ink)", background: "var(--ink)" }}
+            title={
+              !props.canComplete ? "Intake already submitted" : "Submit intake"
+            }
+          >
+            {props.submitPending ? "Submitting…" : "Submit intake →"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => props.onNext(props.nextSection!.key)}
+            disabled={props.busy}
+            className="rounded-md border px-4 py-2 text-sm font-medium text-[var(--cream)] disabled:opacity-50"
+            style={{ borderColor: "var(--ink)", background: "var(--ink)" }}
+            title={`Continue to ${props.nextSection!.label}`}
+          >
+            Next: {props.nextSection!.label} →
+          </button>
+        )
       ) : null}
     </div>
   );
@@ -524,6 +560,12 @@ function inputType(control: FieldDef["control"]): string {
     default:
       return "text";
   }
+}
+
+function nextSectionAfter(activeKey: string): SectionDef | null {
+  const idx = SECTIONS.findIndex((s) => s.key === activeKey);
+  if (idx === -1 || idx >= SECTIONS.length - 1) return null;
+  return SECTIONS[idx + 1] ?? null;
 }
 
 function countFilled(section: SectionDef, values: BeneficiaryData): number {

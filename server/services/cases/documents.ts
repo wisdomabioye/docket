@@ -5,6 +5,7 @@ import { db, type Db } from "@/server/db/client";
 import { caseDocuments, caseEvents } from "@/server/db/schema";
 import { documentKey, storage } from "@/server/services/storage";
 import { extract } from "@/server/services/extraction";
+import { reconcileCaseAfterExtraction } from "@/server/services/cases/readiness";
 import { AppError } from "@/lib/errors";
 import { DOCUMENT_TYPES, MAX_UPLOAD_BYTES } from "@/lib/constants";
 
@@ -115,7 +116,7 @@ export async function uploadAndExtract(args: {
   // Extract OUTSIDE the transaction — extraction can take seconds for big
   // PDFs, and we don't want to hold the DB row lock that long. The result
   // updates the row independently.
-  await extractAndPersist(documentId, args.bytes, args.mimeType, db);
+  await extractAndPersist(documentId, args.caseId, args.bytes, args.mimeType, db);
 
   return { documentId };
 }
@@ -123,6 +124,7 @@ export async function uploadAndExtract(args: {
 /** Re-runnable: idempotent based on extractionStatus. */
 export async function extractAndPersist(
   documentId: string,
+  caseId: string,
   bytes: Buffer,
   mimeType: string,
   conn: Db,
@@ -131,6 +133,11 @@ export async function extractAndPersist(
     .update(caseDocuments)
     .set({ extractionStatus: "processing" })
     .where(eq(caseDocuments.id, documentId));
+
+  // Pump the case lifecycle as soon as extraction starts —
+  // `documents_pending → extracting`. Idempotent: if the case is
+  // already in `extracting` (parallel uploads), this is a no-op.
+  await reconcileCaseAfterExtraction({ conn, caseId });
 
   const result = await extract({ bytes, mimeType });
 
@@ -143,18 +150,22 @@ export async function extractAndPersist(
         extractedAt: new Date(),
       })
       .where(eq(caseDocuments.id, documentId));
-    return;
+  } else {
+    await conn
+      .update(caseDocuments)
+      .set({
+        extractionStatus: "completed",
+        extractedText: result.text,
+        extractedAt: new Date(),
+        extractionError: null,
+      })
+      .where(eq(caseDocuments.id, documentId));
   }
 
-  await conn
-    .update(caseDocuments)
-    .set({
-      extractionStatus: "completed",
-      extractedText: result.text,
-      extractedAt: new Date(),
-      extractionError: null,
-    })
-    .where(eq(caseDocuments.id, documentId));
+  // Reconcile after the doc state is final — promotes
+  // `extracting → ready_to_build` (or `build_failed`) once every
+  // doc has finished. Runs for both success and failure paths.
+  await reconcileCaseAfterExtraction({ conn, caseId });
 }
 
 function isAllowedMime(mime: string): boolean {

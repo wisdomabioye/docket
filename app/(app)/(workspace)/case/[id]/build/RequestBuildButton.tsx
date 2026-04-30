@@ -50,7 +50,7 @@ export function RequestBuildButton(
           background: "var(--ink)",
         }}
       >
-        {mutation.isPending ? "Generating…" : "Generate drafts →"}
+        {mutation.isPending ? "Building…" : "Build drafts →"}
       </button>
       {error ? (
         <p

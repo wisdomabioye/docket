@@ -134,6 +134,12 @@ export function RevenuePanel(props: RevenuePanelProps): React.ReactElement {
                 background: locked ? "var(--surface-sunken)" : "var(--surface)",
               }}
               aria-label="Case fee in USD"
+              // Browser extensions (price trackers, form fillers) inject
+              // `data-*` attributes on monetary inputs before hydration.
+              // The rendered value/attrs are otherwise deterministic from
+              // props, so suppressing the warning here is honest — the
+              // diff is extension noise, not a real mismatch.
+              suppressHydrationWarning
             />
             {dirty && !locked ? (
               <button

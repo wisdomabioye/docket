@@ -13,6 +13,7 @@ vi.mock("@/server/auth/config", () => ({
 }));
 
 import { loadBuildContext } from "@/server/jobs/_context";
+import { MockComputerClient } from "@/server/services/computer/mock";
 import {
   closeTestDb,
   getTestDb,
@@ -128,6 +129,38 @@ describe("loadBuildContext — evidence plan source (#21)", () => {
     });
     const r = await loadBuildContext(CASE_ID);
     expect(r.evidencePlan).toBeNull();
+  });
+
+  // REGRESSION: in dev (no PERPLEXITY_API_KEY) the build pipeline runs
+  // through `MockComputerClient`. When the mock saved a non-conforming
+  // payload to the evidence_plan row, this loader returned null,
+  // and every dependent prompt threw "evidencePlan must be populated".
+  // The chain was broken end-to-end for the dev workflow.
+  it("populates evidencePlan from MockComputerClient output (dev pipeline)", async (ctx) => {
+    const d = gate(ctx);
+    const mock = new MockComputerClient();
+    const out = await mock.generate({
+      systemPrompt: "system",
+      userPrompt: "user",
+      jsonSchema: { name: "evidence_plan", schema: { type: "object" } },
+      metadata: {
+        caseId: CASE_ID,
+        outputType: "evidence_plan",
+        sessionId: "test",
+      },
+    });
+    await d.insert(caseOutputs).values({
+      caseId: CASE_ID,
+      outputType: "evidence_plan",
+      outputVersion: 1,
+      isCurrent: true,
+      author: "computer",
+      content: out.text,
+    });
+    const r = await loadBuildContext(CASE_ID);
+    expect(r.evidencePlan).not.toBeNull();
+    expect(r.evidencePlan?.visaType).toBe("O-1A");
+    expect(r.evidencePlan?.criteria.length).toBeGreaterThan(0);
   });
 
   it("returns null when JSON parses but doesn't match EvidencePlanSchema", async (ctx) => {
