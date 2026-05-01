@@ -13,6 +13,26 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #30 — Stale "Auto-saved · just now" on draft-recovery load
+
+Status: Tracked.
+Surfaced: 2026-05-01
+
+`app/(app)/(workspace)/case/[id]/outputs/[outputId]/OutputDetailPanel.tsx`
+— when the page loads with a pending draft, `autoSavedAt` is
+initialized to `new Date()` so the toolbar shows "Auto-saved · just
+now" regardless of when the server actually persisted the draft.
+Could have been an hour ago.
+
+Fix requires either (a) a `case_outputs.draft_updated_at` column
+shipped to the client via `output.get`, or (b) using the existing
+`updated_at` (but that bumps on `attorney_approved` toggles too — not
+draft-specific). Option (a) is the right answer — small migration +
+one set + one read. Logged for the next polish pass; non-blocking
+because the timestamp's only role is informational.
+
+---
+
 ### #29 — Verify R2 deploy preview end-to-end (W1.7)
 
 Status: Pending — requires founder action.

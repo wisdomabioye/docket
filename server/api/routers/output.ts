@@ -10,9 +10,11 @@ import {
   router,
 } from "@/server/api/trpc";
 import {
+  clearOutputDraft,
   getCurrentOutputsForList,
   getOutputVersionHistory,
   restoreOutputVersion,
+  saveOutputDraft,
   setOutputApproval,
   summarizeOutputApprovals,
   updateOutputContent,
@@ -65,6 +67,15 @@ const UpdateInput = z.object({
   outputId: z.uuid(),
   content: z.string().min(1).max(200_000),
 });
+
+// Drafts allow `""` (the user cleared the editor in mid-edit) — see
+// `saveOutputDraft` JSDoc. Same length cap as commits.
+const SaveDraftInput = z.object({
+  outputId: z.uuid(),
+  content: z.string().max(200_000),
+});
+
+const ClearDraftInput = z.object({ outputId: z.uuid() });
 
 const ApproveInput = z.object({
   outputId: z.uuid(),
@@ -187,6 +198,65 @@ export const outputRouter = router({
           ? { subgroupKey: input.subgroupKey }
           : {}),
       });
+    }),
+
+  /**
+   * Stage 11 W3 — save the editor's pending draft IN PLACE on the
+   * current row, no new version, no `attorney_approved` change. The
+   * editor's 3s debounce calls this; "Save version" goes through
+   * `update` instead.
+   *
+   * Rate-limited at 120/min/user (see `ratelimit.ts` for rationale).
+   * The service layer's idempotency check still drops no-op writes
+   * even when the limiter is bypassed.
+   */
+  saveDraft: attorneyProcedure
+    .input(SaveDraftInput)
+    .mutation(async ({ ctx, input }) => {
+      const { userId } = ctx;
+
+      const rl = await rateLimit("output.saveDraft", userId);
+      if (!rl.success) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Auto-save rate limit reached (${rl.limit}/min). Pause editing for a moment.`,
+        });
+      }
+
+      await gateOutputAccess({ ctxDb: ctx.db, outputId: input.outputId });
+      try {
+        const r = await ownerDb.transaction(async (tx) =>
+          saveOutputDraft({
+            tx: tx as unknown as Db,
+            outputId: input.outputId,
+            content: input.content,
+          }),
+        );
+        return { ok: true as const, saved: r.saved };
+      } catch (err) {
+        rethrowAsTrpc(err);
+      }
+    }),
+
+  /**
+   * Stage 11 W3 — discard the pending draft. Used by the editor's
+   * Cancel button. Idempotent: clearing an empty draft is a no-op.
+   */
+  clearDraft: attorneyProcedure
+    .input(ClearDraftInput)
+    .mutation(async ({ ctx, input }) => {
+      await gateOutputAccess({ ctxDb: ctx.db, outputId: input.outputId });
+      try {
+        const r = await ownerDb.transaction(async (tx) =>
+          clearOutputDraft({
+            tx: tx as unknown as Db,
+            outputId: input.outputId,
+          }),
+        );
+        return { ok: true as const, cleared: r.cleared };
+      } catch (err) {
+        rethrowAsTrpc(err);
+      }
     }),
 
   update: attorneyProcedure

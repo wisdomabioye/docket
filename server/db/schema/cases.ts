@@ -293,6 +293,21 @@ export const caseOutputs = pgTable(
      *  attorney save (Stage 08). Avoids running `marked` on every
      *  read-side render. Sanitized via `lib/markdown.ts` allowlist. */
     contentHtml: text("content_html"),
+    /**
+     * Stage 11 W3 — pending in-progress draft saved by the editor's
+     * debounced auto-save, sitting on top of the committed `content`
+     * baseline. Always lives on the *current* row; cleared back to NULL
+     * by `saveOutputVersion` on explicit version commit, by approve, by
+     * regenerate, and by version restore. Survives a Vercel serverless
+     * cold start (which `localStorage` would not, and which is why this
+     * lives in Postgres rather than in the browser).
+     *
+     * NULL ≠ "" : NULL means no pending draft (renderer falls back to
+     * `content`); empty string would be a draft of explicitly empty
+     * content (editor rejects this on save anyway, but the column shape
+     * allows the distinction).
+     */
+    draftContent: text("draft_content"),
     metadata: jsonb("metadata").$type<OutputMetadata>(),
 
     // Computer attribution

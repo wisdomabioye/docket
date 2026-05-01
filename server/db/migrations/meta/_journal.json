@@ -127,6 +127,13 @@
       "when": 1777527000000,
       "tag": "0017_cases_package_order",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1777620943075,
+      "tag": "0018_case_outputs_draft_content",
+      "breakpoints": true
     }
   ]
 }

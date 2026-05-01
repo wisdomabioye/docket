@@ -24,6 +24,7 @@ import { getRedis } from "./redis";
 export type RateLimitName =
   | "case.requestBuild"
   | "output.regenerate"
+  | "output.saveDraft"
   | "revenue.logFee"
   | "revenue.adjust"
   | "revenue.generateInvoice"
@@ -45,6 +46,14 @@ const LIMITS: Record<RateLimitName, LimitConfig> = {
   // a single output (vs. the whole pipeline). Looser than `case.requestBuild`
   // because per-output regen burns ~1/5th the budget of a full build.
   "output.regenerate": { limit: 20, window: "1 h" },
+  // Stage 11 W3 autosave fires on a 3s debounce per editor instance.
+  // Worst case: attorney rapidly opens 3 outputs in tabs and edits all
+  // three concurrently → ~60 saves/min. 120/min headroom prevents the
+  // rate limiter from clobbering legitimate editing while still
+  // catching a pathological client (mis-tuned debounce, runaway script).
+  // The DB-side idempotency check in `saveOutputDraft` already drops
+  // no-op writes; this cap is the upper bound for actual-content writes.
+  "output.saveDraft": { limit: 120, window: "1 m" },
   // Stage 10 revenue mutations. logFee gets the default mutation cap
   // (free DB write, but spam = audit/event noise). Adjust + generate
   // are admin-only and tighter — generateInvoice burns Stripe API

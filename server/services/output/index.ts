@@ -168,9 +168,16 @@ export async function saveOutputVersion(
   // Step 4: flip prior current — also scoped to the subgroup. Without
   // the subgroup filter, saving recommender B's letter would clobber
   // recommender A's `is_current=true` flag.
+  //
+  // Atomically clear `draft_content` on the prior row in the same
+  // UPDATE: a draft only ever exists on the current row, and once we
+  // commit a new version the prior draft is by definition stale (its
+  // contents either ARE this new commit or were superseded by it). One
+  // SQL statement keeps the (is_current ↔ draft_content) invariant
+  // intact even if the tx is interrupted mid-step.
   await tx
     .update(caseOutputs)
-    .set({ isCurrent: false })
+    .set({ isCurrent: false, draftContent: null })
     .where(
       and(
         eq(caseOutputs.caseId, caseId),
@@ -619,6 +626,131 @@ export async function updateOutputContent(
     completionTokens: 0,
     usdCents: 0,
   });
+}
+
+/**
+ * Stage 11 W3 — pending in-progress draft. Writes to
+ * `case_outputs.draft_content` IN PLACE on the current row. NO new
+ * version is created; `content` (the committed baseline) is untouched.
+ *
+ * Drafts are ephemeral: any commit (`updateOutputContent`,
+ * `regenerate`, `restoreVersion`) clears them via
+ * `saveOutputVersion`'s prior-row flip. Approve also clears via
+ * the W4.3 approve-flushes-draft hook.
+ *
+ * Idempotent: when the incoming `content` exactly matches
+ * `draft_content`, returns `{ saved: false }` without touching the
+ * row. Lets the editor's debounced auto-save fire freely without
+ * generating no-op writes.
+ *
+ * Refusal modes:
+ *   - NOT_FOUND: row missing or soft-deleted.
+ *   - BAD_REQUEST: row is NOT current (drafts only ever sit on the
+ *     current version). Editing a non-current row would mean someone
+ *     navigated to a stale outputId — caller should re-route to the
+ *     current id.
+ *   - CONFLICT: row is `attorney_approved`. Approve locks editing;
+ *     un-approve first. Mirrors `updateOutputContent`'s behavior.
+ *
+ * Empty content is permitted as a draft (NULL ≠ ''). The commit path
+ * (`updateOutputContent`) is what rejects empty saves — drafts are
+ * a transient buffer, not a final state.
+ */
+export type SaveOutputDraftArgs = {
+  tx: Db;
+  outputId: string;
+  content: string;
+};
+
+export async function saveOutputDraft(
+  args: SaveOutputDraftArgs,
+): Promise<{ saved: boolean }> {
+  const [row] = await args.tx
+    .select({
+      isCurrent: caseOutputs.isCurrent,
+      attorneyApproved: caseOutputs.attorneyApproved,
+      currentDraft: caseOutputs.draftContent,
+    })
+    .from(caseOutputs)
+    .where(
+      and(eq(caseOutputs.id, args.outputId), isNull(caseOutputs.deletedAt)),
+    )
+    .limit(1);
+  if (!row) {
+    throw new AppError("NOT_FOUND", `output ${args.outputId} not found`);
+  }
+  if (!row.isCurrent) {
+    throw new AppError(
+      "BAD_REQUEST",
+      "Cannot save draft on a non-current version. Restore it to current first.",
+    );
+  }
+  if (row.attorneyApproved) {
+    throw new AppError(
+      "CONFLICT",
+      "Output is currently approved — un-approve before editing.",
+    );
+  }
+  // Idempotency: skip the UPDATE when the draft hasn't changed. The
+  // editor's debounce already coalesces typing bursts, but two clients
+  // (or a refocus-then-type) can still fire the same content twice.
+  if (row.currentDraft === args.content) {
+    return { saved: false };
+  }
+  await args.tx
+    .update(caseOutputs)
+    .set({ draftContent: args.content })
+    .where(eq(caseOutputs.id, args.outputId));
+  return { saved: true };
+}
+
+/**
+ * Stage 11 W3 — clear a pending draft. Sets `draft_content = NULL` on
+ * the current row of the named output. Used by the editor's "Cancel"
+ * button so closing without saving doesn't leave a phantom draft that
+ * resurfaces next time the page loads.
+ *
+ * Idempotent. Does NOT require the row to be in any particular state
+ * (allows clearing even on an approved row, since clearing back to the
+ * baseline is always safe). Only enforces existence + soft-delete +
+ * is_current; the same authorization gate the editor passes through
+ * already enforced "you can see this output."
+ */
+export type ClearOutputDraftArgs = {
+  tx: Db;
+  outputId: string;
+};
+
+export async function clearOutputDraft(
+  args: ClearOutputDraftArgs,
+): Promise<{ cleared: boolean }> {
+  const [row] = await args.tx
+    .select({
+      isCurrent: caseOutputs.isCurrent,
+      currentDraft: caseOutputs.draftContent,
+    })
+    .from(caseOutputs)
+    .where(
+      and(eq(caseOutputs.id, args.outputId), isNull(caseOutputs.deletedAt)),
+    )
+    .limit(1);
+  if (!row) {
+    throw new AppError("NOT_FOUND", `output ${args.outputId} not found`);
+  }
+  if (!row.isCurrent) {
+    throw new AppError(
+      "BAD_REQUEST",
+      "Cannot clear draft on a non-current version.",
+    );
+  }
+  if (row.currentDraft === null) {
+    return { cleared: false };
+  }
+  await args.tx
+    .update(caseOutputs)
+    .set({ draftContent: null })
+    .where(eq(caseOutputs.id, args.outputId));
+  return { cleared: true };
 }
 
 /**

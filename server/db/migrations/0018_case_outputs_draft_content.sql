@@ -1,0 +1,31 @@
+-- Stage 11 W3: per-output pending draft buffer.
+--
+-- The editor auto-saves the attorney's in-progress edits to this
+-- column on a 3s debounce. `content` (the committed version) is
+-- unchanged until the attorney clicks "Save version", at which point
+-- `saveOutputVersion` writes a new versioned row with the draft as
+-- its `content` and clears `draft_content` back to NULL on the prior
+-- row.
+--
+-- NULL semantics: NULL = no pending draft, fall through to `content`;
+-- empty string = explicitly-empty draft. The editor rejects empty
+-- *commits*, but the column distinguishes the two states for the
+-- in-progress autosave.
+--
+-- Why on `case_outputs` and not a separate table: the draft is bound
+-- to a (case, output_type, subgroup_key, current=true) row and only
+-- ever applies to that row. A second table would force every read site
+-- to JOIN. Single column on the existing row keeps the read path flat
+-- and lets the existing `case_outputs` RLS policy authorize draft
+-- writes for free.
+--
+-- `package_order` is intentionally NOT in this migration even though
+-- `pnpm db:generate` re-emits it: 0017 already added it via `if not
+-- exists` and the Drizzle snapshot file in `meta/` lags custom-SQL
+-- migrations. Keeping the line here would explode on a fresh DB
+-- applying 0017 → 0018 in sequence.
+--
+-- Idempotent: `add column if not exists` so re-running on a DB that
+-- somehow already has the column (e.g. partial replay) is safe.
+
+alter table case_outputs add column if not exists draft_content text;

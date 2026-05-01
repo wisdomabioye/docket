@@ -81,6 +81,11 @@ export default async function OutputDetailPage({
           outputVersion: output.outputVersion,
           subgroupKey: output.subgroupKey,
           content: output.content ?? "",
+          // Stage 11 W3: surface the pending draft (if any) so the
+          // editor opens to the attorney's last unsaved keystrokes
+          // instead of the committed `content` baseline.
+          // `null` ↔ no pending draft.
+          draftContent: output.draftContent ?? null,
           attorneyApproved: output.attorneyApproved,
           approvedAt:
             output.approvedAt instanceof Date
