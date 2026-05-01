@@ -13,6 +13,76 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #32 — SearchBar document hits route to the page, not the doc
+
+Status: Tracked.
+Surfaced: 2026-05-01
+
+`components/layout/SearchBar.tsx` navigates document hits to
+`/case/[caseId]/documents` — the page, no anchor. There's no
+per-document detail route or in-page focus mechanism today, so
+landing the user on the documents list is the closest available
+target. After arriving, the user has to scan the list visually for
+the row they searched for.
+
+Fix options:
+  - URL hash: `/case/.../documents#doc-{id}` + `scrollIntoView` +
+    a brief highlight on the row in `DocumentsPanel.tsx`.
+  - Query string: `?focus={id}` for a more explicit contract.
+  - A dedicated `/case/[id]/documents/[docId]` route.
+
+Hash approach is the smallest change and matches established web
+behavior. Logged for the next polish pass; non-blocking because the
+search already gets the user 95% of the way there.
+
+---
+
+### #31 — Phase 2: replace trigram search with tsvector + GIN
+
+Status: Tracked.
+Surfaced: 2026-05-01
+
+Stage 11 W5 ships trigram (`pg_trgm`) GIN indexes for the topbar's
+global search — fuzzy similarity for case beneficiary names +
+filenames, substring containment (`LIKE` over the trigram index) for
+the first 4000 chars of `case_documents.extracted_text`. See
+`server/db/migrations/0019_search_trigram_indexes.sql` and
+`server/api/routers/search.ts`.
+
+Trade-offs that bite at scale:
+
+  - **4000-char prefix on extracted_text.** Catches CV summaries,
+    cover-letter openings, abstracts. Misses deep-document matches
+    (a citation in §VII won't surface). Small attorneys (Phase 1
+    target: <50 cases) will rarely notice; an attorney with hundreds
+    of large evidence PDFs will.
+  - **Substring containment != ranked relevance.** A doc-body hit
+    scores binary 1.0; ties break alphabetically by filename. Real
+    relevance ranking (term frequency, inverse-doc-frequency,
+    proximity) needs `tsvector` + `ts_rank` / `ts_rank_cd`.
+  - **No language-aware stemming.** Trigrams treat "running",
+    "runner", "runs" as separate; tsvector stems them with the
+    English (or other-language) dictionary.
+
+Phase 2 upgrade path:
+
+  1. Add `case_documents.extracted_tsv tsvector` generated column:
+     `GENERATED ALWAYS AS (to_tsvector('english', extracted_text))
+     STORED`.
+  2. GIN index on `extracted_tsv`.
+  3. Search router branches: short queries (<3 chars) keep using
+     trigram (handles diacritic-typo names); longer queries use
+     `to_tsquery` + `ts_rank_cd` for relevance.
+  4. Drop the 4000-char cap and the substring-containment branch.
+
+Decision recorded for the W5 commit: ship trigram now, defer
+tsvector to Phase 2 — Phase 1 corpus is small enough that the
+4000-char cap is invisible, and trigram handles non-English names
+better than English-stemmer tsvector for Phase 1's primary
+use case (autocomplete a beneficiary's name).
+
+---
+
 ### #30 — Stale "Auto-saved · just now" on draft-recovery load
 
 Status: Tracked.
