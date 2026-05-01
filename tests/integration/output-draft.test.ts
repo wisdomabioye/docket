@@ -14,6 +14,7 @@ vi.mock("@/server/auth/config", () => ({
 }));
 
 import {
+  approveOutput,
   clearOutputDraft,
   saveOutputDraft,
   saveOutputVersion,
@@ -320,6 +321,164 @@ describe("saveOutputVersion clears prior draft on commit", () => {
       .from(caseOutputs)
       .where(eq(caseOutputs.id, r.outputId));
     expect(row?.draftContent).toBeNull();
+  });
+});
+
+describe("approveOutput — flush-then-approve (W4.3)", () => {
+  // Server-side approve must commit any pending draft as a NEW version
+  // before flipping `attorney_approved=true`, so the approval lands on
+  // what the user sees on screen (not the stale committed baseline).
+
+  it("with no pending draft: approves the same row in place, no version bump", async (ctx) => {
+    const d = gate(ctx);
+    const { outputId } = await seedBaselineOutput(d);
+
+    const r = await d.transaction(async (tx) =>
+      approveOutput({ tx: tx as never, outputId, attorneyId: ATTORNEY }),
+    );
+    expect(r.draftFlushed).toBe(false);
+    expect(r.approvedOutputId).toBe(outputId);
+
+    const [row] = await d
+      .select({
+        attorneyApproved: caseOutputs.attorneyApproved,
+        outputVersion: caseOutputs.outputVersion,
+      })
+      .from(caseOutputs)
+      .where(eq(caseOutputs.id, outputId));
+    expect(row?.attorneyApproved).toBe(true);
+    expect(row?.outputVersion).toBe(1);
+
+    // No second row was created for this (case, type) bucket.
+    const all = await d
+      .select({ v: caseOutputs.outputVersion })
+      .from(caseOutputs)
+      .where(eq(caseOutputs.caseId, CASE_ID));
+    expect(all).toHaveLength(1);
+  });
+
+  it("with draft equal to content: also no version bump (logically clean)", async (ctx) => {
+    const d = gate(ctx);
+    const { outputId } = await seedBaselineOutput(d);
+    // Equal-to-content draft: hasPendingDraft semantically false.
+    await d.transaction(async (tx) =>
+      saveOutputDraft({
+        tx: tx as never,
+        outputId,
+        content: "Baseline content.",
+      }),
+    );
+    const r = await d.transaction(async (tx) =>
+      approveOutput({ tx: tx as never, outputId, attorneyId: ATTORNEY }),
+    );
+    expect(r.draftFlushed).toBe(false);
+    expect(r.approvedOutputId).toBe(outputId);
+  });
+
+  it("with pending draft: commits v2 with draft as content, approves v2, returns new id", async (ctx) => {
+    const d = gate(ctx);
+    const { outputId: v1Id } = await seedBaselineOutput(d);
+    await d.transaction(async (tx) =>
+      saveOutputDraft({
+        tx: tx as never,
+        outputId: v1Id,
+        content: "Final attorney edit ready for filing",
+      }),
+    );
+
+    const r = await d.transaction(async (tx) =>
+      approveOutput({ tx: tx as never, outputId: v1Id, attorneyId: ATTORNEY }),
+    );
+    expect(r.draftFlushed).toBe(true);
+    expect(r.approvedOutputId).not.toBe(v1Id);
+
+    // v2 is current + approved + has the draft as content.
+    const [v2] = await d
+      .select({
+        outputVersion: caseOutputs.outputVersion,
+        isCurrent: caseOutputs.isCurrent,
+        attorneyApproved: caseOutputs.attorneyApproved,
+        content: caseOutputs.content,
+        author: caseOutputs.author,
+        parentId: caseOutputs.parentId,
+        draftContent: caseOutputs.draftContent,
+      })
+      .from(caseOutputs)
+      .where(eq(caseOutputs.id, r.approvedOutputId));
+    expect(v2?.outputVersion).toBe(2);
+    expect(v2?.isCurrent).toBe(true);
+    expect(v2?.attorneyApproved).toBe(true);
+    expect(v2?.content).toBe("Final attorney edit ready for filing");
+    expect(v2?.author).toBe("attorney");
+    expect(v2?.parentId).toBe(v1Id);
+    expect(v2?.draftContent).toBeNull();
+
+    // v1 was flipped off + draft cleared by saveOutputVersion (W3.4
+    // invariant). It should NOT carry the approval flag.
+    const [v1] = await d
+      .select({
+        isCurrent: caseOutputs.isCurrent,
+        attorneyApproved: caseOutputs.attorneyApproved,
+        draftContent: caseOutputs.draftContent,
+      })
+      .from(caseOutputs)
+      .where(eq(caseOutputs.id, v1Id));
+    expect(v1?.isCurrent).toBe(false);
+    expect(v1?.attorneyApproved).toBe(false);
+    expect(v1?.draftContent).toBeNull();
+  });
+
+  it("rejects an empty (whitespace-only) draft so we never lock in blank prose", async (ctx) => {
+    const d = gate(ctx);
+    const { outputId } = await seedBaselineOutput(d);
+    await d.transaction(async (tx) =>
+      saveOutputDraft({
+        tx: tx as never,
+        outputId,
+        content: "   \n   ",
+      }),
+    );
+
+    await expect(
+      d.transaction(async (tx) =>
+        approveOutput({ tx: tx as never, outputId, attorneyId: ATTORNEY }),
+      ),
+    ).rejects.toThrow(/empty/i);
+
+    // Original row stayed unchanged (no half-applied state).
+    const [row] = await d
+      .select({
+        attorneyApproved: caseOutputs.attorneyApproved,
+        outputVersion: caseOutputs.outputVersion,
+      })
+      .from(caseOutputs)
+      .where(eq(caseOutputs.id, outputId));
+    expect(row?.attorneyApproved).toBe(false);
+    expect(row?.outputVersion).toBe(1);
+  });
+
+  it("refuses approval on a non-current version", async (ctx) => {
+    const d = gate(ctx);
+    const { outputId: v1Id } = await seedBaselineOutput(d);
+    await d.transaction(async (tx) =>
+      saveOutputVersion({
+        tx: tx as never,
+        caseId: CASE_ID,
+        outputType: "personal_statement",
+        content: "v2",
+        computerSessionId: "mock-2",
+        computeDurationMs: 100,
+        promptTokens: 50,
+        completionTokens: 100,
+        usdCents: 5,
+      }),
+    );
+    // v1 is now historical.
+    await expect(
+      d.transaction(async (tx) =>
+        approveOutput({ tx: tx as never, outputId: v1Id, attorneyId: ATTORNEY }),
+      ),
+    ).rejects.toThrow(/non-current/i);
   });
 });
 

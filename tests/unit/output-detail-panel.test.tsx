@@ -99,6 +99,21 @@ const useClearDraftMock = vi.hoisted(() =>
   })),
 );
 
+// `next/navigation`'s useRouter throws outside an App-Router context.
+// Stub the methods the panel uses so the tests don't need a full
+// router provider.
+const routerReplace = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({
+    replace: routerReplace,
+    push: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
+
 vi.mock("@/lib/trpc/react", () => ({
   trpc: {
     useUtils: () => utilsMock,
@@ -139,6 +154,11 @@ const tiptapState = vi.hoisted(() => ({
 const lastOnDirtyChange = vi.hoisted(() => ({
   current: null as ((dirty: boolean) => void) | null,
 }));
+// Same pattern for ApprovalActions's `onApprovalChange` so the W4
+// "navigate on approved-id-change" test can drive it.
+const lastOnApprovalChange = vi.hoisted(() => ({
+  current: null as ((newOutputId: string) => void) | null,
+}));
 
 vi.mock("@/components/output", async () => {
   const actual = await vi.importActual<
@@ -151,6 +171,12 @@ vi.mock("@/components/output", async () => {
       return <div data-testid="tiptap-stub" />;
     },
     useTiptapState: () => tiptapState,
+    ApprovalActions: (props: {
+      onApprovalChange?: (newOutputId: string) => void;
+    }) => {
+      lastOnApprovalChange.current = props.onApprovalChange ?? null;
+      return <div data-testid="approval-stub" />;
+    },
   };
 });
 
@@ -202,6 +228,8 @@ afterEach(() => {
     isPending: false,
   });
   lastOnDirtyChange.current = null;
+  lastOnApprovalChange.current = null;
+  routerReplace.mockReset();
 });
 
 const baseProps = {
@@ -641,6 +669,27 @@ describe("OutputDetailPanel — Stage 11 W3 autosave", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // W4 — when the server flushes a pending draft on Approve, the
+  // URL's outputId now points at the prior (non-current) version. The
+  // panel must router.replace to the new id so the user lands on the
+  // row they just approved.
+  it("router.replace fires when ApprovalActions reports a new approved id", () => {
+    render(<OutputDetailPanel {...baseProps} />);
+    expect(lastOnApprovalChange.current).not.toBeNull();
+    // No-op on same id (e.g. unapprove or no-draft approve).
+    act(() => {
+      lastOnApprovalChange.current?.(baseProps.initialOutput.id);
+    });
+    expect(routerReplace).not.toHaveBeenCalled();
+    // Different id (server flushed draft → new version) → navigate.
+    act(() => {
+      lastOnApprovalChange.current?.("new-output-id");
+    });
+    expect(routerReplace).toHaveBeenCalledWith(
+      `/case/${baseProps.caseId}/outputs/new-output-id`,
+    );
   });
 
   it("Cancel pre-empts a queued autosave", async () => {

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { Badge } from "@/components/ui";
@@ -64,6 +65,7 @@ export function OutputDetailPanel(
   props: OutputDetailPanelProps,
 ): ReactElement {
   const utils = trpc.useUtils();
+  const router = useRouter();
   const tiptap = useTiptapState();
 
   // Refresh `output.get` to pick up new versions after a successful
@@ -512,7 +514,19 @@ export function OutputDetailPanel(
             <ApprovalActions
               outputId={props.initialOutput.id}
               attorneyApproved={attorneyApproved}
-              saveBeforeApprove={tiptap.isDirty}
+              onApprovalChange={(newOutputId) => {
+                // Server-side `approveOutput` (W4.3) flushes any pending
+                // draft into a new version BEFORE setting the approval
+                // flag — which means the URL's `outputId` may now point
+                // at the prior (non-current) version. Re-route so the
+                // user lands on the row they just approved. Same id =
+                // no-op (covers un-approve and the no-draft branch).
+                if (newOutputId !== props.initialOutput.id) {
+                  router.replace(
+                    APP_ROUTES.output(props.caseId, newOutputId),
+                  );
+                }
+              }}
             />
           </section>
 

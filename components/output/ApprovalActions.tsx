@@ -10,6 +10,14 @@ import { trpc } from "@/lib/trpc/react";
  * compile (only approved outputs go in). Both effects are server-side;
  * the UI just toggles the boolean.
  *
+ * Stage 11 W4: Approve auto-flushes any pending draft as a new
+ * version BEFORE setting `attorney_approved=true` — the server-side
+ * `approveOutput` service handles this atomically (W4.3). The button
+ * is therefore always enabled when not approved; no `saveBeforeApprove`
+ * race-prevention prop. When a flush happens, the host's
+ * `onApprovedIdChange` callback fires with the NEW version's id so
+ * the URL can re-route.
+ *
  * Download PDF: fires `output.downloadPdf` mutation, which renders +
  * uploads the PDF and returns a 10-min signed URL. We open it in a
  * new tab so the user doesn't lose the editor session.
@@ -18,10 +26,11 @@ import { trpc } from "@/lib/trpc/react";
 export type ApprovalActionsProps = {
   outputId: string;
   attorneyApproved: boolean;
-  /** When the editor has unsaved edits, approving would lock-in stale
-   *  content. Disable the Approve button until the host saves first. */
-  saveBeforeApprove: boolean;
-  onApprovalChange?: () => void;
+  /** Notify the host when approval flips OR when the approved id
+   *  changes (i.e., a pending draft was flushed into a new version).
+   *  `newOutputId` differs from `outputId` only on the draft-flush
+   *  path. */
+  onApprovalChange?: (newOutputId: string) => void;
 };
 
 export function ApprovalActions(props: ApprovalActionsProps): ReactElement {
@@ -29,17 +38,25 @@ export function ApprovalActions(props: ApprovalActionsProps): ReactElement {
   const [error, setError] = useState<string | null>(null);
 
   const approveMutation = trpc.output.approve.useMutation({
-    onSuccess: async () => {
+    onSuccess: async (data) => {
       setError(null);
       await Promise.all([
         utils.output.get.invalidate({ outputId: props.outputId }),
         utils.output.list.invalidate(),
+        // Listing versions changes when approve flushes a draft (new
+        // v(N+1) row appears). Invalidate so the right-rail history
+        // reflects it without a manual refresh.
+        utils.output.listVersions.invalidate(),
         // Approval gates the package preflight ("approved outputs"
         // and "recommender letters" rows). Without this invalidation
         // the Package page sticks on stale gate state until refresh.
         utils.case.preflight.invalidate(),
       ]);
-      props.onApprovalChange?.();
+      // `data?.approvedOutputId` differs from `props.outputId` only
+      // when the server flushed a pending draft into a new version.
+      // Falling back to `props.outputId` keeps the callback contract
+      // stable for the no-flush path.
+      props.onApprovalChange?.(data?.approvedOutputId ?? props.outputId);
     },
     onError: (err) => setError(err.message),
   });
@@ -52,7 +69,8 @@ export function ApprovalActions(props: ApprovalActionsProps): ReactElement {
         utils.output.list.invalidate(),
         utils.case.preflight.invalidate(),
       ]);
-      props.onApprovalChange?.();
+      // Un-approve never changes the id — same row, just a flag flip.
+      props.onApprovalChange?.(props.outputId);
     },
     onError: (err) => setError(err.message),
   });
@@ -92,16 +110,16 @@ export function ApprovalActions(props: ApprovalActionsProps): ReactElement {
         <button
           type="button"
           onClick={() => approveMutation.mutate({ outputId: props.outputId })}
-          disabled={isPending || props.saveBeforeApprove}
+          disabled={isPending}
           className="w-full rounded-sm px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
           style={{
             background: "var(--accent, var(--ink))",
           }}
-          title={
-            props.saveBeforeApprove
-              ? "Save your edits first. Approving with unsaved changes would lock in the stale version."
-              : undefined
-          }
+          // No `saveBeforeApprove` disable: the server-side
+          // `approveOutput` (W4.3) flushes any pending draft into a
+          // new version BEFORE setting the approval flag, so an
+          // approve always locks in what the user sees on screen.
+          title="Lock in the current version. Any pending draft is committed first."
         >
           {approveMutation.isPending ? "Working…" : "Approve"}
         </button>

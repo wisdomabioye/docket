@@ -10,6 +10,7 @@ import {
   router,
 } from "@/server/api/trpc";
 import {
+  approveOutput,
   clearOutputDraft,
   getCurrentOutputsForList,
   getOutputVersionHistory,
@@ -297,16 +298,27 @@ export const outputRouter = router({
       await gateOutputAccess({ ctxDb: ctx.db, outputId: input.outputId });
 
       try {
-        await ownerDb.transaction(async (tx) =>
-          setOutputApproval({
+        // `approveOutput` flushes any pending draft into a new version
+        // BEFORE setting `attorney_approved=true`, so the approval
+        // always lands on what the user sees on screen — not on a
+        // stale baseline that the autosave hadn't yet committed
+        // (W3 + W4.3 contract).
+        const result = await ownerDb.transaction(async (tx) =>
+          approveOutput({
             tx: tx as unknown as Db,
             outputId: input.outputId,
-            approved: true,
             attorneyId: userId,
             ...(input.notes !== undefined ? { notes: input.notes } : {}),
           }),
         );
-        return { ok: true as const };
+        return {
+          ok: true as const,
+          // When draft was flushed, `approvedOutputId` is the NEW
+          // version's id — client navigates to it so the URL keeps
+          // pointing at the current row.
+          approvedOutputId: result.approvedOutputId,
+          draftFlushed: result.draftFlushed,
+        };
       } catch (err) {
         rethrowAsTrpc(err);
       }

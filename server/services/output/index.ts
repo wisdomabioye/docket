@@ -9,6 +9,7 @@ import {
 import { OutputMetadataSchema } from "@/server/db/schema/zod";
 import type { Db } from "@/server/db/client";
 import { AppError } from "@/lib/errors";
+import { mdToSafeHtml } from "@/lib/markdown";
 import type { OutputType } from "@/server/services/computer/types";
 
 /**
@@ -878,4 +879,130 @@ export async function setOutputApproval(
     )
     .where(eq(caseOutputs.id, args.outputId));
   return { changed: true };
+}
+
+/**
+ * Stage 11 W4 — flush-then-approve. Atomically commits any pending
+ * draft as a new version (author=`attorney`, parent=current id), then
+ * sets `attorney_approved=true` on whichever row ends up current.
+ *
+ * Why server-side: the autosave debounce (3s) means a user could click
+ * Approve while a draft is still in the buffer waiting on its next
+ * autosave fire. Without this flush, Approve would lock in the prior
+ * `content` baseline (the last committed version), NOT what the user
+ * sees on screen — silent stale-lock-in. The fix has to be atomic in
+ * one transaction so a flush+approve never half-applies.
+ *
+ * No-draft / draft-equals-content path: behaves identically to a
+ * straight `setOutputApproval(approved=true)` — no version bump, no
+ * ledger row, no churn. The result's `draftFlushed=false` lets the
+ * client know nothing changed identifier-wise.
+ *
+ * Draft-flush path: creates v(N+1) with the draft as `content`,
+ * `saveOutputVersion` clears `draft_content` on the prior row in the
+ * same UPDATE (W3.4 invariant), then approval lands on the new row.
+ * Returns `approvedOutputId = new id, draftFlushed=true` so the panel
+ * can re-route to the new version.
+ *
+ * Empty-draft refusal: an attorney clicked Approve while their draft
+ * was whitespace-only (Ctrl-A + Delete + half-typed). The commit path
+ * normally rejects this; we mirror that behavior with a friendly
+ * BAD_REQUEST so the user knows to either type content or click Cancel.
+ */
+export type ApproveOutputArgs = {
+  tx: Db;
+  outputId: string;
+  attorneyId: string;
+  notes?: string | null;
+};
+
+export type ApproveOutputResult = {
+  /** The id that ended up `attorney_approved=true`. Differs from the
+   *  input `outputId` only when a pending draft was flushed into a
+   *  new version. */
+  approvedOutputId: string;
+  /** True iff a draft was committed as a new version as part of the
+   *  approve. Lets the caller tell whether to re-route the URL. */
+  draftFlushed: boolean;
+};
+
+export async function approveOutput(
+  args: ApproveOutputArgs,
+): Promise<ApproveOutputResult> {
+  const [row] = await args.tx
+    .select({
+      caseId: caseOutputs.caseId,
+      outputType: caseOutputs.outputType,
+      subgroupKey: caseOutputs.subgroupKey,
+      content: caseOutputs.content,
+      draftContent: caseOutputs.draftContent,
+      isCurrent: caseOutputs.isCurrent,
+    })
+    .from(caseOutputs)
+    .where(
+      and(eq(caseOutputs.id, args.outputId), isNull(caseOutputs.deletedAt)),
+    )
+    .limit(1)
+    .for("update");
+  if (!row) {
+    throw new AppError("NOT_FOUND", `output ${args.outputId} not found`);
+  }
+  if (!row.isCurrent) {
+    throw new AppError(
+      "BAD_REQUEST",
+      "Cannot approve a non-current version. Restore it first.",
+    );
+  }
+
+  const hasPendingDraft =
+    row.draftContent !== null && row.draftContent !== row.content;
+
+  let approvedId = args.outputId;
+  let draftFlushed = false;
+
+  if (hasPendingDraft && row.draftContent !== null) {
+    if (row.draftContent.trim().length === 0) {
+      throw new AppError(
+        "BAD_REQUEST",
+        "Pending draft is empty — discard it (Cancel) or type content before approving.",
+      );
+    }
+    const result = await saveOutputVersion({
+      tx: args.tx,
+      caseId: row.caseId,
+      outputType: row.outputType,
+      subgroupKey: row.subgroupKey,
+      author: "attorney",
+      parentId: args.outputId,
+      content: row.draftContent,
+      // Pre-render HTML cache the same way `updateOutputContent`'s
+      // caller does — this is the same markdown→HTML round-trip Tiptap
+      // already used to render the draft, so the cache is consistent.
+      contentHtml: mdToSafeHtml(row.draftContent),
+      metadata: {
+        editedFromVersionId: args.outputId,
+        attorneyId: args.attorneyId,
+        flushedOnApprove: true,
+      },
+      // Attorney edits don't burn provider budget — same convention
+      // `updateOutputContent` uses.
+      computerSessionId: `attorney-edit-${args.attorneyId}`,
+      computeDurationMs: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      usdCents: 0,
+    });
+    approvedId = result.outputId;
+    draftFlushed = true;
+  }
+
+  await setOutputApproval({
+    tx: args.tx,
+    outputId: approvedId,
+    approved: true,
+    attorneyId: args.attorneyId,
+    ...(args.notes !== undefined ? { notes: args.notes } : {}),
+  });
+
+  return { approvedOutputId: approvedId, draftFlushed };
 }

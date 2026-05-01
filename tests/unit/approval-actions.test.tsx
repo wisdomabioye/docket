@@ -8,7 +8,8 @@ import "@testing-library/jest-dom/vitest";
  * downloadPdf. Branches:
  *   - approved=true → "Un-approve" button visible, "Approve" hidden
  *   - approved=false → "Approve" button visible
- *   - saveBeforeApprove=true → "Approve" disabled (prevents stale lock-in)
+ *   - W4 removed the `saveBeforeApprove` disable path — Approve is
+ *     always enabled when not approved (server flushes draft first)
  *   - downloadPdf success → opens signed URL via window.open
  *   - any pending mutation → all buttons disabled
  */
@@ -70,7 +71,6 @@ describe("ApprovalActions — toggle visibility", () => {
       <ApprovalActions
         outputId="o-1"
         attorneyApproved={false}
-        saveBeforeApprove={false}
       />,
     );
     expect(
@@ -86,7 +86,6 @@ describe("ApprovalActions — toggle visibility", () => {
       <ApprovalActions
         outputId="o-1"
         attorneyApproved={true}
-        saveBeforeApprove={false}
       />,
     );
     expect(
@@ -99,17 +98,15 @@ describe("ApprovalActions — toggle visibility", () => {
 });
 
 describe("ApprovalActions — approve gate", () => {
-  it("Approve button is DISABLED when saveBeforeApprove=true (prevents stale lock-in)", () => {
-    render(
-      <ApprovalActions
-        outputId="o-1"
-        attorneyApproved={false}
-        saveBeforeApprove={true}
-      />,
-    );
+  it("Approve button is ENABLED at all times when not approved (W4 — server flushes draft)", () => {
+    // Stage 11 W4 removed the `saveBeforeApprove` disable path. The
+    // server-side `approveOutput` (W4.3) flushes any pending draft into
+    // a new version BEFORE setting `attorney_approved=true`, so there's
+    // no stale-lock-in race for the client to guard against.
+    render(<ApprovalActions outputId="o-1" attorneyApproved={false} />);
     expect(
       screen.getByRole("button", { name: /^approve$/i }),
-    ).toBeDisabled();
+    ).toBeEnabled();
   });
 
   it("fires approve mutation when clicked", () => {
@@ -117,7 +114,6 @@ describe("ApprovalActions — approve gate", () => {
       <ApprovalActions
         outputId="o-9"
         attorneyApproved={false}
-        saveBeforeApprove={false}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /^approve$/i }));
@@ -129,7 +125,6 @@ describe("ApprovalActions — approve gate", () => {
       <ApprovalActions
         outputId="o-9"
         attorneyApproved={true}
-        saveBeforeApprove={false}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /un-approve/i }));
@@ -156,7 +151,6 @@ describe("ApprovalActions — downloadPdf", () => {
       <ApprovalActions
         outputId="o-1"
         attorneyApproved={false}
-        saveBeforeApprove={false}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /download pdf/i }));
@@ -178,7 +172,6 @@ describe("ApprovalActions — pending serialization", () => {
       <ApprovalActions
         outputId="o-1"
         attorneyApproved={false}
-        saveBeforeApprove={false}
       />,
     );
     expect(
