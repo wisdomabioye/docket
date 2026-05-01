@@ -22,7 +22,8 @@
     "db:generate:custom": "drizzle-kit generate --custom",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "db:seed": "tsx --env-file=.env.local scripts/seed.ts"
+    "db:seed": "tsx --env-file=.env.local scripts/seed.ts",
+    "storage:migrate-to-s3": "tsx --env-file=.env.local scripts/storage-migrate-local-to-s3.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.2",

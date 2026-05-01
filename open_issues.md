@@ -13,6 +13,88 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #35 — R2 object-lifecycle policy for soft-deleted documents
+
+Status: Tracked.
+Surfaced: 2026-05-01
+
+Soft-deleting a `case_documents` row sets `deleted_at` but the
+underlying R2 object stays — indefinitely. For Phase 1 this is fine
+(small corpus, no compliance pressure). For Phase 2 it becomes both
+a cost line item and a retention-policy gap (legal team has no
+mechanism to enforce "delete X days after archive").
+
+Two complementary fixes:
+  - **Application-side sweep:** Inngest cron job that walks
+    `case_documents WHERE deleted_at IS NOT NULL AND deleted_at <
+    now() - interval '30 days'` and calls `storage.delete(storagePath)`.
+    Idempotent against Local + S3 backends.
+  - **R2 lifecycle rule:** configure the R2 bucket with a "delete
+    after N days" rule on a key prefix (e.g. `cases/.../trash/`).
+    Requires the soft-delete to also rename the object — heavier
+    refactor; skip for Phase 1.
+
+Recommendation for Phase 2: ship the application-side sweep (one
+Inngest function, ~30 lines of code, reuses `storage.delete`), defer
+the R2 lifecycle rule until volume justifies it.
+
+---
+
+### #34 — Concurrent-edit conflict handling on draft_content
+
+Status: Tracked.
+Surfaced: 2026-05-01
+
+`saveOutputDraft` is "last-write-wins" — two browser tabs editing
+the same output will trash each other's drafts on each autosave
+fire. The current single-attorney-per-case model makes this rare,
+but a determined user with two tabs open WILL see surprising
+behavior:
+
+  Tab A types "alpha" → autosave commits draft="alpha"
+  Tab B types "beta" → autosave commits draft="beta"  
+  Tab A continues, autosave commits draft="alpha extra"
+  → Tab B's "beta" is silently lost.
+
+For Phase 1, acceptable: the autosave's 3s debounce + the
+`saveOutputDraft` `===` idempotency check minimise harm, and the
+attorney is the same human across both tabs (they'll notice
+divergence and reload).
+
+Phase 2 fix path: `If-Unmodified-Since` style optimistic
+concurrency using `case_outputs.row_revision` (already populated
+by the existing trigger). Server returns 409 if the autosave's
+`expectedRevision` doesn't match, client surfaces "Your draft is
+behind. Reload to see the latest." Doesn't auto-merge — the prose
+is too high-stakes for a 3-way diff to do silently.
+
+---
+
+### #33 — Highlight matched terms in SearchBar dropdown rows
+
+Status: Tracked.
+Surfaced: 2026-05-01
+
+`SearchBar` shows the matched filename / snippet as plain text. A
+common autocomplete affordance is to bold the matched substring
+(`Maria` highlighted inside `Maria Gonzalez`) so the user sees
+WHY each row matched. Skipped for Phase 1 because:
+
+  - Per-row regex-replace is cheap but risks RegExp-injection if
+    the needle is user-supplied (escape it via the same trick
+    `escapeLike` uses on the server side).
+  - Diacritic-insensitive matching (search "Maria" → highlight
+    "María") needs `String.prototype.normalize('NFD')` plus a
+    diacritic strip — modest, but additional surface area.
+  - Trigram results don't always have a contiguous substring
+    (similarity match like `Marisol` ↔ `maria` shares `mar` but
+    not `maria`). Highlighting needs to be substring-aware AND
+    fuzzy-aware, which is two passes.
+
+Logged for the polish pass. Non-blocking.
+
+---
+
 ### #32 — SearchBar document hits route to the page, not the doc
 
 Status: Tracked.
