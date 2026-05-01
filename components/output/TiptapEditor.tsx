@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -43,9 +43,9 @@ export type TiptapEditorProps = {
    *  `isDirty` so the Regenerate button can prompt about unsaved edits. */
   onDirtyChange?: (isDirty: boolean) => void;
   /** Imperative accessor — the host calls this from the Save button to
-   *  pull the current markdown for the mutation. The host pattern is
-   *  via a ref-style hook (`useTiptapMarkdownRef`) below; this prop is
-   *  the simpler, callback-style alternative. */
+   *  pull the current markdown for the mutation. Paired with
+   *  `useTiptapState()` (below) on the host for the `{ api, isDirty }`
+   *  state pair the panel needs. */
   onReady?: (api: TiptapEditorApi) => void;
 };
 
@@ -96,6 +96,10 @@ export function TiptapEditor(props: TiptapEditorProps): ReactElement {
       }),
       Placeholder.configure({
         placeholder: "Edit the draft here. Save when finished.",
+        // Hide the placeholder in Read mode so an output that's
+        // momentarily empty (post-restore, mid-regen) doesn't show
+        // edit-flavored copy under a non-editable surface.
+        showOnlyWhenEditable: true,
       }),
     ],
     content: mdToSafeHtml(props.initialMarkdown),
@@ -146,24 +150,27 @@ export function TiptapEditor(props: TiptapEditorProps): ReactElement {
   }, [editor]);
 
   if (!editor) {
+    // Match `.tiptap-output .ProseMirror` page padding (50px / 60px) so
+    // the loading copy occupies the same footprint as the real editor.
+    // Without this the doc card visibly resizes when Tiptap mounts.
     return (
       <div
-        className="px-10 py-8 text-sm"
-        style={{ color: "var(--ink-muted)" }}
+        className="text-sm"
+        style={{ color: "var(--ink-muted)", padding: "50px 60px" }}
       >
         Loading editor…
       </div>
     );
   }
 
+  // Toolbar + content emitted as siblings (no extra wrapper). The host
+  // owns the page chrome — stacking another `rounded border` here would
+  // produce a card-in-card that drifts from the mockup's flush layout.
   return (
-    <div
-      className="rounded-md border"
-      style={{ borderColor: "var(--border, rgba(0,0,0,0.08))" }}
-    >
+    <Fragment>
       <OutputEditorToolbar editor={editor} disabled={props.readOnly} />
       <EditorContent editor={editor} className="tiptap-output" />
-    </div>
+    </Fragment>
   );
 }
 

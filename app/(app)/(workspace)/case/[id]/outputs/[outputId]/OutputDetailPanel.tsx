@@ -248,9 +248,18 @@ export function OutputDetailPanel(
           <DisclaimerBanner />
 
           <div className="flex-1 overflow-y-auto">
+            {/* Doc card. Width + chrome mirror `Docket-Meridian-UI/hifi/output-detail.html`
+             *  `.doc-page` (max-w 640px, white bg, soft border + shadow).
+             *  Padding is intentionally absent here — `.ProseMirror`
+             *  (in globals.css) carries the 50px / 60px page padding so
+             *  the toolbar (TiptapEditor's first sibling) sits flush at
+             *  the top of the card, no nested chrome. */}
             <div
-              className="mx-auto my-4 max-w-[680px] rounded-sm border bg-white p-12"
-              style={{ borderColor: "var(--border)" }}
+              className="mx-auto my-4 max-w-[640px] overflow-hidden rounded-sm border bg-white"
+              style={{
+                borderColor: "var(--border)",
+                boxShadow: "var(--shadow-sm)",
+              }}
             >
               <TiptapEditor
                 initialMarkdown={currentMarkdown}

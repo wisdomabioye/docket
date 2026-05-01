@@ -152,3 +152,144 @@ body {
   text-transform: uppercase;
   color: var(--ink-muted);
 }
+
+/*
+ * Output prose styling. Scoped to the Tiptap editor's `.tiptap-output`
+ * wrapper (set in `components/output/TiptapEditor.tsx`); Tiptap nests
+ * the editable surface under `.ProseMirror`, so the actual content
+ * selector is `.tiptap-output .ProseMirror`.
+ *
+ * Values mirror `Docket-Meridian-UI/hifi/output-detail.html` `.doc-page`
+ * — keep these in lockstep with the mockup. Body uses DM Sans at
+ * 13.5px / line-height 1.7 against `--ink-soft`; h1 uses DM Serif
+ * Display; section headings (h2) are uppercase mono-tracking; bold and
+ * links inherit the accent palette.
+ */
+.tiptap-output .ProseMirror {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--ink-soft);
+  outline: none;
+  /* Brand-aware caret + selection. Default OS-blue selection clashes
+     with the forest accent; `--accent-soft` reads natural under
+     `--ink`. Caret-color narrows to the accent for the same reason. */
+  caret-color: var(--accent);
+  /* Page-style padding lives on the editable surface, not the host
+     wrapper — the formatting toolbar (sibling) sits flush at the top
+     of the doc card, matching the mockup's `.editor-toolbar` →
+     `.doc-page` stacking. */
+  padding: 50px 60px;
+}
+/* Narrow viewports: tighten the page padding so the doc card doesn't
+   overflow on a 360-400px screen (mobile attorney review). The
+   max-width on the host card already keeps desktop comfortable. */
+@media (max-width: 720px) {
+  .tiptap-output .ProseMirror {
+    padding: 32px 24px;
+  }
+}
+.tiptap-output .ProseMirror ::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+.tiptap-output .ProseMirror > * + * {
+  /* Lobotomized-owl reset. Browser default `margin-top` on h1/h2/p
+     would stack with the previous element's `margin-bottom` — we use
+     bottom-margin-only spacing so the cascade adds up predictably. */
+  margin-top: 0;
+}
+.tiptap-output .ProseMirror p {
+  margin: 0 0 14px;
+}
+/* Trailing-margin reset across every block element, not just <p>.
+   If the doc ends with an h2 / blockquote / list the bottom margin
+   would stack with the 50px page padding and look over-padded. */
+.tiptap-output .ProseMirror > *:last-child {
+  margin-bottom: 0;
+}
+.tiptap-output .ProseMirror h1 {
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin: 0 0 16px;
+  /* DM Serif Display benefits visibly from kerning + ligatures on
+     attorney names and headings; cheap to enable. */
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "kern", "liga";
+}
+.tiptap-output .ProseMirror h2 {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 22px 0 10px;
+}
+.tiptap-output .ProseMirror h3 {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 18px 0 8px;
+}
+.tiptap-output .ProseMirror strong,
+.tiptap-output .ProseMirror b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.tiptap-output .ProseMirror em,
+.tiptap-output .ProseMirror i {
+  font-style: italic;
+}
+.tiptap-output .ProseMirror a {
+  color: var(--accent);
+  font-weight: 500;
+  border-bottom: 1px solid var(--accent-soft);
+  text-decoration: none;
+}
+.tiptap-output .ProseMirror ul,
+.tiptap-output .ProseMirror ol {
+  margin: 0 0 14px;
+  padding-left: 24px;
+}
+.tiptap-output .ProseMirror li {
+  margin-bottom: 4px;
+}
+.tiptap-output .ProseMirror li > p {
+  margin: 0;
+}
+.tiptap-output .ProseMirror blockquote {
+  margin: 0 0 14px;
+  padding: 4px 0 4px 14px;
+  border-left: 2px solid var(--accent-soft);
+  color: var(--ink-muted);
+  font-style: italic;
+}
+.tiptap-output .ProseMirror hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 22px 0;
+}
+.tiptap-output .ProseMirror code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  background: var(--surface-sunken);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--ink);
+  /* Long URLs / file paths inside inline code shouldn't blow out the
+     line and force a horizontal scrollbar on the page card. */
+  overflow-wrap: anywhere;
+}
+.tiptap-output .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--ink-faint);
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
