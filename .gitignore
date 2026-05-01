@@ -39,7 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-storage/
+
+# Local-fs storage backend writes uploaded files here. Leading slash
+# anchors to repo root — `storage/` (no slash) matched any `storage/`
+# at any depth and was silently excluding `server/services/storage/`
+# source code from version control.
+/storage/
 
 # Sentry Config File
 .env.sentry-build-plugin

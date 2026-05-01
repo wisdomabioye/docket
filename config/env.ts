@@ -74,6 +74,25 @@ const schema = z
     STRIPE_SECRET_KEY: z.string().min(1).optional(), // Stage 10
     STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
     SENTRY_AUTH_TOKEN: z.string().min(1).optional(),
+
+    // Storage backend selector. `local` (default) writes to `./storage/`
+    // — the dev convenience that doesn't survive a Vercel deploy because
+    // serverless filesystems are ephemeral. `s3` switches to the
+    // `S3Storage` adapter, which talks to any S3-API-compatible object
+    // store (Cloudflare R2, AWS S3, MinIO, B2). All `S3_*` vars below
+    // become required when `s3` is selected — see `superRefine`.
+    STORAGE_BACKEND: z.enum(["local", "s3"]).default("local"),
+    // R2 dashboard exposes this as "S3 API endpoint" — looks like
+    // `https://<account-id>.r2.cloudflarestorage.com`. AWS S3 callers
+    // can leave this unset and the SDK will derive from `S3_REGION`.
+    S3_ENDPOINT: z.url().optional(),
+    S3_ACCESS_KEY_ID: z.string().min(1).optional(),
+    S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+    S3_BUCKET: z.string().min(1).optional(),
+    // R2 ignores region but the SDK still requires *something*. `auto`
+    // is Cloudflare's documented sentinel; AWS callers set their actual
+    // region (e.g. `us-east-1`).
+    S3_REGION: z.string().min(1).default("auto"),
   })
   .superRefine((v, ctx) => {
     // OAuth pair invariants — half-set creds would silently drop the
@@ -105,6 +124,29 @@ const schema = z
           "AUTH_SECRET is required when any OAuth provider is configured (run `openssl rand -base64 32`)",
         path: ["AUTH_SECRET"],
       });
+    }
+
+    // S3/R2 invariants — if `STORAGE_BACKEND=s3`, every credential and
+    // the bucket name must be present. Without these the SDK would
+    // silently fall back to ambient AWS profile credentials (in a
+    // serverless container that has none), then 403 on first request —
+    // far less obvious than failing at boot.
+    if (v.STORAGE_BACKEND === "s3") {
+      const REQUIRED: Array<keyof typeof v> = [
+        "S3_ENDPOINT",
+        "S3_ACCESS_KEY_ID",
+        "S3_SECRET_ACCESS_KEY",
+        "S3_BUCKET",
+      ];
+      for (const key of REQUIRED) {
+        if (!v[key]) {
+          ctx.addIssue({
+            code: "custom",
+            message: `${key} is required when STORAGE_BACKEND=s3`,
+            path: [key],
+          });
+        }
+      }
     }
   });
 

@@ -81,6 +81,47 @@ that, `inngest.send` from prod talks to Cloud; Cloud invokes job
 functions over HTTPS back to the deployed `/api/inngest`. No CLI runs
 in prod — Cloud replaces it.
 
+## Object storage: local vs Cloudflare R2
+
+Default `STORAGE_BACKEND=local` writes uploaded documents and rendered
+PDFs to `./storage/` — fine for `pnpm dev`. Vercel's serverless
+filesystem is ephemeral, so any production deploy must switch to S3.
+
+Cloudflare R2 is S3-API-compatible by design. The same
+`@aws-sdk/client-s3` library Cloudflare itself recommends in their
+docs talks to R2, AWS S3, MinIO, and Backblaze B2 — only the endpoint
+URL changes. There is no separate "R2 SDK".
+
+### One-time R2 setup
+
+1. Cloudflare dashboard → R2 → **Create bucket** (`docket-files`).
+2. **Manage R2 API Tokens** → Create token with **Object Read & Write**
+   on that bucket. Save the Access Key ID + Secret Access Key.
+3. Note the account-scoped endpoint:
+   `https://<account-id>.r2.cloudflarestorage.com`.
+4. Add to Vercel env (or `.env.local` for testing against R2 from your
+   machine):
+
+   ```bash
+   STORAGE_BACKEND=s3
+   S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+   S3_ACCESS_KEY_ID=<access-key-id>
+   S3_SECRET_ACCESS_KEY=<secret-access-key>
+   S3_BUCKET=docket-files
+   S3_REGION=auto                  # R2 sentinel; AWS would be e.g. us-east-1
+   ```
+
+`config/env.ts` validates at boot — if `STORAGE_BACKEND=s3` and any
+S3 var is missing, the process refuses to start with a flat list of
+what's missing. No silent fall-through to ambient AWS credentials.
+
+### Switching to AWS S3 (or MinIO / B2) instead
+
+Same five vars, different endpoint + region. AWS S3: omit `S3_ENDPOINT`
+and set `S3_REGION` to the bucket's region (the SDK will derive the
+endpoint). MinIO / B2: use their endpoint, region usually `us-east-1`
+or `auto`.
+
 ## Quality gates
 
 ```bash

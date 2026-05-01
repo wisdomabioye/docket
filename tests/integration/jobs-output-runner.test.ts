@@ -79,7 +79,16 @@ describe("runOutputJob (integration, mock computer + real db)", () => {
     const r = await runOutputJob({
       caseId: CASE_ID,
       outputType: "evidence_plan",
-      prompt: { systemPrompt: "sys", userPrompt: "usr" },
+      // `jsonSchema` is required for structured outputs: production
+      // prompt builders always set it, and `MockComputerClient` keys
+      // off its presence to return schema-conforming JSON. Without it,
+      // the mock returns lorem prose and `validateStructuredOutput`
+      // (rightly) rejects the result.
+      prompt: {
+        systemPrompt: "sys",
+        userPrompt: "usr",
+        jsonSchema: { name: "test", schema: { type: "object" } },
+      },
       sessionId: "test-session",
     });
 
@@ -122,17 +131,24 @@ describe("runOutputJob (integration, mock computer + real db)", () => {
     const d = gate(ctx);
     const { runOutputJob } = await import("@/server/jobs/_shared");
 
+    // jsonSchema required so the mock returns schema-conforming JSON;
+    // see the comment in the v1 test above for the rationale.
+    const structuredPrompt = {
+      systemPrompt: "s",
+      userPrompt: "u",
+      jsonSchema: { name: "test", schema: { type: "object" } },
+    };
     const first = await runOutputJob({
       caseId: CASE_ID,
       outputType: "exhibit_index",
-      prompt: { systemPrompt: "s", userPrompt: "u" },
+      prompt: structuredPrompt,
       sessionId: "s1",
       extraMetadata: { exhibitCount: 0 },
     });
     const second = await runOutputJob({
       caseId: CASE_ID,
       outputType: "exhibit_index",
-      prompt: { systemPrompt: "s", userPrompt: "u" },
+      prompt: structuredPrompt,
       sessionId: "s2",
       extraMetadata: { exhibitCount: 0 },
     });

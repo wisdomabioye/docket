@@ -8,7 +8,14 @@ const nextConfig: NextConfig = {
   // .next/dev/server/chunks/* files and the loader fails ("Setting up
   // fake worker failed: Cannot find module ...pdf.worker.mjs").
   // Listing them here uses native node module resolution instead.
-  serverExternalPackages: ["pdf-parse", "pdfjs-dist"],
+  // `@aws-sdk/client-s3` is on Next's default external list; the
+  // presigner package is NOT — add it explicitly so it goes through
+  // native Node `require` instead of Next's chunker.
+  serverExternalPackages: [
+    "pdf-parse",
+    "pdfjs-dist",
+    "@aws-sdk/s3-request-presigner",
+  ],
 };
 
 export default withSentryConfig(nextConfig, {

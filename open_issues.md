@@ -13,6 +13,29 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #29 — Verify R2 deploy preview end-to-end (W1.7)
+
+Status: Pending — requires founder action.
+Surfaced: 2026-05-01
+
+W1 ships the `S3Storage` adapter + env validation + 14 passing unit
+tests against a mocked SDK. What the tests cannot cover: a real R2
+bucket actually accepts our `PutObjectCommand` payloads, and a browser
+can fetch the presigned URL from R2's CDN without CORS errors.
+
+Action: deploy a preview branch with `STORAGE_BACKEND=s3` + R2 creds
+in Vercel env, upload a document via the case documents page, and
+confirm (a) the file appears in the R2 bucket, (b) the signed URL
+returns 200 in a browser tab. If signed-URL fetches fail with CORS,
+configure the R2 bucket's CORS policy to allow the production /
+preview origin (`https://*.vercel.app` and the prod domain) for `GET`.
+
+If `forcePathStyle: true` causes R2 to reject signed URLs (some R2
+configurations prefer virtual-hosted-style for the public URL), flip
+to `false` in `server/services/storage/s3.ts:60` and re-test.
+
+---
+
 ### #25 — IntakeWizard cleared text fields don't propagate to server
 
 Status: Tracked.
