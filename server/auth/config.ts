@@ -14,6 +14,7 @@ import { onSignIn } from "./onboarding";
 import { isInvitePermitted } from "./invite-gate";
 import { APP_ROUTES } from "@/config";
 import { env } from "@/config/env";
+import { emitFromUser } from "@/server/services/analytics/emit";
 
 /**
  * Auth.js v5 — SSO only (Google, Microsoft). Sessions persist in our own
@@ -86,9 +87,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
   },
   events: {
-    signIn: async ({ user, isNewUser }) => {
+    signIn: async ({ user, account, isNewUser }) => {
       if (!user.id) return;
       await onSignIn({ userId: user.id, isNewUser: Boolean(isNewUser) });
+      // Best-effort analytics emit. `account?.provider` is the
+      // Auth.js provider id (`google`, `microsoft-entra-id`, `apple`).
+      // Map to the short event-payload union; any unrecognised value
+      // skips the emit rather than guessing.
+      const provider = mapProvider(account?.provider);
+      if (provider) {
+        void emitFromUser(user.id, {
+          name: "auth.signed_in",
+          properties: { provider, is_new_user: Boolean(isNewUser) },
+        });
+      }
     },
   },
   trustHost: true,
@@ -97,5 +109,26 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 declare module "next-auth" {
   interface Session {
     user: { id: string } & DefaultSession["user"];
+  }
+}
+
+/** Translate the Auth.js `account.provider` id into the short union
+ *  declared on the `auth.signed_in` analytics event. Apple is wired in
+ *  the providers list (deferred per Stage 11 plan), but the case is
+ *  here so when it ships we don't need to remember to update analytics
+ *  too. Returns null for unrecognised providers — better to skip an
+ *  emit than to send an unknown enum value. */
+function mapProvider(
+  providerId: string | undefined,
+): "google" | "microsoft" | "apple" | null {
+  switch (providerId) {
+    case "google":
+      return "google";
+    case "microsoft-entra-id":
+      return "microsoft";
+    case "apple":
+      return "apple";
+    default:
+      return null;
   }
 }

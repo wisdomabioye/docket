@@ -4,6 +4,7 @@ import { z } from "zod";
 import { attorneyProfiles } from "@/server/db/schema";
 import { protectedProcedure, router } from "@/server/api/trpc";
 import { TERMS_VERSION } from "@/server/auth/terms";
+import { emitFromCtx } from "@/server/services/analytics/emit";
 
 /**
  * Attorney-side procedures: onboarding form submission. Status flips
@@ -81,6 +82,16 @@ export const attorneyRouter = router({
           submittedAt: now,
         })
         .where(eq(attorneyProfiles.id, profile.id));
+
+      // attorney_id == users.id (the canonical identity used for
+      // PostHog `distinctId`, RLS, audit-log target_id). NOT
+      // attorneyProfiles.id — that's an implementation detail that
+      // would prevent joining this event with `auth.signed_in` or any
+      // user-keyed query in PostHog.
+      emitFromCtx(ctx, {
+        name: "attorney.onboarded",
+        properties: { attorney_id: userId },
+      });
 
       return { ok: true as const, submittedAt: now };
     }),

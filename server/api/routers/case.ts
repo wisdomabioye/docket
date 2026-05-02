@@ -28,6 +28,7 @@ import { computePreflight } from "@/server/services/cases/preflight";
 import { canRequestBuild } from "@/lib/case-status";
 import { PER_CASE_STORAGE_BYTES, requiredDocsFor } from "@/lib/visa-criteria";
 import { rateLimit } from "@/server/services/ratelimit";
+import { emitFromCtx } from "@/server/services/analytics/emit";
 import { inngest } from "@/server/jobs/client";
 import { AppError, appErrorToTrpcCode } from "@/lib/errors";
 
@@ -142,6 +143,11 @@ export const caseRouter = router({
         });
 
         return created.id;
+      });
+
+      emitFromCtx(ctx, {
+        name: "case.created",
+        properties: { case_id: id, visa_type: input.visaType },
       });
 
       return { id };
@@ -306,9 +312,15 @@ export const caseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { db, userId } = ctx;
 
-      // Authz: ensure the caller can see the case (RLS).
+      // Authz: ensure the caller can see the case (RLS). Pulls
+      // `visaType` + `beneficiaryData` so we can shape the analytics
+      // event without a second round-trip.
       const [authz] = await db
-        .select({ id: cases.id })
+        .select({
+          id: cases.id,
+          visaType: cases.visaType,
+          beneficiaryData: cases.beneficiaryData,
+        })
         .from(cases)
         .where(and(eq(cases.id, input.caseId), isNull(cases.deletedAt)))
         .limit(1);
@@ -328,6 +340,24 @@ export const caseRouter = router({
             reason: "intake form submitted",
           }),
         );
+        // `field_count` counts populated keys on the beneficiaryData
+        // JSONB blob (BeneficiaryDataSchema is `.partial().strict()`,
+        // so every key present represents a value the attorney
+        // entered at some point). It is NOT a "non-empty value"
+        // count — a key whose value was later cleared to `null`/`""`
+        // still adds to the total. Coarse signal by design; we want
+        // "how much intake did the attorney engage with" not "how
+        // much survived the last edit."
+        emitFromCtx(ctx, {
+          name: "case.intake_submitted",
+          properties: {
+            case_id: input.caseId,
+            visa_type: authz.visaType,
+            field_count: authz.beneficiaryData
+              ? Object.keys(authz.beneficiaryData).length
+              : 0,
+          },
+        });
         return { ok: true as const, ...result };
       } catch (err) {
         if (err instanceof AppError) {
@@ -479,6 +509,35 @@ export const caseRouter = router({
         data: { caseId: input.caseId, requestedBy: userId },
       });
 
+      // Analytics. visa_type + document count are pulled in ONE
+      // round-trip via a correlated subquery — keeps the user-visible
+      // mutation latency tight. Document count is the "as-requested"
+      // snapshot; the build will use whatever exists when it actually
+      // runs, which may differ.
+      const [analyticsRow] = await db
+        .select({
+          visaType: cases.visaType,
+          docCount: sql<number>`(
+            select count(*)::int
+            from ${caseDocuments}
+            where ${caseDocuments.caseId} = ${cases.id}
+              and ${caseDocuments.deletedAt} is null
+          )`,
+        })
+        .from(cases)
+        .where(eq(cases.id, input.caseId))
+        .limit(1);
+      if (analyticsRow) {
+        emitFromCtx(ctx, {
+          name: "case.build_requested",
+          properties: {
+            case_id: input.caseId,
+            visa_type: analyticsRow.visaType,
+            document_count: analyticsRow.docCount,
+          },
+        });
+      }
+
       return { ok: true as const, eventId: ids[0] ?? null };
     }),
 
@@ -488,9 +547,11 @@ export const caseRouter = router({
       const { db, userId } = ctx;
 
       // Authorize via the user-scoped tx (RLS engaged). If the caller
-      // can't see the case, RLS returns no row → NOT_FOUND.
+      // can't see the case, RLS returns no row → NOT_FOUND. We pull
+      // `status` here too so the analytics emit can report the
+      // pre-archive state without a second round-trip.
       const [authzCheck] = await db
-        .select({ id: cases.id })
+        .select({ id: cases.id, status: cases.status })
         .from(cases)
         .where(and(eq(cases.id, input.caseId), isNull(cases.deletedAt)))
         .limit(1);
@@ -515,6 +576,13 @@ export const caseRouter = router({
             .update(cases)
             .set({ deletedAt: new Date() })
             .where(eq(cases.id, input.caseId));
+        });
+        emitFromCtx(ctx, {
+          name: "case.archived",
+          properties: {
+            case_id: input.caseId,
+            prior_status: authzCheck.status,
+          },
         });
         return { ok: true as const };
       } catch (err) {

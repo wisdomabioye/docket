@@ -28,6 +28,7 @@ import { mdToSafeHtml } from "@/lib/markdown";
 import { rateLimit } from "@/server/services/ratelimit";
 import { inngest } from "@/server/jobs/client";
 import { AppError, appErrorToTrpcCode } from "@/lib/errors";
+import { emitFromCtx } from "@/server/services/analytics/emit";
 
 /**
  * Stage 08 output review router. Every mutation goes through
@@ -224,7 +225,10 @@ export const outputRouter = router({
         });
       }
 
-      await gateOutputAccess({ ctxDb: ctx.db, outputId: input.outputId });
+      const access = await gateOutputAccess({
+        ctxDb: ctx.db,
+        outputId: input.outputId,
+      });
       try {
         const r = await ownerDb.transaction(async (tx) =>
           saveOutputDraft({
@@ -233,6 +237,19 @@ export const outputRouter = router({
             content: input.content,
           }),
         );
+        // Emit only when the service actually wrote — `saved=false`
+        // means the draft was identical to the prior write (idempotent
+        // no-op), so emitting it would inflate the autosave count.
+        if (r.saved) {
+          emitFromCtx(ctx, {
+            name: "output.draft_saved",
+            properties: {
+              case_id: access.caseId,
+              output_id: input.outputId,
+              content_length: input.content.length,
+            },
+          });
+        }
         return { ok: true as const, saved: r.saved };
       } catch (err) {
         rethrowAsTrpc(err);
@@ -265,7 +282,10 @@ export const outputRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { userId } = ctx;
       // RLS check — the user-scoped read fails fast for cross-attorney access.
-      await gateOutputAccess({ ctxDb: ctx.db, outputId: input.outputId });
+      const access = await gateOutputAccess({
+        ctxDb: ctx.db,
+        outputId: input.outputId,
+      });
 
       try {
         const result = await ownerDb.transaction(async (tx) =>
@@ -281,6 +301,14 @@ export const outputRouter = router({
             attorneyId: userId,
           }),
         );
+        emitFromCtx(ctx, {
+          name: "output.version_saved",
+          properties: {
+            case_id: access.caseId,
+            output_id: result.outputId,
+            version: result.outputVersion,
+          },
+        });
         return {
           ok: true as const,
           outputId: result.outputId,
@@ -295,7 +323,10 @@ export const outputRouter = router({
     .input(ApproveInput)
     .mutation(async ({ ctx, input }) => {
       const { userId } = ctx;
-      await gateOutputAccess({ ctxDb: ctx.db, outputId: input.outputId });
+      const access = await gateOutputAccess({
+        ctxDb: ctx.db,
+        outputId: input.outputId,
+      });
 
       try {
         // `approveOutput` flushes any pending draft into a new version
@@ -311,6 +342,16 @@ export const outputRouter = router({
             ...(input.notes !== undefined ? { notes: input.notes } : {}),
           }),
         );
+        emitFromCtx(ctx, {
+          name: "output.approved",
+          properties: {
+            case_id: access.caseId,
+            // Use the post-flush id — when a draft was flushed this is
+            // the FRESH row that got the approval stamp, not the old one.
+            output_id: result.approvedOutputId,
+            draft_flushed: result.draftFlushed,
+          },
+        });
         return {
           ok: true as const,
           // When draft was flushed, `approvedOutputId` is the NEW
@@ -452,6 +493,17 @@ export const outputRouter = router({
         const result = await compileFullPackagePdf({
           db: ctx.db,
           caseId: input.caseId,
+        });
+        emitFromCtx(ctx, {
+          name: "package.exported",
+          properties: {
+            case_id: input.caseId,
+            // The package PDF has no separate DB row — its identity IS
+            // the storage key (`cases/<id>/pdf/package-<ts>.pdf`),
+            // which is stable per-export and useful for de-dup analytics.
+            package_id: result.key,
+            size_bytes: result.bytes,
+          },
         });
         return { url: result.url, bytes: result.bytes };
       } catch (err) {

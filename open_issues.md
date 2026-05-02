@@ -13,6 +13,59 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #38 — `admin.case_reassigned` analytics event has no emit site
+
+Status: Tracked.
+Surfaced: 2026-05-02
+
+The `admin.case_reassigned` event is declared in
+`lib/analytics/events.ts` but no tRPC procedure currently exists to
+emit it — there is no `case.reassign` or `admin.reassignCase` mutation
+in `server/api/routers/admin.ts`. The event sits in the taxonomy
+because Phase 2 multi-attorney workflows will need it; for Phase 1
+(solo attorney per case) reassignment isn't a real flow.
+
+Fix when the reassign UX lands: import `emitFromCtx` into the new
+mutation, call it after the participant-table swap commits with
+`{ case_id, from_attorney_id, to_attorney_id }`. The taxonomy entry is
+ready and typed.
+
+No code change today. The dead taxonomy entry costs nothing — TS still
+type-checks the unused union member, and PostHog only ever sees event
+names that an emit site actually fires.
+
+---
+
+### #39 — Sign-out does not call `posthog.reset()`
+
+Status: Tracked.
+Surfaced: 2026-05-02
+
+`components/layout/SignOutForm.tsx` is a server-action form (no
+client JS) which means we can't synchronously call
+`posthog.reset()` from the click handler before the redirect. The
+result: PostHog's `localStorage` retains the previous user's
+`distinct_id` until the next `posthog.identify()` fires on the new
+sign-in. For the in-between window, anonymous events emitted by a
+*different* user signing into the same browser would be attributed
+to the previous user.
+
+Phase 1 risk: minimal (single-attorney solo practice; one operator
+per machine).
+
+Fix when convenient: extract a thin client-component button
+(`<SignOutResetButton/>`) that wraps the existing submit, fires
+`reset()` from `lib/analytics/client.ts` synchronously, then submits
+the form. Server-action redirect behavior is preserved — the click
+handler runs fully before the form post takes effect.
+
+Alternative (simpler, less correct): add a `posthog.reset()` call to
+the marketing/landing layout's mount effect. Catches the common
+case (sign-out → redirected to `/`) but misses sign-out targets that
+land on auth pages.
+
+---
+
 ### #36 — `publicEnv` reads dead `NEXT_PUBLIC_SUPABASE_*` vars
 
 Status: Tracked.

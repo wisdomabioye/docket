@@ -13,6 +13,7 @@ import type { ReactElement } from "react";
 import { Icon } from "@/components/ui/Icon";
 import { trpc } from "@/lib/trpc/react";
 import { APP_ROUTES } from "@/config";
+import { track } from "@/lib/analytics/client";
 
 /**
  * Stage 11 W5 — global search bar mounted in the AttorneyTopbar.
@@ -105,6 +106,24 @@ export function SearchBar(): ReactElement {
     for (const d of data.documents) out.push({ kind: "document", data: d });
     return out;
   }, [query.data]);
+
+  // Analytics — emit once per debounced query that returned results.
+  // The dep is `query.data`, which only changes when a new server
+  // response lands. Length-only payload (never the query string itself
+  // — could carry a beneficiary name).
+  useEffect(() => {
+    const data = query.data;
+    if (!data) return;
+    if (debouncedQuery.length < MIN_QUERY_LENGTH) return;
+    track({
+      name: "search.performed",
+      properties: {
+        query_length: debouncedQuery.length,
+        case_results: data.cases.length,
+        document_results: data.documents.length,
+      },
+    });
+  }, [query.data, debouncedQuery]);
 
   // Clamp the raw index so a stale highlight (results just shrunk)
   // can never point past the new array. Pure derivation in render —

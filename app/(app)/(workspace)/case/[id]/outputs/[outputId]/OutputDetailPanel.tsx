@@ -16,6 +16,7 @@ import {
 import { trpc } from "@/lib/trpc/react";
 import { APP_ROUTES } from "@/config";
 import type { OutputType } from "@/server/services/computer/types";
+import { track } from "@/lib/analytics/client";
 
 /**
  * Client island that orchestrates the output detail page:
@@ -165,6 +166,27 @@ export function OutputDetailPanel(
     }
     seededDirtyRef.current = true;
   }, [tiptap.api, hasPendingDraft, tiptap]);
+
+  // Analytics — emit once per (caseId, outputId) navigation. Tied to
+  // the initial output id so that switching outputs (a fresh page nav)
+  // re-fires; live refetches that change `outputVersion` do NOT, since
+  // the deps array doesn't include the live snapshot.
+  useEffect(() => {
+    track({
+      name: "output.viewed",
+      properties: {
+        case_id: props.caseId,
+        output_id: props.initialOutput.id,
+        output_type: props.initialOutput.outputType,
+        version: props.initialOutput.outputVersion,
+      },
+    });
+  }, [
+    props.caseId,
+    props.initialOutput.id,
+    props.initialOutput.outputType,
+    props.initialOutput.outputVersion,
+  ]);
 
   function flushAutoSave(): void {
     if (!tiptap.api) return;

@@ -21,6 +21,7 @@ import { withAudit } from "@/server/services/audit";
 import { getRedis } from "@/server/services/redis";
 import type { Db as AdminDb } from "@/server/db/client";
 import type { AttorneyStatus } from "@/lib/constants";
+import { emitFromCtx } from "@/server/services/analytics/emit";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Module-level constants + helpers used by Stage 09 procedures. Declared
@@ -193,6 +194,27 @@ export const adminRouter = router({
             .update(attorneyProfiles)
             .set({ status: "active" })
             .where(eq(attorneyProfiles.id, profile.id));
+          // Two emits: the lifecycle "activated" milestone AND the
+          // generic "status_changed" so dashboards that watch transitions
+          // (pending → active, suspended → active, etc.) see all of them.
+          //
+          // Identity: `attorney_id` / `target_attorney_id` is `users.id`
+          // (the same identity used by `posthog.identify()` and across
+          // RLS / audit log) — NOT `attorneyProfiles.id`, which would
+          // make these events unjoinable with the rest of the user
+          // event stream in PostHog.
+          emitFromCtx(ctx, {
+            name: "attorney.activated",
+            properties: { attorney_id: input.userId },
+          });
+          emitFromCtx(ctx, {
+            name: "admin.attorney_status_changed",
+            properties: {
+              target_attorney_id: input.userId,
+              from_status: profile.status,
+              to_status: "active",
+            },
+          });
           return { ok: true as const };
         },
       );
@@ -969,6 +991,17 @@ export const adminRouter = router({
             .update(attorneyProfiles)
             .set({ status: "suspended" })
             .where(eq(attorneyProfiles.id, profile.id));
+          // `target_attorney_id` is the user id (matches PostHog
+          // distinctId + the rest of the user event stream). See the
+          // sibling note in `activateAttorney` for the rationale.
+          emitFromCtx(ctx, {
+            name: "admin.attorney_status_changed",
+            properties: {
+              target_attorney_id: input.userId,
+              from_status: profile.status,
+              to_status: "suspended",
+            },
+          });
           return { ok: true as const };
         },
       );

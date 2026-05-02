@@ -18,6 +18,7 @@ import { storage } from "@/server/services/storage";
 import { appErrorToTrpcCode, isAppError } from "@/lib/errors";
 import { canUploadInStatus } from "@/lib/case-status";
 import { MAX_UPLOAD_BYTES } from "@/lib/constants";
+import { emitFromCtx } from "@/server/services/analytics/emit";
 
 /**
  * Document procedures. Per Stage 05 RLS pattern: read for authz via
@@ -80,6 +81,16 @@ export const documentRouter = router({
           mimeType: input.mimeType,
           documentType: input.documentType,
           bytes,
+        });
+        emitFromCtx(ctx, {
+          name: "document.uploaded",
+          properties: {
+            case_id: input.caseId,
+            document_id: documentId,
+            document_type: input.documentType,
+            size_bytes: bytes.byteLength,
+            mime_type: input.mimeType,
+          },
         });
         return { ok: true as const, documentId };
       } catch (err) {
@@ -186,6 +197,10 @@ export const documentRouter = router({
       } catch {
         /* ignore */
       }
+      emitFromCtx(ctx, {
+        name: "document.deleted",
+        properties: { case_id: doc.caseId, document_id: input.documentId },
+      });
       return { ok: true as const };
     }),
 });
