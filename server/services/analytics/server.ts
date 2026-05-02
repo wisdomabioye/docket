@@ -31,6 +31,7 @@ import { PostHog } from "posthog-node";
 import * as Sentry from "@sentry/nextjs";
 import { type AnalyticsEvent, payloadHasPii } from "@/lib/analytics/events";
 import { handlePiiViolation } from "@/lib/analytics/pii-guard";
+import { sanitizeProperties } from "@/lib/analytics/sanitize";
 import { env } from "@/config/env";
 
 let cachedClient: PostHog | null = null;
@@ -48,6 +49,19 @@ function getClient(): PostHog | null {
     enableLocalEvaluation: false,
     flushAt: 1,
     flushInterval: 0,
+    // Last-line PII scrub. Mirror of the client's `sanitize_properties`
+    // hook, adapted for posthog-node's `before_send(event)` signature.
+    // Returns `null` to drop the event only on internal contract
+    // violations (no `event.event` name); otherwise mutates a copy of
+    // `properties` and returns the modified event. See
+    // `lib/analytics/sanitize.ts` for the layered defense rationale.
+    before_send: (event) => {
+      if (!event) return event;
+      if (event.properties) {
+        event.properties = sanitizeProperties(event.properties);
+      }
+      return event;
+    },
   });
   return cachedClient;
 }

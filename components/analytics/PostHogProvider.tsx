@@ -33,6 +33,7 @@ import { Suspense, useEffect } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import posthog from "posthog-js";
 import { publicEnv } from "@/config/public-env";
+import { sanitizeProperties } from "@/lib/analytics/sanitize";
 
 let initAttempted = false;
 
@@ -67,6 +68,23 @@ function initPostHog(): void {
     // attorney + beneficiary screen frames to PostHog, which is a
     // PII risk we have not signed off on.
     disable_session_recording: true,
+    // Last-line PII scrub — runs over every captured event right
+    // before send. Catches anything that bypassed the typed taxonomy
+    // (autocapture, URL query strings on `$pageview`, future PostHog
+    // properties we haven't anticipated). See `lib/analytics/sanitize.ts`
+    // for the layered defense rationale.
+    //
+    // We use `before_send` rather than the older `sanitize_properties`
+    // hook — PostHog's typed config marks `sanitize_properties` as
+    // `@deprecated`. `before_send` is the supported successor and is
+    // symmetric with the server wrapper's `before_send` adapter.
+    // Returning `null` from `before_send` would drop the event;
+    // returning the (possibly-mutated) `CaptureResult` forwards it.
+    before_send: (event) => {
+      if (!event) return event;
+      event.properties = sanitizeProperties(event.properties);
+      return event;
+    },
   });
 }
 
