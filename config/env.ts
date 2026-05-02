@@ -60,7 +60,17 @@ const schema = z
       .optional(),
 
     // Other services.
-    POSTMARK_API_KEY: z.string().min(1).optional(), // Stage 11
+    // Postmark transactional email — Stage 11. Three pieces:
+    //   - API key (server token from a Postmark server)
+    //   - From email (must match a verified sender signature on the
+    //     Postmark account; the `superRefine` below promotes this to
+    //     required when the API key is set, so a half-configured deploy
+    //     fails at boot rather than at first send)
+    //   - Reply-to (optional; many flows want replies to land in a
+    //     real inbox, not the sender's noreply address)
+    POSTMARK_API_KEY: z.string().min(1).optional(),
+    POSTMARK_FROM_EMAIL: z.email().optional(),
+    POSTMARK_REPLY_TO: z.email().optional(),
     UPSTASH_REDIS_REST_URL: z.url().optional(), // Stage 02 (rate limit)
     UPSTASH_REDIS_REST_TOKEN: z.string().min(1).optional(),
     INNGEST_EVENT_KEY: z.string().min(1).optional(), // Stage 07
@@ -123,6 +133,20 @@ const schema = z
         message:
           "AUTH_SECRET is required when any OAuth provider is configured (run `openssl rand -base64 32`)",
         path: ["AUTH_SECRET"],
+      });
+    }
+
+    // Postmark invariant — when the API key is set, a from-email is
+    // required (Postmark rejects sends without one). `POSTMARK_REPLY_TO`
+    // stays optional even with the key set; absence means replies hit
+    // the from-address (which is typically a noreply mailbox — not
+    // ideal but not an error).
+    if (v.POSTMARK_API_KEY && !v.POSTMARK_FROM_EMAIL) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "POSTMARK_FROM_EMAIL is required when POSTMARK_API_KEY is set (must match a verified Postmark sender signature)",
+        path: ["POSTMARK_FROM_EMAIL"],
       });
     }
 
