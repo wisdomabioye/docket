@@ -113,6 +113,15 @@ export async function GET() {
       postmark: presence(env.POSTMARK_API_KEY),
       inngest: presence(env.INNGEST_EVENT_KEY),
       redis,
+      // PostHog is gated only on the public key — host has a sensible
+      // default (`https://us.i.posthog.com`), so a deploy with key
+      // alone is fully functional. We do NOT hit any PostHog endpoint
+      // here: their `/capture` would create a phantom event under the
+      // health-check origin, and `/decide` would create a person
+      // profile per probe — both burn quota and skew dashboards.
+      // Connectivity issues surface elsewhere — Sentry catches the
+      // emit-side errors via the `trackServer` try/catch.
+      posthog: presence(env.NEXT_PUBLIC_POSTHOG_KEY),
     },
     timestamp: new Date().toISOString(),
   });

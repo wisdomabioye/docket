@@ -22,6 +22,7 @@ const envState = vi.hoisted(() => ({
   STRIPE_SECRET_KEY: undefined as string | undefined,
   POSTMARK_API_KEY: undefined as string | undefined,
   INNGEST_EVENT_KEY: undefined as string | undefined,
+  NEXT_PUBLIC_POSTHOG_KEY: undefined as string | undefined,
 }));
 
 vi.mock("@/config/env", () => ({ env: envState }));
@@ -51,6 +52,7 @@ afterEach(() => {
   envState.PERPLEXITY_API_KEY = undefined;
   envState.UPSTASH_REDIS_REST_URL = undefined;
   envState.UPSTASH_REDIS_REST_TOKEN = undefined;
+  envState.NEXT_PUBLIC_POSTHOG_KEY = undefined;
 });
 
 async function getHealth(): Promise<{
@@ -139,6 +141,31 @@ describe("/api/health — redis (live ping)", () => {
     const r = await getHealth();
     expect(r.integrations.redis).toBe("error");
     expect(r.status).toBe("degraded");
+  });
+});
+
+describe("/api/health — posthog (env presence)", () => {
+  it("not_configured when NEXT_PUBLIC_POSTHOG_KEY is unset", async () => {
+    const r = await getHealth();
+    expect(r.integrations.posthog).toBe("not_configured");
+    // PostHog is fully optional — its absence MUST NOT degrade overall.
+    expect(r.status).toBe("ok");
+  });
+
+  it("connected when NEXT_PUBLIC_POSTHOG_KEY is set", async () => {
+    envState.NEXT_PUBLIC_POSTHOG_KEY = "phc_xxxxxxxxxxxx";
+    const r = await getHealth();
+    expect(r.integrations.posthog).toBe("connected");
+    expect(r.status).toBe("ok");
+  });
+
+  it("does NOT call PostHog network endpoints from the probe", async () => {
+    // No PostHog HTTP mock is registered. If the route ever issued an
+    // ingestion or /decide request, the call would fail or hit the
+    // real network — both are test failures. The probe is config-only.
+    envState.NEXT_PUBLIC_POSTHOG_KEY = "phc_xxxxxxxxxxxx";
+    const r = await getHealth();
+    expect(r.integrations.posthog).toBe("connected");
   });
 });
 
