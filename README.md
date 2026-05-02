@@ -122,6 +122,63 @@ and set `S3_REGION` to the bucket's region (the SDK will derive the
 endpoint). MinIO / B2: use their endpoint, region usually `us-east-1`
 or `auto`.
 
+## Analytics (PostHog)
+
+Product analytics is opt-in via env. With `NEXT_PUBLIC_POSTHOG_KEY` unset
+the entire analytics stack no-ops cleanly — no init, no network, no
+errors — so a fresh dev environment runs without configuration.
+
+```bash
+# Public — inlined into the client bundle.
+NEXT_PUBLIC_POSTHOG_KEY=phc_xxxxxxxxxxxx
+NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com   # or eu.i.posthog.com; defaulted
+```
+
+Server emits reuse the same public project key (PostHog's SDK design —
+one project key for both client and server captures); no separate
+`POSTHOG_PERSONAL_API_KEY` is needed for analytics.
+
+### What's instrumented
+
+17 typed events across 6 surfaces — auth, attorney lifecycle, case
+lifecycle, documents, outputs, package export, search, admin. The full
+taxonomy lives in `lib/analytics/events.ts` as a discriminated union;
+adding a new event = adding a member there + a sample fixture in
+`tests/unit/analytics-pii-audit.test.ts` (TS forces the second).
+
+### Layered PII protection (4 layers, outside-in)
+
+| Layer | File | Failure mode |
+|-------|------|--------------|
+| 1. Taxonomy types | `lib/analytics/events.ts` | Code review rejects PII keys in `EventPayloads` |
+| 2. Static audit (CI) | `tests/unit/analytics-pii-audit.test.ts` | Test fails before merge if any payload key collides with `PII_PROPERTY_KEYS` |
+| 3. Runtime guard | `lib/analytics/pii-guard.ts` | Dev throws; prod logs to Sentry + drops the event silently |
+| 4. PostHog `before_send` | `lib/analytics/sanitize.ts` | Last-mile scrub of every event; URL query params on `$current_url`/`$referrer` get redacted |
+
+### File map
+
+- `lib/analytics/events.ts` — typed event taxonomy + PII denylist
+- `lib/analytics/pii-guard.ts` — shared dev/prod failure policy
+- `lib/analytics/sanitize.ts` — `before_send` scrubber (client + server)
+- `lib/analytics/client.ts` — `track()` / `identify()` / `reset()` for Client Components
+- `server/services/analytics/server.ts` — `trackServer()` / `identifyServer()` (lazy-init posthog-node singleton, `captureImmediate` for serverless safety)
+- `server/services/analytics/emit.ts` — `emitFromCtx(ctx, event)` and `emitFromUser(userId, event)` convenience helpers used by tRPC routers and Inngest jobs
+- `components/analytics/PostHogProvider.tsx` — root-layout init + `$pageview` capture
+- `components/analytics/PostHogIdentify.tsx` — workspace-layout identify
+
+### Adding a new event
+
+1. Add to `EVENT_NAMES` + `EventPayloads` in `lib/analytics/events.ts`.
+2. Add a sample to `SAMPLE_EVENT_PAYLOADS` in
+   `tests/unit/analytics-pii-audit.test.ts` (TS won't compile the test
+   until you do).
+3. At the emit site:
+   - Server (tRPC mutation): `emitFromCtx(ctx, { name, properties })`
+   - Inngest job / webhook: `await emitFromUser(userId, { name, properties })`
+   - Client component: `track({ name, properties })`
+4. Run `pnpm test tests/unit/analytics-pii-audit.test.ts` — the audit
+   walks your new payload against the PII denylist.
+
 ## Quality gates
 
 ```bash
@@ -147,4 +204,4 @@ pnpm build
 curl -s http://localhost:3000/api/health | jq
 ```
 
-Each integration field flips from `not_configured` to `connected` as its env var arrives in a later stage.
+Each integration field flips from `not_configured` to `connected` as its env var arrives in a later stage. The `posthog` field is config-only (env presence) — the route never hits PostHog endpoints, since `/capture` would create phantom events and `/decide` would create person profiles per probe.
