@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { DM_Sans, DM_Serif_Display, JetBrains_Mono } from "next/font/google";
 import { APP_INFO, pageTitle } from "@/config";
 import { TRPCReactProvider } from "@/lib/trpc/react";
+import { PostHogProvider } from "@/components/analytics/PostHogProvider";
 import "./globals.css";
 
 const sans = DM_Sans({
@@ -38,7 +39,9 @@ export default function RootLayout({
       className={`${sans.variable} ${serif.variable} ${mono.variable}`}
     >
       <body>
-        <TRPCReactProvider>{children}</TRPCReactProvider>
+        <PostHogProvider>
+          <TRPCReactProvider>{children}</TRPCReactProvider>
+        </PostHogProvider>
       </body>
     </html>
   );

@@ -9,6 +9,7 @@ import {
   AttorneyTopbar,
 } from "@/components/layout";
 import { SignOutForm } from "@/components/layout/SignOutForm";
+import { PostHogIdentify } from "@/components/analytics/PostHogIdentify";
 
 /**
  * Stage 11 attorney workspace shell. Wraps every route under the
@@ -70,6 +71,7 @@ export default async function WorkspaceLayout(props: {
       }
       topbar={<AttorneyTopbar />}
     >
+      <PostHogIdentify userId={session.user.id} />
       {props.children}
     </AppShell>
   );
