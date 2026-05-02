@@ -13,6 +13,65 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #36 — `publicEnv` reads dead `NEXT_PUBLIC_SUPABASE_*` vars
+
+Status: Tracked.
+Surfaced: 2026-05-02
+
+`config/public-env.ts` exports `supabaseUrl` and `supabaseAnonKey`
+sourced from `process.env.NEXT_PUBLIC_SUPABASE_URL` /
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`. Neither variable is declared in
+`config/env.ts` (the validated server-side schema) — they were stripped
+when auth pivoted from Supabase Auth to Auth.js + Drizzle adapter, but
+the public-env mirror was missed.
+
+Impact today: dead reads. Both values are `undefined` at runtime; no
+known consumer references them. Lint won't catch it because
+`process.env.NEXT_PUBLIC_*` reads aren't checked against the validated
+schema.
+
+Fix when convenient: drop both lines from `config/public-env.ts`. If
+nothing else references the keys (verified via grep), no other change
+is needed. Pair with a one-liner test that pins `Object.keys(publicEnv)`
+so a future regression — adding back a public env var without also
+adding it to `config/env.ts` — fails CI.
+
+Surfaced during PostHog wrapper review (PH.3); not in scope to fix in
+the analytics workstream.
+
+---
+
+### #37 — Server analytics uses `captureImmediate` per event
+
+Status: Tracked.
+Surfaced: 2026-05-02
+
+`server/services/analytics/server.ts:trackServer` calls
+`PostHog.captureImmediate()` rather than the default batched `capture()`.
+Rationale: Vercel serverless functions terminate the moment the response
+is flushed — a batched event still in the in-memory queue gets dropped
+when the container freezes. `captureImmediate` issues an HTTP request
+per event, guaranteeing delivery before the await resolves.
+
+Trade-off: per-event HTTP cost (latency + outbound bandwidth) for every
+emit on the server. At Phase 1 volumes (one attorney, ~17 emit sites,
+mutations measured in tens per day) this is negligible. At Phase 2 scale
+the cost picture changes.
+
+Revisit when:
+  - We move off Vercel serverless to a long-lived runtime (Fly.io, Render,
+    a dedicated VPS) — batched `capture()` + a graceful `shutdown()` on
+    SIGTERM becomes the right pattern.
+  - Server-side emit volume grows past ~10/sec sustained — at that point
+    the per-event HTTP becomes a real budget item and we want
+    `captureImmediate` only on the highest-value events (revenue, churn)
+    with everything else batched.
+
+No code change for now. The wrapper's docstring already explains the
+choice; this entry is the explicit "revisit trigger."
+
+---
+
 ### #35 — R2 object-lifecycle policy for soft-deleted documents
 
 Status: Tracked.
