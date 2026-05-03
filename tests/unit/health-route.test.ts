@@ -21,6 +21,8 @@ const envState = vi.hoisted(() => ({
   AUTH_MICROSOFT_ID: undefined as string | undefined,
   STRIPE_SECRET_KEY: undefined as string | undefined,
   POSTMARK_API_KEY: undefined as string | undefined,
+  POSTMARK_FROM_EMAIL: undefined as string | undefined,
+  POSTMARK_REPLY_TO: undefined as string | undefined,
   INNGEST_EVENT_KEY: undefined as string | undefined,
   NEXT_PUBLIC_POSTHOG_KEY: undefined as string | undefined,
 }));
@@ -42,6 +44,14 @@ vi.mock("@/server/db/client", () => ({
   db: { execute: dbExecuteMock },
 }));
 
+const postmarkClientMock = vi.hoisted(() => ({
+  getServer: vi.fn(),
+}));
+const getPostmarkClientMock = vi.hoisted(() => vi.fn());
+vi.mock("@/server/services/email/postmark-client", () => ({
+  getPostmarkClient: getPostmarkClientMock,
+}));
+
 afterEach(() => {
   redisMock.ping.mockReset();
   redisMock.get.mockReset();
@@ -53,6 +63,11 @@ afterEach(() => {
   envState.UPSTASH_REDIS_REST_URL = undefined;
   envState.UPSTASH_REDIS_REST_TOKEN = undefined;
   envState.NEXT_PUBLIC_POSTHOG_KEY = undefined;
+  envState.POSTMARK_API_KEY = undefined;
+  envState.POSTMARK_FROM_EMAIL = undefined;
+  envState.POSTMARK_REPLY_TO = undefined;
+  postmarkClientMock.getServer.mockReset();
+  getPostmarkClientMock.mockReset();
 });
 
 async function getHealth(): Promise<{
@@ -166,6 +181,56 @@ describe("/api/health — posthog (env presence)", () => {
     envState.NEXT_PUBLIC_POSTHOG_KEY = "phc_xxxxxxxxxxxx";
     const r = await getHealth();
     expect(r.integrations.posthog).toBe("connected");
+  });
+});
+
+describe("/api/health — postmark (live ping)", () => {
+  it("not_configured when POSTMARK_API_KEY is unset", async () => {
+    const r = await getHealth();
+    expect(r.integrations.postmark).toBe("not_configured");
+    expect(r.status).toBe("ok");
+  });
+
+  it("not_configured when key set but FROM_EMAIL missing (half-set deploy)", async () => {
+    envState.POSTMARK_API_KEY = "pm-xxx";
+    const r = await getHealth();
+    expect(r.integrations.postmark).toBe("not_configured");
+    // Half-set deploy is NOT a degradation — it's an operator-misconfig
+    // signal, surfaced via the integration field, not the overall status.
+    expect(r.status).toBe("ok");
+  });
+
+  it("connected when getServer() resolves", async () => {
+    envState.POSTMARK_API_KEY = "pm-xxx";
+    envState.POSTMARK_FROM_EMAIL = "from@example.com";
+    getPostmarkClientMock.mockReturnValue(postmarkClientMock);
+    postmarkClientMock.getServer.mockResolvedValueOnce({ ID: 1, Name: "x" });
+    const r = await getHealth();
+    expect(r.integrations.postmark).toBe("connected");
+    expect(r.status).toBe("ok");
+  });
+
+  it("error when getServer() rejects → degrades overall", async () => {
+    envState.POSTMARK_API_KEY = "pm-xxx";
+    envState.POSTMARK_FROM_EMAIL = "from@example.com";
+    getPostmarkClientMock.mockReturnValue(postmarkClientMock);
+    postmarkClientMock.getServer.mockRejectedValueOnce(new Error("401 unauthorized"));
+    const r = await getHealth();
+    expect(r.integrations.postmark).toBe("error");
+    expect(r.status).toBe("degraded");
+  });
+
+  it("does NOT call sendEmail from the probe", async () => {
+    // No `sendEmail` mock is registered. Health probes must NEVER
+    // dispatch a real email — `getServer()` is the auth-only metadata
+    // call. If the route ever issued a send, the test would fail or
+    // hit the network.
+    envState.POSTMARK_API_KEY = "pm-xxx";
+    envState.POSTMARK_FROM_EMAIL = "from@example.com";
+    getPostmarkClientMock.mockReturnValue(postmarkClientMock);
+    postmarkClientMock.getServer.mockResolvedValueOnce({ ID: 1, Name: "x" });
+    const r = await getHealth();
+    expect(r.integrations.postmark).toBe("connected");
   });
 });
 

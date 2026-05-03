@@ -16,6 +16,12 @@ import { getRedis } from "@/server/services/redis";
  *     a Vercel/Cloudflare aggregate could rack up real cost. When the
  *     cached value is missing, returns `unknown` (the cron may not have
  *     run yet on a fresh deploy).
+ *   - `postmark`: when both `POSTMARK_API_KEY` and `POSTMARK_FROM_EMAIL`
+ *     are set, calls `getServer()` (auth-only metadata read, no email
+ *     side-effect, no cost) behind a short timeout. Either env var
+ *     missing collapses to `not_configured` so a half-set deploy
+ *     (key without sender) shows up distinctly from a fully-unset one
+ *     in the surrounding `degraded` calculus.
  *   - Other integrations: env-presence only.
  *
  * `status: "ok"` only if the integrations Phase 1 actually depends on
@@ -63,6 +69,34 @@ async function pingRedis(): Promise<IntegrationStatus> {
   }
 }
 
+async function pingPostmark(): Promise<IntegrationStatus> {
+  // Both must be set for a usable email path. Sender-without-key OR
+  // key-without-sender means a misconfigured deploy that can't actually
+  // send anything — surface as `not_configured` so the operator notices
+  // the gap before a notification fires.
+  if (!env.POSTMARK_API_KEY || !env.POSTMARK_FROM_EMAIL) {
+    return "not_configured";
+  }
+  try {
+    const { getPostmarkClient } = await import(
+      "@/server/services/email/postmark-client"
+    );
+    const client = getPostmarkClient();
+    if (!client) return "not_configured";
+    // 3s timeout. Postmark's API is normally < 200ms; anything past
+    // 3s is an outage we don't want to wedge the probe on.
+    await Promise.race([
+      client.getServer(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("postmark ping timeout")), 3_000),
+      ),
+    ]);
+    return "connected";
+  } catch {
+    return "error";
+  }
+}
+
 async function getCachedComputerStatus(): Promise<IntegrationStatus> {
   if (!env.PERPLEXITY_API_KEY) return "not_configured";
   if (!env.UPSTASH_REDIS_REST_URL || !env.UPSTASH_REDIS_REST_TOKEN) {
@@ -85,17 +119,21 @@ async function getCachedComputerStatus(): Promise<IntegrationStatus> {
 }
 
 export async function GET() {
-  const [database, redis, perplexity] = await Promise.all([
+  const [database, redis, perplexity, postmark] = await Promise.all([
     pingDatabase(),
     pingRedis(),
     getCachedComputerStatus(),
+    pingPostmark(),
   ]);
 
   // Degraded only on hard errors of dependencies we actively use.
   // `not_configured` and `unknown` aren't degradations — they're
   // diagnostic info for the operator.
   const overall =
-    database === "error" || perplexity === "error" || redis === "error"
+    database === "error" ||
+    perplexity === "error" ||
+    redis === "error" ||
+    postmark === "error"
       ? "degraded"
       : "ok";
 
@@ -110,7 +148,7 @@ export async function GET() {
       authMicrosoft: presence(env.AUTH_MICROSOFT_ID),
       perplexity,
       stripe: presence(env.STRIPE_SECRET_KEY),
-      postmark: presence(env.POSTMARK_API_KEY),
+      postmark,
       inngest: presence(env.INNGEST_EVENT_KEY),
       redis,
       // PostHog is gated only on the public key — host has a sensible
