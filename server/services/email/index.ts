@@ -12,10 +12,10 @@ import "server-only";
  *   2. Init-safety — calls before `POSTMARK_API_KEY` is set (dev
  *      without postmark, CI runs) no-op cleanly with a structured
  *      log line. No exception, no Postmark API attempt.
- *   3. Render-once — both HTML and plain-text variants are rendered
- *      from the same React tree. Skipping plain-text dramatically
- *      degrades deliverability (spam filters scan for it); the
- *      service guarantees both ship together.
+ *   3. Render-once — the React tree is serialized to HTML once and
+ *      the plain-text variant is derived from that HTML. Skipping
+ *      plain-text dramatically degrades deliverability (spam filters
+ *      scan for it); the service guarantees both ship together.
  *   4. Subject templating — placeholders like `{caseLabel}` in
  *      `EMAIL_SUBJECTS` are interpolated against the message's `props`
  *      so the call site doesn't repeat the subject string.
@@ -27,8 +27,9 @@ import "server-only";
  *     guarantee at the orchestration layer (PM.4); the wrapper
  *     itself is dumb-and-direct.
  *   - Retries. Same reason — the Inngest step's automatic retry
- *     policy covers transient SDK failures. We swallow only fatal
- *     misconfigurations (no API key, no template found).
+ *     policy covers transient SDK failures. We swallow only the
+ *     no-API-key case (clean dev/CI no-op); every other failure mode
+ *     surfaces as a `failed` envelope for the caller to act on.
  */
 
 import type { ReactElement } from "react";
@@ -83,10 +84,11 @@ export type SendEmailArgs<N extends EmailName> = {
  *  before reaching Postmark — the plain-text variant is the strongest
  *  spam-filter signal we have outside DKIM/SPF.
  *
- *  Returns the `SendEmailResult` envelope; never throws on Postmark
- *  errors — those route to Sentry + the `failed` envelope so callers
- *  in Inngest jobs decide retry semantics. Re-throws ONLY on
- *  programmer errors (missing template, invalid email name).  */
+ *  Never throws — all error paths (render failure, Postmark rejection,
+ *  invalid recipient, missing from-address) return the
+ *  `SendEmailResult` envelope so the calling Inngest step can branch
+ *  on `delivered` to decide retry semantics. Postmark + render errors
+ *  also route to Sentry for visibility.  */
 export async function sendEmail<N extends EmailName>(
   args: SendEmailArgs<N>,
 ): Promise<SendEmailResult> {
@@ -117,7 +119,8 @@ export async function sendEmail<N extends EmailName>(
 
   const recipient = RecipientSchema.safeParse(args.to);
   if (!recipient.success) {
-    return { delivered: "failed", error: `invalid recipient: ${args.to}` };
+    // Don't echo `args.to` — it's PII and lands in Inngest/Sentry logs.
+    return { delivered: "failed", error: "invalid recipient address" };
   }
 
   const subject = renderSubject(args.email.name, args.email.props);
