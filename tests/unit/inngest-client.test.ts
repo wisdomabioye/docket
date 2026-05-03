@@ -25,23 +25,38 @@ describe("inngestFunctions registry", () => {
     expect(Array.isArray(inngestFunctions)).toBe(true);
   });
 
-  it("registers all Phase 9-10 functions (regression guard)", () => {
+  it("registers all Phase 9-11 functions (regression guard)", () => {
     // Hard-coding the expected ids catches accidental drops if a
     // `import { ... } from "..."` line gets removed during refactors.
     // Order isn't enforced — Inngest doesn't care.
+    //
+    // Stage 11 / PM.4 retired the Phase-9 `case-build-failed` logging
+    // stub and added eight notification listeners under
+    // `services/email/notifications/`. Two of those (build-completed,
+    // build-failed) subscribe to the existing domain events; the other
+    // six subscribe to dedicated `notification/*` events.
     const ids = inngestFunctions.map((f) => f.id());
     expect(new Set(ids)).toEqual(
       new Set([
+        // Phase 9-10 build pipeline
         "output-evidence-plan",
         "output-personal-statement",
         "output-petition-letter",
         "output-recommendation-letter",
         "output-exhibit-index",
         "computer-health",
-        "case-build-failed",
         "case-build",
         "regenerate-output",
         "case-build-watchdog",
+        // Stage 11 / PM.4 notifications
+        "notification-signup-welcome",
+        "notification-case-build-started",
+        "notification-case-build-completed",
+        "notification-case-build-failed",
+        "notification-case-archived",
+        "notification-output-approved",
+        "notification-package-ready",
+        "notification-admin-invite",
       ]),
     );
   });

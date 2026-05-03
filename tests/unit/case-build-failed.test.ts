@@ -1,22 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { caseBuildFailed, caseBuildFailedEvent } from "@/server/jobs/case-build-failed";
+import { caseBuildFailedEvent } from "@/server/jobs/case-build-failed";
 
 /**
- * `case-build-failed` is a logging-only stub for Phase 9; Stage 11 will
- * replace its body with a Postmark email + Slack ping. The test guards
- * against accidental regressions in the function's wiring (id, trigger,
- * retries) AND verifies the body doesn't throw on a typical event.
- *
- * The handler body uses `console.warn` for now; we silence that during
- * the test so vitest output stays clean.
+ * Stage 11 / PM.4 retired the Phase-9 logging stub; the
+ * `case-build-failed` Inngest function now lives at
+ * `server/services/email/notifications/case-build-failed.ts` and ships
+ * the Postmark email. This test still owns the event-schema contract
+ * (orchestrator emit vs notifier consume must agree on shape) — that's
+ * the part that survived the move.
  */
 
-describe("case-build-failed function definition", () => {
-  it("registers under id 'case-build-failed'", () => {
-    expect(caseBuildFailed.id()).toBe("case-build-failed");
-  });
-
-  it("uses the typed event trigger 'case/build.failed'", () => {
+describe("case/build.failed event identity", () => {
+  it("uses the canonical event name", () => {
     expect(caseBuildFailedEvent.event).toBe("case/build.failed");
     expect(caseBuildFailedEvent.name).toBe("case/build.failed");
   });
