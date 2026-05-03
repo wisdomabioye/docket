@@ -32,17 +32,18 @@ import "server-only";
  *     surfaces as a `failed` envelope for the caller to act on.
  */
 
-import type { ReactElement } from "react";
 import { render, toPlainText } from "@react-email/render";
 import { z } from "zod";
 import * as Sentry from "@sentry/nextjs";
 import { env } from "@/config/env";
 import { getPostmarkClient } from "@/server/services/email/postmark-client";
 import {
+  type Email,
   type EmailName,
   type EmailTemplateProps,
   EMAIL_SUBJECTS,
 } from "@/server/services/email/types";
+import { renderTemplate } from "@/server/services/email/templates";
 
 /** Result envelope. `delivered` distinguishes the four terminal states
  *  the wrapper can reach without throwing:
@@ -67,17 +68,13 @@ export type SendEmailResult =
 const RecipientSchema = z.email();
 
 export type SendEmailArgs<N extends EmailName> = {
-  /** Discriminator + props pair — matches the typed taxonomy.
-   *  Splitting from `template` lets the call site stay short. */
+  /** Discriminator + props pair — matches the typed taxonomy. The
+   *  template is resolved from `./templates/index.ts` against
+   *  `email.name`, so call sites never touch JSX. */
   email: { name: N; props: EmailTemplateProps[N] };
   /** Recipient email address. Single recipient by design — the only
    *  Phase 1 broadcast email is the admin invite, which is also 1:1. */
   to: string;
-  /** Rendered React element for the message body. The component must
-   *  accept `props: EmailTemplateProps[N]`; the call site provides
-   *  the JSX (`<SignupWelcome {...email.props} />`). PM.3 wires a
-   *  template registry that hides this prop from most call sites. */
-  template: ReactElement;
 };
 
 /** Send one transactional email. Always renders both HTML + plain-text
@@ -134,7 +131,12 @@ export async function sendEmail<N extends EmailName>(
   let htmlBody: string;
   let textBody: string;
   try {
-    htmlBody = await render(args.template, { plainText: false });
+    // Cast: `{ name: N; props: EmailTemplateProps[N] }` for a single `N`
+    // is a member of the `Email` discriminated union, but TS can't
+    // correlate the indexed prop type back to the union shape — the
+    // registry's per-name keying handles the runtime dispatch safely.
+    const element = renderTemplate(args.email as Email);
+    htmlBody = await render(element, { plainText: false });
     textBody = toPlainText(htmlBody);
   } catch (err) {
     Sentry.captureException(err, {
