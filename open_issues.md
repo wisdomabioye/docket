@@ -13,6 +13,76 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #44 — `package.ready` re-emits on every unapprove → re-approve cycle
+
+Status: Tracked.
+Surfaced: 2026-05-03
+
+The `output.approve` mutation
+(`server/api/routers/output.ts`) emits
+`notification/package.ready` whenever the post-approve approval
+summary shows every current output approved. If an attorney
+unapproves and re-approves the last output (a real flow during
+review), the listener fires again and ships a duplicate
+"Filing package ready" email. The Inngest concurrency key
+(`event.data.caseId`, limit 1) serializes runs but does not dedupe
+distinct events.
+
+Acceptable for beta — an attorney genuinely toggling approval is
+exercising a thoughtful re-review and the email points at a freshly
+compiled package. Becomes annoying at higher volume.
+
+Fix when needed: stamp `cases.package_ready_emailed_at` on first send,
+gate the listener on `IS NULL`. Reset when any current output
+flips to `attorneyApproved=false` so a true new "package complete"
+state still triggers.
+
+---
+
+### #45 — `notification/case.archived` and friends silently drop on emit failure
+
+Status: Tracked.
+Surfaced: 2026-05-03
+
+Three mutation paths
+(`case.requestBuild`, `case.archive`,
+`output.approve`, `admin.approveWaitlistEntry`) wrap their
+`inngest.send(...)` notification emit in `try { ... } catch (err) {
+console.error(...) }` so a transient Inngest outage doesn't surface a
+TRPCError to the user-visible click path. The trade-off: the email is
+silently lost — there's no retry queue at this layer (Inngest's retry
+is a level deeper, inside the listener once the event is accepted).
+
+Phase 1 acceptable — Inngest's `/event` ingest is highly available
+and a missed welcome / invite is recoverable manually. Phase 2 fix:
+write a `pending_notifications` row inside the same DB tx as the
+mutation, then a sweeper Inngest cron drains it. That gives true
+at-least-once semantics across both DB and Inngest outages.
+
+---
+
+### #46 — Postmark health probe does not verify DKIM/SPF status
+
+Status: Tracked.
+Surfaced: 2026-05-03
+
+`pingPostmark()` in `app/api/health/route.ts` calls `getServer()` —
+auth-only metadata, free, sub-second. It does NOT call the
+`/domains/<id>` endpoint that would surface DKIM and Return-Path
+verification status, because that's a separate API call per probe
+and the answer almost never changes after initial setup.
+
+Operator path: check the Postmark dashboard after DNS changes; the
+README's "Email (Postmark)" section walks through DKIM/SPF/DMARC
+setup and the verification check.
+
+If we get burned by a silently broken DKIM rotation, the fix is a
+10-minute add: `getDomain(<id>)` behind the same 3s timeout, with
+the result reported as a separate `postmarkDkim` field so a missing
+DKIM degrades distinctly from a missing API key.
+
+---
+
 ### #38 — `admin.case_reassigned` analytics event has no emit site
 
 Status: Tracked.

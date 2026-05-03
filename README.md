@@ -179,6 +179,113 @@ adding a new event = adding a member there + a sample fixture in
 4. Run `pnpm test tests/unit/analytics-pii-audit.test.ts` — the audit
    walks your new payload against the PII denylist.
 
+## Email (Postmark)
+
+Transactional email is opt-in via env. With `POSTMARK_API_KEY` unset
+the entire email stack no-ops cleanly — `sendEmail()` returns
+`{ delivered: "not_configured" }` and the calling Inngest step records
+success — so a fresh dev environment runs without configuration.
+
+```bash
+POSTMARK_API_KEY=server-token-xxxxxxxxxxxx
+POSTMARK_FROM_EMAIL=hello@docket.law      # MUST be a verified sender signature
+POSTMARK_REPLY_TO=support@docket.law      # optional; reply-to override
+```
+
+Both `POSTMARK_API_KEY` and `POSTMARK_FROM_EMAIL` must be set for any
+email to ship; the env validator's `superRefine` rejects a half-set
+deploy at boot.
+
+### Required DNS — DKIM + SPF
+
+Postmark won't sign outgoing mail until the sender domain's DKIM and
+Return-Path records are verified. Steps:
+
+1. **Postmark dashboard** → Sender Signatures → add `docket.law` (or
+   the domain matching `POSTMARK_FROM_EMAIL`).
+2. Postmark generates two DNS records — copy them verbatim:
+   - `<selector>._domainkey.docket.law  TXT  "k=rsa; p=…"` (DKIM)
+   - `pm-bounces.docket.law  CNAME  pm.mtasv.net` (Return-Path / DMARC alignment)
+3. **Cloudflare DNS** (or your provider) → add both records. **Disable
+   the orange-cloud proxy** on the CNAME — Cloudflare's proxy
+   intercepts the DNS lookup Postmark needs.
+4. **SPF**: add or update the apex `TXT` record to include Postmark:
+
+   ```
+   docket.law  TXT  "v=spf1 include:spf.mtasv.net ~all"
+   ```
+
+   If the domain already has an SPF record, merge `include:spf.mtasv.net`
+   into the existing one — never publish two SPF records (RFC 7208 §3.2
+   says receivers MUST treat that as PermError).
+5. **DMARC** (recommended): add a policy record so unaligned mail is
+   reported, not dropped, until the alignment is confirmed:
+
+   ```
+   _dmarc.docket.law  TXT  "v=DMARC1; p=none; rua=mailto:dmarc-reports@docket.law"
+   ```
+
+   Tighten to `p=quarantine` then `p=reject` once the Postmark dashboard
+   shows 100% DMARC pass for a week.
+6. **Verify**: Postmark's Sender Signatures page shows `Verified` on
+   both DKIM and Return-Path within ~5 minutes. `dig TXT
+   <selector>._domainkey.docket.law +short` from a shell should return
+   the DKIM key.
+
+The `/api/health` endpoint's `postmark` field reports `connected` once
+the API key, sender, and Postmark's `getServer()` auth check all
+succeed — but DKIM/SPF verification status is **not** probed (no
+billable benefit). Check the Postmark dashboard after DNS changes.
+
+### What's instrumented
+
+8 typed transactional emails — onboarding, case lifecycle (4), output
+review, package export, and admin invite. The full taxonomy lives in
+`server/services/email/types.ts` as a discriminated union; adding a new
+email = adding a member there + a template under
+`server/services/email/templates/` + an entry in
+`server/services/email/templates/index.ts` (TS forces all three).
+
+### Sending an email
+
+Mutations and Inngest jobs never call Postmark directly. They emit a
+typed `notification/...` event via `inngest.send(...)`; a listener in
+`server/services/email/notifications/` resolves the recipient, renders
+the template, and ships through Postmark with retries + concurrency
+keys per case/output/user.
+
+The two domain events `case/build.completed` and `case/build.failed`
+double as notification triggers — listeners subscribe to them
+directly so the email fires off the same source-of-truth as the
+status transition.
+
+### File map
+
+- `server/services/email/types.ts` — typed taxonomy + subject templates
+- `server/services/email/index.ts` — `sendEmail()` (single Postmark entry point)
+- `server/services/email/postmark-client.ts` — lazy-init `ServerClient` singleton
+- `server/services/email/templates/` — React Email components + registry
+- `server/services/email/notifications/` — Inngest listeners + recipient resolver + ETA helper
+- `server/services/email/notifications/events.ts` — `notification/...` event definitions
+
+### Adding a new email
+
+1. Add to `EMAIL_NAMES` + `EmailTemplateProps` + `EMAIL_SUBJECTS` in
+   `server/services/email/types.ts`.
+2. Add a fixture entry to `FIXTURES` in
+   `tests/unit/email-templates.test.ts` (TS won't compile the test
+   until you do).
+3. Create the React Email template under
+   `server/services/email/templates/<name>.tsx` and register it in
+   `server/services/email/templates/index.ts`.
+4. If it needs a dedicated event (vs piggybacking on a domain event):
+   add to `server/services/email/notifications/events.ts`, write the
+   listener under `server/services/email/notifications/<name>.ts`,
+   register it in `server/services/email/notifications/index.ts`, and
+   bump the regression-guard count in
+   `tests/unit/inngest-client.test.ts`.
+5. Emit from the mutation/job: `await inngest.send({ name: ...Event.name, data: {...} })`.
+
 ## Quality gates
 
 ```bash
@@ -204,4 +311,4 @@ pnpm build
 curl -s http://localhost:3000/api/health | jq
 ```
 
-Each integration field flips from `not_configured` to `connected` as its env var arrives in a later stage. The `posthog` field is config-only (env presence) — the route never hits PostHog endpoints, since `/capture` would create phantom events and `/decide` would create person profiles per probe.
+Each integration field flips from `not_configured` to `connected` as its env var arrives in a later stage. The `posthog` field is config-only (env presence) — the route never hits PostHog endpoints, since `/capture` would create phantom events and `/decide` would create person profiles per probe. The `postmark` field calls `getServer()` (auth-only metadata, no email side-effect, free) behind a 3-second timeout; a half-set deploy (key without sender, or vice versa) collapses to `not_configured` so it's distinguishable from a fully unset one.
