@@ -27,6 +27,10 @@ import {
 import { mdToSafeHtml } from "@/lib/markdown";
 import { rateLimit } from "@/server/services/ratelimit";
 import { inngest } from "@/server/jobs/client";
+import {
+  outputApprovedNotificationEvent,
+  packageReadyNotificationEvent,
+} from "@/server/services/email/notifications";
 import { AppError, appErrorToTrpcCode } from "@/lib/errors";
 import { emitFromCtx } from "@/server/services/analytics/emit";
 
@@ -352,6 +356,42 @@ export const outputRouter = router({
             draft_flushed: result.draftFlushed,
           },
         });
+
+        // Notification fan-out. Two events may fire:
+        //   1. `output.approved` — always, one per approve click.
+        //   2. `package.ready` — only when this approval flips the case
+        //      to "every current output approved". Re-firing on a
+        //      subsequent unapprove → re-approve is acceptable: each
+        //      event represents a fresh "package is whole again" state
+        //      and the email points at the live download URL.
+        const approvals = await summarizeOutputApprovals({
+          db: ctx.db,
+          caseIds: [access.caseId],
+        });
+        const tally = approvals.get(access.caseId);
+        const allApproved =
+          tally !== undefined && tally.total > 0 && tally.approved === tally.total;
+        const events: Parameters<typeof inngest.send>[0] = [
+          {
+            name: outputApprovedNotificationEvent.name,
+            data: { caseId: access.caseId, outputId: result.approvedOutputId },
+          },
+        ];
+        if (allApproved) {
+          events.push({
+            name: packageReadyNotificationEvent.name,
+            data: { caseId: access.caseId },
+          });
+        }
+        try {
+          await inngest.send(events);
+        } catch (err) {
+          console.error("[notification.output.approved] emit failed", {
+            caseId: access.caseId,
+            err,
+          });
+        }
+
         return {
           ok: true as const,
           // When draft was flushed, `approvedOutputId` is the NEW

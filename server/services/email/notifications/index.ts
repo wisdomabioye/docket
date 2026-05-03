@@ -34,3 +34,4 @@ export {
   packageReadyNotificationEvent,
   adminInviteNotificationEvent,
 } from "./events";
+export { buildEtaMinutes } from "./eta";

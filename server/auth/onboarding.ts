@@ -11,6 +11,8 @@ import {
 } from "@/server/db/schema";
 import { randomSuffix, slugBase } from "./slug";
 import { emailMatchesBootstrap, anyAdminExists } from "./admin-bootstrap";
+import { inngest } from "@/server/jobs/client";
+import { signupWelcomeEvent } from "@/server/services/email/notifications";
 
 /**
  * One-time provisioning for a brand-new user.
@@ -32,7 +34,7 @@ export async function onSignIn(args: {
   userId: string;
   isNewUser: boolean;
 }): Promise<void> {
-  const { userId } = args;
+  const { userId, isNewUser } = args;
 
   await db.transaction(async (tx) => {
     // Serialize concurrent sign-ins for the same user. Without this, two
@@ -95,6 +97,19 @@ export async function onSignIn(args: {
       }
     }
   });
+
+  // Welcome email — queued AFTER the provisioning tx commits so a rolled-
+  // back signup never produces a stray email. `isNewUser` is sourced from
+  // the Auth.js adapter (true only on the row-creating sign-in event), so
+  // returning users skip this branch even when this function is re-run.
+  // The listener resolves name + email by id, so a payload of just
+  // `{ userId }` survives a name change between emit and send.
+  if (isNewUser) {
+    await inngest.send({
+      name: signupWelcomeEvent.name,
+      data: { userId },
+    });
+  }
 }
 
 /**

@@ -30,6 +30,11 @@ import { PER_CASE_STORAGE_BYTES, requiredDocsFor } from "@/lib/visa-criteria";
 import { rateLimit } from "@/server/services/ratelimit";
 import { emitFromCtx } from "@/server/services/analytics/emit";
 import { inngest } from "@/server/jobs/client";
+import {
+  buildEtaMinutes,
+  caseArchivedNotificationEvent,
+  caseBuildStartedNotificationEvent,
+} from "@/server/services/email/notifications";
 import { AppError, appErrorToTrpcCode } from "@/lib/errors";
 
 /**
@@ -509,11 +514,10 @@ export const caseRouter = router({
         data: { caseId: input.caseId, requestedBy: userId },
       });
 
-      // Analytics. visa_type + document count are pulled in ONE
-      // round-trip via a correlated subquery — keeps the user-visible
-      // mutation latency tight. Document count is the "as-requested"
-      // snapshot; the build will use whatever exists when it actually
-      // runs, which may differ.
+      // Analytics + notification ETA share the same (visa_type,
+      // doc_count) shape, so a single correlated read serves both. Doc
+      // count is the "as-requested" snapshot; the build itself uses the
+      // count at run time, which may differ.
       const [analyticsRow] = await db
         .select({
           visaType: cases.visaType,
@@ -527,6 +531,27 @@ export const caseRouter = router({
         .from(cases)
         .where(eq(cases.id, input.caseId))
         .limit(1);
+
+      // Fan out the user-visible "build started" email. Sent on a
+      // separate event from `case/build.requested` so the orchestrator
+      // pipeline isn't coupled to email infra (PM.4 rationale). Failure
+      // here is best-effort: the build is already queued, so a missed
+      // email is preferable to surfacing TRPCError to the click path.
+      try {
+        await inngest.send({
+          name: caseBuildStartedNotificationEvent.name,
+          data: {
+            caseId: input.caseId,
+            etaMinutes: buildEtaMinutes(analyticsRow?.docCount ?? 0),
+          },
+        });
+      } catch (err) {
+        console.error("[notification.case.build_started] emit failed", {
+          caseId: input.caseId,
+          err,
+        });
+      }
+
       if (analyticsRow) {
         emitFromCtx(ctx, {
           name: "case.build_requested",
@@ -564,6 +589,7 @@ export const caseRouter = router({
       // so RLS would otherwise reject the update. App-layer auth (the
       // read above) is the gate.
       try {
+        const archivedAt = new Date();
         await ownerDb.transaction(async (tx) => {
           await transitionCase({
             tx: tx as unknown as Db,
@@ -574,7 +600,7 @@ export const caseRouter = router({
           });
           await tx
             .update(cases)
-            .set({ deletedAt: new Date() })
+            .set({ deletedAt: archivedAt })
             .where(eq(cases.id, input.caseId));
         });
         emitFromCtx(ctx, {
@@ -584,6 +610,24 @@ export const caseRouter = router({
             prior_status: authzCheck.status,
           },
         });
+        // Best-effort archive notification. ISO stamped from the same
+        // wall clock the DB used for `deleted_at` so the email matches
+        // the audit trail down to the millisecond, even if the listener
+        // runs minutes later.
+        try {
+          await inngest.send({
+            name: caseArchivedNotificationEvent.name,
+            data: {
+              caseId: input.caseId,
+              archivedAt: archivedAt.toISOString(),
+            },
+          });
+        } catch (err) {
+          console.error("[notification.case.archived] emit failed", {
+            caseId: input.caseId,
+            err,
+          });
+        }
         return { ok: true as const };
       } catch (err) {
         if (err instanceof AppError) {

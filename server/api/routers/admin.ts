@@ -22,6 +22,8 @@ import { getRedis } from "@/server/services/redis";
 import type { Db as AdminDb } from "@/server/db/client";
 import type { AttorneyStatus } from "@/lib/constants";
 import { emitFromCtx } from "@/server/services/analytics/emit";
+import { inngest } from "@/server/jobs/client";
+import { adminInviteNotificationEvent } from "@/server/services/email/notifications";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Module-level constants + helpers used by Stage 09 procedures. Declared
@@ -319,7 +321,11 @@ export const adminRouter = router({
             isNull(waitlistEntries.deletedAt),
           ),
         )
-        .returning({ id: waitlistEntries.id, email: waitlistEntries.email });
+        .returning({
+          id: waitlistEntries.id,
+          email: waitlistEntries.email,
+          name: waitlistEntries.name,
+        });
 
       if (updated.length === 0) {
         // Disambiguate by re-reading. Cheap; runs only on the unhappy path.
@@ -360,6 +366,26 @@ export const adminRouter = router({
         },
         async () => row,
       );
+
+      // Best-effort invite email. The listener resolves the inviter's
+      // display name from `invitedByUserId`; we pass `adminId` not
+      // because the email needs to mention them, but so a future
+      // change-of-copy can ("Invited by Sarah") without a schema bump.
+      try {
+        await inngest.send({
+          name: adminInviteNotificationEvent.name,
+          data: {
+            inviteeEmail: row.email,
+            inviteeName: row.name ?? "",
+            invitedByUserId: adminId,
+          },
+        });
+      } catch (err) {
+        console.error("[notification.admin.invite] emit failed", {
+          waitlistEntryId: row.id,
+          err,
+        });
+      }
 
       return { ok: true as const };
     }),
