@@ -31,9 +31,13 @@ export const BeneficiaryDataSchema = z
     field: z.string().min(1).max(200),
     yearsActive: z.number().int().min(0).max(80),
 
-    // Filing target section
+    // Filing target section. Recommenders moved out of beneficiary_data:
+    // they now live in `case_recommenders` (one row per letter-writer)
+    // and the count derives from that table — see `_context.ts` and
+    // `IntakeWizard`'s Recommenders section. `.strict()` would reject
+    // a legacy `recommendersCount` field on read; the rollout plan is a
+    // full DB wipe before re-test, so no migration is needed.
     targetFilingDate: z.iso.date(),
-    recommendersCount: z.number().int().min(0).max(20),
 
     // Contact + narrative
     email: z.email(),

@@ -6,6 +6,7 @@ import { marketingRouter } from "./routers/marketing";
 import { caseRouter } from "./routers/case";
 import { documentRouter } from "./routers/document";
 import { outputRouter } from "./routers/output";
+import { recommenderRouter } from "./routers/recommender";
 import { revenueRouter } from "./routers/revenue";
 import { searchRouter } from "./routers/search";
 
@@ -23,6 +24,7 @@ export const appRouter = router({
   case: caseRouter,
   document: documentRouter,
   output: outputRouter,
+  recommender: recommenderRouter,
   revenue: revenueRouter,
   search: searchRouter,
 });

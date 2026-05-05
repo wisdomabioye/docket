@@ -6,6 +6,7 @@ import {
   caseDocuments,
   caseEvents,
   caseParticipants,
+  caseRecommenders,
   cases,
   organizationMembers,
   visaTypeEnum,
@@ -26,7 +27,11 @@ import { meetsBuildRequirements } from "@/server/services/cases/readiness";
 import { computeCriteriaCoverage } from "@/server/services/cases/criteria-coverage";
 import { computePreflight } from "@/server/services/cases/preflight";
 import { canRequestBuild } from "@/lib/case-status";
-import { PER_CASE_STORAGE_BYTES, requiredDocsFor } from "@/lib/visa-criteria";
+import {
+  PER_CASE_STORAGE_BYTES,
+  requiredDocsFor,
+  visaCriteriaConfig,
+} from "@/lib/visa-criteria";
 import { rateLimit } from "@/server/services/ratelimit";
 import { emitFromCtx } from "@/server/services/analytics/emit";
 import { inngest } from "@/server/jobs/client";
@@ -323,6 +328,7 @@ export const caseRouter = router({
       const [authz] = await db
         .select({
           id: cases.id,
+          status: cases.status,
           visaType: cases.visaType,
           beneficiaryData: cases.beneficiaryData,
         })
@@ -331,6 +337,34 @@ export const caseRouter = router({
         .limit(1);
       if (!authz) {
         throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
+
+      // Visa-specific recommender minimum (e.g. O-1A: 3). Visas without
+      // an explicit minimum (`undefined`) skip this check. Only enforced
+      // while the case is still in `intake` — `transitionCase` will
+      // reject any post-intake status with the CONFLICT it deserves,
+      // and we don't want to mask that with our own BAD_REQUEST.
+      // Counted via RLS-engaged `ctx.db` so a forged caller can't
+      // bypass it; the count runs AFTER authz so a non-participant
+      // gets NOT_FOUND rather than the more revealing
+      // "recommenders missing" error.
+      const visaConfig = visaCriteriaConfig(authz.visaType);
+      if (authz.status === "intake" && visaConfig?.minRecommenders) {
+        const [{ count: recommenderCount = 0 } = { count: 0 }] = await db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(caseRecommenders)
+          .where(
+            and(
+              eq(caseRecommenders.caseId, input.caseId),
+              isNull(caseRecommenders.deletedAt),
+            ),
+          );
+        if (recommenderCount < visaConfig.minRecommenders) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `${authz.visaType} requires at least ${visaConfig.minRecommenders} recommenders before submitting intake — currently ${recommenderCount}.`,
+          });
+        }
       }
 
       // transitionCase writes case_events; needs owner role.

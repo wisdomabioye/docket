@@ -13,6 +13,72 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #49 — Recommender `update` mutation never refreshes `updatedAt` for empty patches
+
+Status: Tracked.
+Surfaced: 2026-05-05
+
+`recommender.update` currently rejects `{}` patches with BAD_REQUEST,
+but a client that sends a patch where every value matches the
+existing row will still fire the SQL UPDATE → bumps `updated_at` via
+the trigger and writes a `recommender.updated` event with `fields`
+listing the no-op keys. Cosmetic noise on the timeline; not
+incorrect. Fix when the audit log gets denser: pre-compare against
+the existing row in the same tx and skip the write when the diff
+is empty (mirror `output.saveDraft`'s idempotency check).
+
+---
+
+### #50 — `case.completeIntake` recommender gate is per-visa, but copy is hardcoded "three"
+
+Status: Tracked.
+Surfaced: 2026-05-05
+
+`RecommenderListEditor` and the IntakeWizard's section blurb both
+say "minimum three for O-1A". The minimum is read from
+`visaCriteriaConfig().minRecommenders` server-side, so adding EB-1A
+or another visa with a different minimum (or any minimum) will
+silently drift the UI copy from the enforced rule. Fix when a
+second visa with `minRecommenders` lands: source the copy from
+`visaCriteriaConfig` keyed off the case's visa, same as the
+existing `requiredDocsFor` pattern.
+
+---
+
+### #47 — Removing `recommendersCount` from `BeneficiaryDataSchema` is a breaking read
+
+Status: Tracked.
+Surfaced: 2026-05-05
+
+`BeneficiaryDataSchema` is `.partial().strict()`. Dropping the
+`recommendersCount` field rejects any existing
+`cases.beneficiary_data` row that still carries it as soon as a read
+parser hits it (`extractBeneficiaryFullName`, prompt builders,
+intake hydration). Phase 1 has no production traffic; the rollout
+plan is a full DB wipe before re-test, so no migration ships. If a
+future change reintroduces the field set on existing rows, drop the
+column or add a one-shot script that strips legacy keys before
+re-loading.
+
+---
+
+### #48 — Recommender reorder mutation exists but not yet wired in UI
+
+Status: Tracked.
+Surfaced: 2026-05-05
+
+`recommender.reorder` exists on the router (server-side ordering
+is the authoritative source) but `RecommenderListEditor` does not
+yet expose drag-to-reorder. Attorneys can add / edit / remove;
+ordering follows insert order. Add `@dnd-kit/sortable` to the
+editor when an attorney complains — the dependency is already in
+`package.json` (used by `PackageAssemblyCard`) so no new install
+is required. Closes the gap that `#20` originally flagged for
+recommender semantics; #20 itself is resolved by the case-build
+fan-out + this UI.
+
+---
+
 ### #44 — `package.ready` re-emits on every unapprove → re-approve cycle
 
 Status: Tracked.

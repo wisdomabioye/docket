@@ -27,7 +27,7 @@ export function buildRecommendationLetterPrompt(
     `Occupation: ${ctx.beneficiary.occupation ?? "(not provided)"}`,
     "",
     `Recommender: ${recommender.fullName}`,
-    `Recommender's role: ${recommender.role}`,
+    `Recommender's role: ${recommender.role || "(not provided)"}`,
     `Relationship to beneficiary: ${recommender.relationship}`,
     recommender.guidance
       ? `Attorney's guidance for this letter: ${recommender.guidance}`

@@ -1,12 +1,15 @@
 import "server-only";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import { db } from "@/server/db/client";
-import { caseDocuments, cases } from "@/server/db/schema";
+import { caseDocuments, caseRecommenders, cases } from "@/server/db/schema";
 import { AppError } from "@/lib/errors";
 import { EvidencePlanSchema } from "@/server/db/schema/zod";
 import type { EvidencePlan } from "@/server/db/schema/zod";
 import { getCurrentOutput } from "@/server/services/output";
-import type { BuildContext } from "@/server/services/computer/prompts/context";
+import type {
+  BuildContext,
+  Recommender,
+} from "@/server/services/computer/prompts/context";
 
 /**
  * Loads everything the build pipeline needs from one DB read pass.
@@ -18,8 +21,10 @@ import type { BuildContext } from "@/server/services/computer/prompts/context";
  * cost spikes for marginal grounding. The `truncated` flag lets the
  * prompt builder decide whether to flag the omission to the model.
  *
- * Recommenders: empty for now. Stage 5 intake doesn't yet store them;
- * when it does, this loader is the single place to add the read.
+ * Recommenders: read from `case_recommenders` (the source of truth
+ * captured at intake). Each row maps 1:1 to a Recommender entry on the
+ * BuildContext, which the `case-build` parent fans out into one
+ * `outputRecommendationLetter` invocation per recommender.
  *
  * `evidencePlan: null` is the convention for "no evidence plan yet" —
  * sub-functions that depend on it (personal-statement, petition-letter,
@@ -84,6 +89,34 @@ export async function loadBuildContext(caseId: string): Promise<BuildContext> {
     // citation references (`Exhibit 3`) would point at different files.
     .orderBy(asc(caseDocuments.createdAt), asc(caseDocuments.id));
 
+  const recommenderRows = await db
+    .select({
+      id: caseRecommenders.id,
+      fullName: caseRecommenders.fullName,
+      titleOrg: caseRecommenders.titleOrg,
+      relationship: caseRecommenders.relationship,
+      guidance: caseRecommenders.guidance,
+    })
+    .from(caseRecommenders)
+    .where(
+      and(
+        eq(caseRecommenders.caseId, caseId),
+        isNull(caseRecommenders.deletedAt),
+      ),
+    )
+    .orderBy(
+      asc(caseRecommenders.displayOrder),
+      asc(caseRecommenders.createdAt),
+    );
+
+  const recommenders: readonly Recommender[] = recommenderRows.map((r) => ({
+    id: r.id,
+    fullName: r.fullName,
+    role: r.titleOrg ?? "",
+    relationship: r.relationship,
+    guidance: r.guidance,
+  }));
+
   return {
     caseId,
     snapshotAt: caseRow.updatedAt.toISOString(),
@@ -101,7 +134,6 @@ export async function loadBuildContext(caseId: string): Promise<BuildContext> {
       };
     }),
     evidencePlan,
-    // TODO(stage-8): pull recommenders once intake stores them.
-    recommenders: [],
+    recommenders,
   };
 }

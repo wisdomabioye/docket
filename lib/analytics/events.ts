@@ -41,6 +41,9 @@ export const EVENT_NAMES = [
   // Documents (2)
   "document.uploaded",
   "document.deleted",
+  // Recommenders (2)
+  "recommender.added",
+  "recommender.removed",
   // Outputs (4)
   "output.viewed",
   "output.draft_saved",
@@ -106,6 +109,14 @@ export type EventPayloads = {
   "document.deleted": {
     case_id: string;
     document_id: string;
+  };
+  "recommender.added": {
+    case_id: string;
+    recommender_id: string;
+  };
+  "recommender.removed": {
+    case_id: string;
+    recommender_id: string;
   };
   "output.viewed": {
     case_id: string;

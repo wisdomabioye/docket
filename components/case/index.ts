@@ -13,6 +13,10 @@ export {
 } from "./RequiredDocsCard";
 export { IntakeWizard, type IntakeWizardProps } from "./IntakeWizard";
 export {
+  RecommenderListEditor,
+  type RecommenderListEditorProps,
+} from "./RecommenderListEditor";
+export {
   PackageAssemblyCard,
   type PackageAssemblyCardProps,
   type PackageAssemblyItem,

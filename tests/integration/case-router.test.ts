@@ -4,6 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import {
   caseEvents,
   caseParticipants,
+  caseRecommenders,
   cases,
   organizationMembers,
   organizations,
@@ -291,6 +292,14 @@ describe("case.completeIntake", () => {
   it("transitions intake → documents_pending and writes status_changed event", async (ctx) => {
     const db = gate(ctx);
     const { id } = await callAs(ALICE).case.create({ visaType: "O-1A" });
+    // O-1A requires ≥3 recommenders before completeIntake will accept
+    // the case. Seed three minimal rows (full_name + relationship are
+    // the only NOT NULL columns aside from defaults).
+    await db.insert(caseRecommenders).values([
+      { caseId: id, displayOrder: 0, fullName: "Rec One", relationship: "Advisor" },
+      { caseId: id, displayOrder: 1, fullName: "Rec Two", relationship: "Co-author" },
+      { caseId: id, displayOrder: 2, fullName: "Rec Three", relationship: "Manager" },
+    ]);
     const [row] = await db
       .select({ rev: cases.rowRevision })
       .from(cases)
@@ -316,6 +325,44 @@ describe("case.completeIntake", () => {
     expect(
       events.find((e) => e.eventType === "case.status_changed"),
     ).toBeDefined();
+  });
+
+  it("BAD_REQUEST when O-1A case has fewer than 3 recommenders", async (ctx) => {
+    const db = gate(ctx);
+    const { id } = await callAs(ALICE).case.create({ visaType: "O-1A" });
+    // Seed only two — under the O-1A minimum.
+    await db.insert(caseRecommenders).values([
+      { caseId: id, displayOrder: 0, fullName: "Rec One", relationship: "Advisor" },
+      { caseId: id, displayOrder: 1, fullName: "Rec Two", relationship: "Co-author" },
+    ]);
+    const [row] = await db
+      .select({ rev: cases.rowRevision })
+      .from(cases)
+      .where(eq(cases.id, id));
+
+    await expect(
+      callAs(ALICE).case.completeIntake({
+        caseId: id,
+        expectedRowRevision: row!.rev,
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("EB-1A intake completes with zero recommenders (no minimum configured)", async (ctx) => {
+    // EB-1A has no `minRecommenders` in the visa config; the gate
+    // must skip the count check entirely.
+    const db = gate(ctx);
+    const { id } = await callAs(ALICE).case.create({ visaType: "EB-1A" });
+    const [row] = await db
+      .select({ rev: cases.rowRevision })
+      .from(cases)
+      .where(eq(cases.id, id));
+
+    const result = await callAs(ALICE).case.completeIntake({
+      caseId: id,
+      expectedRowRevision: row!.rev,
+    });
+    expect(result.to).toBe("documents_pending");
   });
 
   it("CONFLICT when status is not intake (illegal transition)", async (ctx) => {

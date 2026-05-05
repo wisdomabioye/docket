@@ -41,12 +41,41 @@ const completeUseMutationMock = vi.hoisted(() =>
   })),
 );
 
+// Recommender tRPC surface — IntakeWizard's "Recommenders" section
+// reads `list` for the section-nav counter. The full editor (which
+// invokes create/update/remove) renders inside that section but is
+// only mounted when the section is active; mock the mutations as
+// no-op stubs so a future "switch to Recommenders" test doesn't crash.
+const recommenderListUseQueryMock = vi.hoisted(() =>
+  vi.fn(() => ({ data: [], isLoading: false })),
+);
+const recommenderNoopMutation = vi.hoisted(() => ({
+  useMutation: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
+}));
+const recommenderUseUtilsMock = vi.hoisted(() => ({
+  recommender: {
+    list: { invalidate: vi.fn(() => Promise.resolve()) },
+  },
+}));
+
 vi.mock("@/lib/trpc/react", () => ({
   trpc: {
     case: {
       updateBeneficiary: { useMutation: updateUseMutationMock },
       completeIntake: { useMutation: completeUseMutationMock },
     },
+    recommender: {
+      list: { useQuery: recommenderListUseQueryMock },
+      create: recommenderNoopMutation,
+      update: recommenderNoopMutation,
+      remove: recommenderNoopMutation,
+    },
+    useUtils: () => recommenderUseUtilsMock,
   },
 }));
 

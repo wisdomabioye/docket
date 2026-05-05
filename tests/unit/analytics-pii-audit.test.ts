@@ -84,6 +84,14 @@ const SAMPLE_EVENT_PAYLOADS: Record<EventName, AnalyticsEvent> = {
     name: "document.deleted",
     properties: { case_id: "case-uuid-1", document_id: "doc-uuid-1" },
   },
+  "recommender.added": {
+    name: "recommender.added",
+    properties: { case_id: "case-uuid-1", recommender_id: "rec-uuid-1" },
+  },
+  "recommender.removed": {
+    name: "recommender.removed",
+    properties: { case_id: "case-uuid-1", recommender_id: "rec-uuid-1" },
+  },
   "output.viewed": {
     name: "output.viewed",
     properties: {

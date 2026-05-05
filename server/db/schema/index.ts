@@ -8,6 +8,7 @@ export * from "./auth";
 export * from "./users";
 export * from "./organizations";
 export * from "./cases";
+export * from "./recommenders";
 export * from "./invoices";
 export * from "./audit";
 export * from "./marketing";

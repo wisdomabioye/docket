@@ -13,6 +13,7 @@ import { trpc } from "@/lib/trpc/react";
 import { APP_ROUTES } from "@/config";
 import { Card, EmptyState } from "@/components/ui";
 import type { BeneficiaryData } from "@/server/db/schema/zod/beneficiary";
+import { RecommenderListEditor } from "./RecommenderListEditor";
 
 /**
  * Stage 11 γ multi-section intake wizard. Replaces the old single-page
@@ -47,15 +48,31 @@ type FieldDef = {
   hint?: string;
 };
 
-type SectionDef = {
+/** A wizard section is either a `fields` group (data merged into
+ *  `beneficiary_data`) or a custom UI block (currently just the
+ *  recommenders editor, which writes to its own table). The
+ *  discriminator keeps SectionNav's filled/total counter type-safe
+ *  and keeps the renderer a small switch, not a chain of optionals. */
+type FieldsSectionDef = {
+  kind: "fields";
   key: string;
   label: string;
   blurb: string;
   fields: ReadonlyArray<FieldDef>;
 };
 
+type RecommendersSectionDef = {
+  kind: "recommenders";
+  key: string;
+  label: string;
+  blurb: string;
+};
+
+type SectionDef = FieldsSectionDef | RecommendersSectionDef;
+
 const SECTIONS: ReadonlyArray<SectionDef> = [
   {
+    kind: "fields",
     key: "profile",
     label: "Profile",
     blurb:
@@ -73,6 +90,7 @@ const SECTIONS: ReadonlyArray<SectionDef> = [
     ],
   },
   {
+    kind: "fields",
     key: "practice",
     label: "Practice",
     blurb:
@@ -93,6 +111,7 @@ const SECTIONS: ReadonlyArray<SectionDef> = [
     ],
   },
   {
+    kind: "fields",
     key: "filing",
     label: "Filing target",
     blurb:
@@ -104,16 +123,18 @@ const SECTIONS: ReadonlyArray<SectionDef> = [
         control: "date",
         hint: "When you plan to send the package to USCIS.",
       },
-      {
-        key: "recommendersCount",
-        label: "Recommenders confirmed",
-        control: "number",
-        hint: "How many letter-writers have agreed. Three minimum for O-1A.",
-      },
       { key: "email", label: "Beneficiary email", control: "email" },
     ],
   },
   {
+    kind: "recommenders",
+    key: "recommenders",
+    label: "Recommenders",
+    blurb:
+      "Letter-writers for this case. The build pipeline drafts one recommendation letter per recommender — minimum three for O-1A.",
+  },
+  {
+    kind: "fields",
     key: "narrative",
     label: "Notes",
     blurb:
@@ -169,6 +190,14 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
 
   const update = trpc.case.updateBeneficiary.useMutation();
   const complete = trpc.case.completeIntake.useMutation();
+  // Recommenders live in their own table; query here so the section
+  // navigation can show the live count alongside the field-section
+  // filled/total counters. The list itself is rendered by
+  // RecommenderListEditor, which subscribes to the same query — tRPC
+  // dedupes the request.
+  const recommenderListQuery = trpc.recommender.list.useQuery({
+    caseId: props.caseId,
+  });
   const [isPending, startTransition] = useTransition();
   const [values, setValues] = useState<BeneficiaryData>(props.initial);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
@@ -283,15 +312,29 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
 
   const error = update.error?.message ?? complete.error?.message ?? null;
   const busy = update.isPending || complete.isPending || isPending;
+  const recommenderCount = recommenderListQuery.data?.length ?? 0;
   const sectionStatus = useMemo(
     () =>
-      SECTIONS.map((s) => ({
-        key: s.key,
-        label: s.label,
-        filled: countFilled(s, values),
-        total: s.fields.length,
-      })),
-    [values],
+      SECTIONS.map((s) => {
+        if (s.kind === "fields") {
+          return {
+            key: s.key,
+            label: s.label,
+            filled: countFilled(s, values),
+            total: s.fields.length,
+          };
+        }
+        // Recommenders has no fixed target — show the live count as
+        // `N/—` so the nav row stays informative without implying a
+        // ceiling. SectionNav formats `total: null` accordingly.
+        return {
+          key: s.key,
+          label: s.label,
+          filled: recommenderCount,
+          total: null as number | null,
+        };
+      }),
+    [values, recommenderCount],
   );
 
   return (
@@ -313,17 +356,24 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
           >
             {activeSection.blurb}
           </p>
-          <div className="space-y-4">
-            {activeSection.fields.map((field) => (
-              <FieldRow
-                key={field.key}
-                field={field}
-                value={values[field.key]}
-                disabled={props.locked}
-                onChange={(v) => setField(field.key, v)}
-              />
-            ))}
-          </div>
+          {activeSection.kind === "fields" ? (
+            <div className="space-y-4">
+              {activeSection.fields.map((field) => (
+                <FieldRow
+                  key={field.key}
+                  field={field}
+                  value={values[field.key]}
+                  disabled={props.locked}
+                  onChange={(v) => setField(field.key, v)}
+                />
+              ))}
+            </div>
+          ) : (
+            <RecommenderListEditor
+              caseId={props.caseId}
+              locked={props.locked}
+            />
+          )}
         </Card>
 
         {error ? (
@@ -372,7 +422,9 @@ function SectionNav(props: {
     key: string;
     label: string;
     filled: number;
-    total: number;
+    /** `null` for sections with no fixed target (recommenders).
+     *  Renders as `N/—`. */
+    total: number | null;
   }>;
   activeKey: string;
   onSelect: (key: string) => void;
@@ -407,7 +459,7 @@ function SectionNav(props: {
                   className="mono text-[10px]"
                   style={{ color: "var(--ink-muted)" }}
                 >
-                  {s.filled}/{s.total}
+                  {s.filled}/{s.total ?? "—"}
                 </span>
               </button>
             </li>
@@ -568,7 +620,10 @@ function nextSectionAfter(activeKey: string): SectionDef | null {
   return SECTIONS[idx + 1] ?? null;
 }
 
-function countFilled(section: SectionDef, values: BeneficiaryData): number {
+function countFilled(
+  section: FieldsSectionDef,
+  values: BeneficiaryData,
+): number {
   let n = 0;
   for (const f of section.fields) {
     const v = values[f.key];

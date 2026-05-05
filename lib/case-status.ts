@@ -107,6 +107,23 @@ export function canRequestBuild(s: CaseStatus): boolean {
   return (BUILDABLE_STATUSES as readonly CaseStatus[]).includes(s);
 }
 
+/**
+ * Statuses where intake-stage data (beneficiary fields, recommender
+ * roster) is still mutable. Once the case has progressed past
+ * `documents_pending` the build context is frozen — editing intake
+ * data after that would silently desync from any in-flight or
+ * completed build. Locking is enforced in the `case.updateBeneficiary`
+ * mutation and the `recommender.*` mutations.
+ */
+export const INTAKE_EDITABLE_STATUSES = [
+  "intake",
+  "documents_pending",
+] as const satisfies readonly CaseStatus[];
+
+export function canEditIntake(s: CaseStatus): boolean {
+  return (INTAKE_EDITABLE_STATUSES as readonly CaseStatus[]).includes(s);
+}
+
 /** Human-friendly status label (`needs_revision` → `Needs revision`). */
 export function formatStatus(s: CaseStatus): string {
   const spaced = s.replace(/_/g, " ");

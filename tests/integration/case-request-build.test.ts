@@ -195,11 +195,21 @@ describe("case.requestBuild", () => {
     expect(row?.buildStartedAt).not.toBeNull();
     expect(row?.buildCompletedAt).toBeNull();
 
-    expect(sendMock).toHaveBeenCalledTimes(1);
+    // Two emits: the orchestrator trigger AND the user-visible
+    // "build started" notification. The notification emit is
+    // best-effort and decoupled from the build pipeline (PM.5),
+    // but on the happy path both fire.
+    expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenCalledWith({
       name: "case/build.requested",
       data: { caseId: CASE_READY, requestedBy: ATTORNEY },
     });
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "notification/case.build_started",
+        data: expect.objectContaining({ caseId: CASE_READY }),
+      }),
+    );
 
     // Reset for subsequent tests using CASE_READY.
     await d

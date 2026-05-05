@@ -10,6 +10,7 @@ import {
   caseParticipants,
   cases,
 } from "./cases";
+import { caseRecommenders } from "./recommenders";
 import { auditLog } from "./audit";
 
 /**
@@ -118,6 +119,7 @@ export const casesRelations = relations(cases, ({ one, many }) => ({
   participants: many(caseParticipants),
   documents: many(caseDocuments),
   outputs: many(caseOutputs),
+  recommenders: many(caseRecommenders),
   events: many(caseEvents),
   computeLedger: many(caseComputeLedger),
 }));
@@ -182,6 +184,20 @@ export const caseComputeLedgerRelations = relations(
     output: one(caseOutputs, {
       fields: [caseComputeLedger.outputId],
       references: [caseOutputs.id],
+    }),
+  }),
+);
+
+export const caseRecommendersRelations = relations(
+  caseRecommenders,
+  ({ one }) => ({
+    case: one(cases, {
+      fields: [caseRecommenders.caseId],
+      references: [cases.id],
+    }),
+    recommenderUser: one(users, {
+      fields: [caseRecommenders.recommenderUserId],
+      references: [users.id],
     }),
   }),
 );

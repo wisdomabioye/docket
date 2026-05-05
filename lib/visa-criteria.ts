@@ -57,6 +57,12 @@ export type VisaCriteriaConfig = {
    *  O-1A: 3 of 8 (or single major prize). Phase 1 enforces the count;
    *  the major-prize escape hatch is admin-judgement. */
   minCriteriaMet: number;
+  /** Minimum number of recommender records required before
+   *  `completeIntake` will accept the case (rows in
+   *  `case_recommenders`). Enforced server-side; the IntakeWizard's
+   *  Recommenders section copy mirrors the value. Undefined means
+   *  no minimum (visas without explicit guidance). */
+  minRecommenders?: number;
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -140,6 +146,10 @@ const O1A_CONFIG: VisaCriteriaConfig = {
   criteria: O1A_CRITERIA,
   requiredDocs: O1A_REQUIRED_DOCS,
   minCriteriaMet: 3,
+  // O-1A custom is three letter-writers minimum — mirrored in the
+  // `rec_letters` document checklist row above and in the
+  // IntakeWizard's empty-state copy.
+  minRecommenders: 3,
 };
 
 // ─────────────────────────────────────────────────────────────────────

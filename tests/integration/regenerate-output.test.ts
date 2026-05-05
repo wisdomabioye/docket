@@ -5,6 +5,7 @@ import { NonRetriableError } from "inngest";
 import {
   caseDocuments,
   caseOutputs,
+  caseRecommenders,
   cases,
   organizationMembers,
   organizations,
@@ -30,12 +31,16 @@ import { truncateAllAppTables } from "../helpers/truncate";
  * each branch:
  *
  *   1. outputId not found → NonRetriableError
- *   2. recommendation_letter_template → NonRetriableError (Stage 8 fix)
- *   3. unmapped output type (e.g. cover_letter, form_g1145, other) →
+ *   2. recommendation_letter_template with NULL subgroupKey →
+ *      NonRetriableError (data invariant violated)
+ *   3. recommendation_letter_template with a deleted recommender →
+ *      NonRetriableError (attorney removed the row; surface, don't
+ *      retry)
+ *   4. unmapped output type (e.g. cover_letter, form_g1145, other) →
  *      NonRetriableError
- *   4. Happy path: loads context, runs the right prompt builder, saves
+ *   5. Happy path: loads context, runs the right prompt builder, saves
  *      a new version via `runOutputJob` (uses the mock computer client).
- *   5. Guidance prepended to userPrompt.
+ *   6. Guidance prepended to userPrompt.
  */
 
 const ATTORNEY = "d6000000-0000-4000-8000-aaaa00000001";
@@ -90,7 +95,10 @@ describe("regenerateOutputHandler — error branches", () => {
     ).rejects.toBeInstanceOf(NonRetriableError);
   });
 
-  it("throws NonRetriableError for recommendation_letter_template (open_issues #20)", async (ctx) => {
+  it("throws NonRetriableError when recommendation_letter_template has no subgroupKey", async (ctx) => {
+    // A `recommendation_letter_template` row MUST carry the recommender
+    // id in `subgroupKey` (per the case-build fan-out). A NULL value is
+    // a data invariant violation; the handler refuses to guess.
     const d = gate(ctx);
     const [out] = await d
       .insert(caseOutputs)
@@ -115,7 +123,51 @@ describe("regenerateOutputHandler — error branches", () => {
         sessionId: "s",
         step: realStep,
       }),
-    ).rejects.toThrow(/recommendation_letter_template not supported/);
+    ).rejects.toThrow(/has no subgroupKey/);
+  });
+
+  it("throws NonRetriableError when the recommender row was removed", async (ctx) => {
+    // Attorney removed the recommender after the original letter was
+    // generated. Re-running the same letter no longer makes sense — the
+    // surface error tells them to add a new recommender instead.
+    const d = gate(ctx);
+    const [rec] = await d
+      .insert(caseRecommenders)
+      .values({
+        caseId: CASE_ID,
+        displayOrder: 0,
+        fullName: "Jane Doe",
+        relationship: "PhD advisor",
+        deletedAt: new Date(),
+      })
+      .returning({ id: caseRecommenders.id });
+    if (!rec) throw new Error("insert returned no id");
+
+    const [out] = await d
+      .insert(caseOutputs)
+      .values({
+        caseId: CASE_ID,
+        outputType: "recommendation_letter_template",
+        outputVersion: 1,
+        subgroupKey: rec.id,
+        isCurrent: true,
+        author: "computer",
+        content: "letter v1",
+      })
+      .returning({ id: caseOutputs.id });
+    if (!out) throw new Error("insert returned no id");
+
+    const { regenerateOutputHandler } = await import(
+      "@/server/jobs/regenerate-output"
+    );
+    await expect(
+      regenerateOutputHandler({
+        caseId: CASE_ID,
+        outputId: out.id,
+        sessionId: "s",
+        step: realStep,
+      }),
+    ).rejects.toThrow(/no longer exists/);
   });
 
   it("throws NonRetriableError for unmapped output type (cover_letter)", async (ctx) => {
