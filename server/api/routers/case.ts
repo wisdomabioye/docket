@@ -746,6 +746,7 @@ export const caseRouter = router({
             // `present`: the auto-tick. `null` when the required doc
             // has no enum mapping (passport bio, I-94 — manual gate).
             present: r.docType === null ? null : count >= min,
+            phase: r.phase ?? "pre_build",
           };
         }),
       };

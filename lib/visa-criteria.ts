@@ -47,6 +47,14 @@ export type RequiredDocDef = {
   minCount?: number;
   /** Optional criterion link — surfaces as a "CRIT N" tag in the UI. */
   criterion?: number;
+  /** When in the case lifecycle this evidence is collected. `pre_build`
+   *  = needed before the AI build runs (CV, awards, employment letter…);
+   *  `post_build` = collected after the AI drafts go out (signed
+   *  recommendation letters returned by recommenders). The Documents
+   *  right rail groups rows by phase so attorneys aren't blocked
+   *  waiting for evidence that doesn't exist yet. Defaults to
+   *  `pre_build` when omitted. */
+  phase?: "pre_build" | "post_build";
 };
 
 export type VisaCriteriaConfig = {
@@ -138,7 +146,7 @@ const O1A_REQUIRED_DOCS: ReadonlyArray<RequiredDocDef> = [
   { key: "salary", label: "High salary proof", docType: "salary_evidence", criterion: 8 },
   { key: "publication", label: "Scholarly publication", docType: "publication", criterion: 4 },
   { key: "citation_report", label: "Citation report", docType: null, criterion: 4 },
-  { key: "rec_letters", label: "Recommendation letters (3+)", docType: "recommendation_letter", minCount: 3 },
+  { key: "rec_letters", label: "Recommendation letters (3+)", docType: "recommendation_letter", minCount: 3, phase: "post_build" },
 ];
 
 const O1A_CONFIG: VisaCriteriaConfig = {
