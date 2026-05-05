@@ -132,6 +132,37 @@ export const styles = StyleSheet.create({
     borderColor: "#888",
     backgroundColor: "#f7f7f5",
   },
+  // Caps badge appended to the cover title when the package is in
+  // draft state (unsigned recommendation letters present).
+  coverDraftBadge: {
+    fontFamily: "Helvetica-Bold",
+    fontSize: 14,
+    color: "#b1330e",
+  },
+  // "Pending signed letters" block on the cover.
+  coverPendingBox: {
+    marginTop: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#b1830e",
+    backgroundColor: "#fbf3df",
+  },
+  // Diagonal "DRAFT — UNSIGNED" watermark on prose pages whose source
+  // is an unsigned recommendation-letter template. Fixed-position so
+  // it repeats on every paginated page of the letter.
+  watermark: {
+    position: "absolute",
+    top: "45%",
+    left: 0,
+    right: 0,
+    textAlign: "center",
+    fontFamily: "Helvetica-Bold",
+    fontSize: 56,
+    color: "#b1330e",
+    opacity: 0.18,
+    transform: "rotate(-24deg)",
+    letterSpacing: 4,
+  },
   // Exhibit-index table cells
   exhibitTable: {
     flexDirection: "column",

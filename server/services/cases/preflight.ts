@@ -9,6 +9,7 @@ import {
 import type { Db } from "@/server/db/client";
 import { AppError } from "@/lib/errors";
 import { computeCriteriaCoverage } from "./criteria-coverage";
+import { computeRecommenderLetterCoverage } from "./recommender-coverage";
 import { visaCriteriaConfig } from "@/lib/visa-criteria";
 
 /**
@@ -45,6 +46,12 @@ export type PreflightGate = {
   label: string;
   ok: boolean;
   detail: string;
+  /** Informational rows that surface state but don't block the
+   *  Download CTA. The aggregate `allOk` is computed only from
+   *  non-advisory gates. Used for the signed-letter coverage row,
+   *  which informs the attorney without preventing them from
+   *  downloading the watermarked draft package. */
+  advisory?: boolean;
 };
 
 export type PreflightResult = {
@@ -97,6 +104,14 @@ export async function computePreflight(args: {
     db: args.db,
     caseId: args.caseId,
     visaType: caseRow.visaType,
+  });
+
+  // 3b. Signed-letter coverage — drives the advisory row below AND the
+  // package PDF's watermark/draft-badge logic. Count-based until
+  // `case_documents` gains a recommender FK (Phase 2).
+  const letterCoverage = await computeRecommenderLetterCoverage({
+    db: args.db,
+    caseId: args.caseId,
   });
 
   // 4. Attorney bar status. Primary may be missing on legacy data —
@@ -158,7 +173,29 @@ export async function computePreflight(args: {
         ? "Primary attorney's profile is active."
         : "Primary attorney's profile must be active to file.",
     },
+    {
+      id: "signed_letters_uploaded",
+      label: "Signed recommendation letters uploaded",
+      // Treated as `ok` once every recommender has a corresponding
+      // signed upload. `advisory: true` keeps the Download CTA
+      // unblocked when partial — the package PDF will watermark the
+      // unsigned letter pages instead. See `pdf/index.tsx`
+      // `compileFullPackagePdf`.
+      ok: letterCoverage.allSigned,
+      advisory: true,
+      detail:
+        letterCoverage.recommenderCount === 0
+          ? "No recommenders on this case yet — nothing to collect."
+          : letterCoverage.allSigned
+            ? `${letterCoverage.signedLetterCount} of ${letterCoverage.recommenderCount} signed letters uploaded.`
+            : `${letterCoverage.signedLetterCount} of ${letterCoverage.recommenderCount} signed letters uploaded — unsigned drafts in the package will be watermarked DRAFT.`,
+    },
   ];
 
-  return { allOk: gates.every((g) => g.ok), gates };
+  return {
+    // Advisory rows surface state without blocking the CTA, so they
+    // don't count toward `allOk`.
+    allOk: gates.filter((g) => !g.advisory).every((g) => g.ok),
+    gates,
+  };
 }

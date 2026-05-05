@@ -7,6 +7,10 @@ import { OUTPUT_TYPE_DISPLAY, readRecommenderName } from "@/lib/output-types";
 import type { OutputType } from "@/server/services/computer/types";
 import { getCurrentOutputs } from "@/server/services/output";
 import {
+  computeRecommenderLetterCoverage,
+  type RecommenderLetterCoverage,
+} from "@/server/services/cases/recommender-coverage";
+import {
   PackagePdfDocument,
   PerOutputPdfDocument,
   packageKeyFor,
@@ -87,12 +91,21 @@ async function loadCoverFields(args: {
   };
 }
 
+/** Stamp shown on every page of an unsigned recommendation-letter
+ *  template. Wording is deliberate — "Do not file" makes the failure
+ *  mode explicit; "DRAFT — UNSIGNED" signals why. */
+const UNSIGNED_LETTER_WATERMARK = "DRAFT — UNSIGNED · Do not file";
+
 function bodyDescriptorFor(args: {
   outputType: OutputType;
   content: string;
   metadata: unknown;
   beneficiaryName: string;
   visaType: string;
+  /** When true, `recommendation_letter_template` rows get a
+   *  diagonal watermark on every page. The caller decides this from
+   *  `RecommenderLetterCoverage.allSigned`. */
+  watermarkUnsignedLetters: boolean;
 }): OutputBodyDescriptor {
   if (args.outputType === "exhibit_index") {
     const exhibitCount = readExhibitCount(args.metadata);
@@ -116,12 +129,35 @@ function bodyDescriptorFor(args: {
       runningHeading: OUTPUT_TYPE_DISPLAY[args.outputType],
       ...(recommenderName ? { subtitle: `Letter for ${recommenderName}` } : {}),
       content: args.content,
+      ...(args.watermarkUnsignedLetters
+        ? { watermark: UNSIGNED_LETTER_WATERMARK }
+        : {}),
     };
   }
   return {
     kind: "prose",
     runningHeading: OUTPUT_TYPE_DISPLAY[args.outputType],
     content: args.content,
+  };
+}
+
+/** Build the cover page's optional `pendingNotice` block from coverage.
+ *  Returns `undefined` when nothing is pending — callers can spread
+ *  the result with `...(notice ? { pendingNotice: notice } : {})`. */
+function buildPendingNotice(
+  coverage: RecommenderLetterCoverage,
+): { headline: string; lines: ReadonlyArray<string> } | undefined {
+  if (coverage.allSigned) return undefined;
+  const missing = coverage.recommenderCount - coverage.signedLetterCount;
+  return {
+    headline: "PENDING SIGNED LETTERS",
+    lines: [
+      `${coverage.signedLetterCount} of ${coverage.recommenderCount} signed recommendation letters uploaded.`,
+      `${missing} recommendation letter${missing === 1 ? "" : "s"} still pending signed return — drafts in this bundle are watermarked DRAFT — UNSIGNED and must not be filed.`,
+      coverage.recommenderNames.length > 0
+        ? `Recommenders on this case: ${coverage.recommenderNames.join(", ")}.`
+        : "No recommenders are recorded on this case yet.",
+    ],
   };
 }
 
@@ -173,12 +209,26 @@ export async function renderPerOutputPdf(
     );
   }
 
+  // Per-output download for a `recommendation_letter_template` is
+  // ALSO subject to the unsigned-watermark rule — otherwise an attorney
+  // could side-step the safeguard by downloading individual letters.
+  // Coverage load is skipped for non-letter outputs to save a query.
+  const coverage =
+    target.outputType === "recommendation_letter_template"
+      ? await computeRecommenderLetterCoverage({
+          db: args.db,
+          caseId: args.caseId,
+        })
+      : null;
+  const watermarkUnsignedLetters = coverage ? !coverage.allSigned : false;
+
   const body = bodyDescriptorFor({
     outputType: target.outputType,
     content: target.content,
     metadata: target.metadata,
     beneficiaryName: cover.beneficiaryName,
     visaType: cover.visaType,
+    watermarkUnsignedLetters,
   });
 
   const timestampMs = Date.now();
@@ -188,6 +238,7 @@ export async function renderPerOutputPdf(
         cover={{
           title: OUTPUT_TYPE_DISPLAY[target.outputType],
           ...cover,
+          ...(watermarkUnsignedLetters ? { draftBadge: "DRAFT" } : {}),
         }}
         body={renderOutputBody(body, "body")}
       />
@@ -272,6 +323,16 @@ export async function compileFullPackagePdf(
     return (a.subgroupKey ?? "").localeCompare(b.subgroupKey ?? "");
   });
 
+  // Recommender letter coverage drives:
+  //   - per-page watermark on `recommendation_letter_template` rows
+  //   - the cover's `draftBadge` ("DRAFT") and `pendingNotice` block
+  // Loaded once and reused for all letter pages in this package.
+  const coverage = await computeRecommenderLetterCoverage({
+    db: args.db,
+    caseId: args.caseId,
+  });
+  const watermarkUnsignedLetters = !coverage.allSigned;
+
   const bodies = sorted.map((o) => ({
     key: o.id,
     body: bodyDescriptorFor({
@@ -280,14 +341,21 @@ export async function compileFullPackagePdf(
       metadata: o.metadata,
       beneficiaryName: cover.beneficiaryName,
       visaType: cover.visaType,
+      watermarkUnsignedLetters,
     }),
   }));
+  const pendingNotice = buildPendingNotice(coverage);
 
   const timestampMs = Date.now();
   const result = await renderAndStorePdf({
     element: (
       <PackagePdfDocument
-        cover={{ title: "Filing Package", ...cover }}
+        cover={{
+          title: "Filing Package",
+          ...cover,
+          ...(watermarkUnsignedLetters ? { draftBadge: "DRAFT" } : {}),
+          ...(pendingNotice ? { pendingNotice } : {}),
+        }}
         bodies={bodies}
       />
     ),

@@ -26,6 +26,7 @@ import {
 import { meetsBuildRequirements } from "@/server/services/cases/readiness";
 import { computeCriteriaCoverage } from "@/server/services/cases/criteria-coverage";
 import { computePreflight } from "@/server/services/cases/preflight";
+import { computeRecommenderLetterCoverage } from "@/server/services/cases/recommender-coverage";
 import { canRequestBuild } from "@/lib/case-status";
 import {
   PER_CASE_STORAGE_BYTES,
@@ -786,6 +787,29 @@ export const caseRouter = router({
         documentCount: agg?.docCount ?? 0,
         capBytes: BigInt(PER_CASE_STORAGE_BYTES),
       };
+    }),
+
+  /**
+   * Signed-recommendation-letter coverage for a case. Drives the
+   * package page's "Drafts only" notice + the package PDF's draft
+   * watermark. Count-based until `case_documents` gains a recommender
+   * FK (Phase 2) — see `recommender-coverage.ts`.
+   */
+  recommenderLetterCoverage: protectedProcedure
+    .input(GetInput)
+    .query(async ({ ctx, input }) => {
+      const [authz] = await ctx.db
+        .select({ id: cases.id })
+        .from(cases)
+        .where(and(eq(cases.id, input.caseId), isNull(cases.deletedAt)))
+        .limit(1);
+      if (!authz) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
+      return await computeRecommenderLetterCoverage({
+        db: ctx.db,
+        caseId: input.caseId,
+      });
     }),
 
   /**

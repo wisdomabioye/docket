@@ -22,6 +22,10 @@ export {
   type PackageAssemblyItem,
 } from "./PackageAssemblyCard";
 export {
+  PackageDraftNotice,
+  type PackageDraftNoticeProps,
+} from "./PackageDraftNotice";
+export {
   PreflightCard,
   type PreflightCardProps,
   type PreflightGateView,

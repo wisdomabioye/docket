@@ -52,7 +52,9 @@ describe("RequiredDocsCard", () => {
         ]}
       />,
     );
-    expect(screen.getByText(/^1 \/ 2$/)).toBeInTheDocument();
+    // The card-level meta and the per-group meta both show `1 / 2`
+    // when the only items belong to a single phase group.
+    expect(screen.getAllByText(/^1 \/ 2$/).length).toBeGreaterThan(0);
   });
 
   it("derives 'X OF Y' warning pill for partial multi-count rows", () => {

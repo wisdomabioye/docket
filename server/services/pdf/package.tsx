@@ -83,6 +83,8 @@ export type OutputBodyDescriptor =
       runningHeading: string;
       subtitle?: string;
       content: string;
+      /** Optional diagonal watermark for unsigned-letter pages. */
+      watermark?: string;
     }
   | {
       kind: "exhibit-index";
@@ -97,13 +99,12 @@ export function renderOutputBody(
   key: string,
 ): React.ReactElement {
   if (desc.kind === "prose") {
-    const proseProps: React.ComponentProps<typeof ProsePage> = desc.subtitle
-      ? {
-          runningHeading: desc.runningHeading,
-          subtitle: desc.subtitle,
-          content: desc.content,
-        }
-      : { runningHeading: desc.runningHeading, content: desc.content };
+    const proseProps: React.ComponentProps<typeof ProsePage> = {
+      runningHeading: desc.runningHeading,
+      content: desc.content,
+      ...(desc.subtitle ? { subtitle: desc.subtitle } : {}),
+      ...(desc.watermark ? { watermark: desc.watermark } : {}),
+    };
     return <ProsePage key={key} {...proseProps} />;
   }
   return (

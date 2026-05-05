@@ -27,6 +27,11 @@ export type ProsePageProps = {
   subtitle?: string;
   /** Markdown source to render in the body. */
   content: string;
+  /** Optional diagonal watermark repeated on every paginated page
+   *  ("DRAFT — UNSIGNED · Do not file"). Used for unsigned
+   *  recommendation-letter templates so the page can never be
+   *  mistaken for a filing-ready letter. */
+  watermark?: string;
 };
 
 export function ProsePage(props: ProsePageProps) {
@@ -50,6 +55,11 @@ export function ProsePage(props: ProsePageProps) {
           </Text>
         ) : null}
       </View>
+      {props.watermark ? (
+        <Text fixed style={styles.watermark}>
+          {props.watermark}
+        </Text>
+      ) : null}
       <MarkdownRenderer content={props.content} />
       <DisclaimerFooter />
     </Page>

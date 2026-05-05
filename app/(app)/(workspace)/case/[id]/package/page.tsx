@@ -6,6 +6,7 @@ import { Card } from "@/components/ui";
 import {
   CaseHeader,
   PackageAssemblyCard,
+  PackageDraftNotice,
   PreflightCard,
   type PackageAssemblyItem,
 } from "@/components/case";
@@ -40,10 +41,11 @@ export default async function PackagePage({
   if (!session?.user) redirect(APP_ROUTES.login);
 
   const { id } = await params;
-  const [caseRow, outputs, preflight] = await Promise.all([
+  const [caseRow, outputs, preflight, letterCoverage] = await Promise.all([
     api.case.get({ caseId: id }),
     api.output.list({ caseId: id }),
     api.case.preflight({ caseId: id }),
+    api.case.recommenderLetterCoverage({ caseId: id }),
   ]);
   if (!caseRow) notFound();
   const approved = outputs.filter((o) => o.attorneyApproved);
@@ -123,6 +125,12 @@ export default async function PackagePage({
       </header>
 
       <DisclaimerBanner />
+
+      <PackageDraftNotice
+        caseId={id}
+        recommenderCount={letterCoverage.recommenderCount}
+        signedLetterCount={letterCoverage.signedLetterCount}
+      />
 
       <PreflightCard allOk={preflight.allOk} gates={preflight.gates} />
 

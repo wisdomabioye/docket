@@ -13,6 +13,28 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #50 — Signed recommendation letters are not linkable to specific recommenders
+
+Status: Tracked. Phase-2 schema work.
+Surfaced: 2026-05-05
+
+`case_documents` has no FK to `case_recommenders`, so we cannot
+determine *which* uploaded `recommendation_letter` corresponds to
+which recommender. Today the package compiler and preflight use a
+**count-based** check (`signedLetterCount >= recommenderCount` ⇒
+treat as fully signed; any shortfall ⇒ watermark every
+`recommendation_letter_template` page in the package and stamp the
+cover with a "DRAFT" badge + "Pending signed letters" block — see
+`server/services/cases/recommender-coverage.ts` and
+`server/services/pdf/index.tsx`).
+
+When this is resolved, add a nullable `case_documents.recommender_id`
+referencing `case_recommenders(id)`; have the documents-tab UI ask
+"Which recommender?" when uploading a `recommendation_letter`; swap
+the count-based check for a per-recommender map; and consider
+optionally substituting the signed PDF for the AI draft in the
+package output.
+
 ### #49 — Recommender `update` mutation never refreshes `updatedAt` for empty patches
 
 Status: Tracked.

@@ -223,14 +223,21 @@ describe("case.preflight", () => {
       "criteria_threshold",
       "recommender_letters",
       "attorney_bar_active",
+      "signed_letters_uploaded",
     ]);
     // Attorney profile is active in seed → that gate passes; the rest fail.
+    // `signed_letters_uploaded` is advisory and `ok: true` because the
+    // case has zero recommenders → nothing to collect.
     expect(r.allOk).toBe(false);
     const byId = new Map(r.gates.map((g) => [g.id, g.ok]));
     expect(byId.get("outputs_approved")).toBe(false);
     expect(byId.get("criteria_threshold")).toBe(false);
     expect(byId.get("recommender_letters")).toBe(false);
     expect(byId.get("attorney_bar_active")).toBe(true);
+    expect(byId.get("signed_letters_uploaded")).toBe(true);
+    // Advisory rows must not block `allOk`.
+    const advisoryRow = r.gates.find((g) => g.id === "signed_letters_uploaded");
+    expect(advisoryRow?.advisory).toBe(true);
   });
 
   it("flips outputs + recommender + criteria gates when data is in place", async (ctx) => {

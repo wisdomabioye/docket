@@ -23,7 +23,10 @@ describe("Caseline row", () => {
     expect(screen.getByText("Maria Gonzalez")).toBeInTheDocument();
     expect(screen.getByText("O-1A")).toBeInTheDocument();
     expect(screen.getByText("Drafts ready")).toBeInTheDocument();
-    expect(screen.getByText("Apr 30")).toBeInTheDocument();
+    // The updated label renders twice in the DOM — once in the
+    // mobile-only top row, once in the md+ right column. CSS hides
+    // one per breakpoint; jsdom sees both.
+    expect(screen.getAllByText("Apr 30").length).toBeGreaterThan(0);
   });
 
   it("links the row to the case detail page", () => {

@@ -6,9 +6,21 @@ import { DisclaimerFooter } from "./disclaimer";
 
 /**
  * Cover page for per-output AND package PDFs. Title reflects the
- * output type (or "Filing Package" for the bundle); the disclaimer
- * box dominates so the recipient sees it before flipping to the body.
+ * output type (or "Filing Package" for the bundle).
+ *
+ * Optional draft signaling (Stage 11 ε):
+ *   - `draftBadge`     — short caps badge appended to the title row
+ *                        ("DRAFT"). Used when the package contains
+ *                        unsigned recommendation-letter templates.
+ *   - `pendingNotice`  — bordered block listing what's missing. The
+ *                        block is rendered ONLY when provided; cases
+ *                        with full signed-letter coverage skip it.
  */
+
+export type CoverPagePendingNotice = {
+  headline: string;
+  lines: ReadonlyArray<string>;
+};
 
 export type CoverPageProps = {
   /** "Personal Statement", "Filing Package", etc. */
@@ -18,13 +30,22 @@ export type CoverPageProps = {
   attorneyName: string;
   /** ISO-formatted date string. We let the caller format for locale. */
   generatedDateLabel: string;
+  /** Optional caps badge after the title (e.g. "DRAFT"). */
+  draftBadge?: string;
+  /** Optional pending block rendered below the disclaimer box. */
+  pendingNotice?: CoverPagePendingNotice;
 };
 
 export function CoverPage(props: CoverPageProps) {
   return (
     <Page size="LETTER" style={styles.page}>
       <View style={{ marginTop: 96 }}>
-        <Text style={styles.coverTitle}>{props.title}</Text>
+        <Text style={styles.coverTitle}>
+          {props.title}
+          {props.draftBadge ? (
+            <Text style={styles.coverDraftBadge}>{` · ${props.draftBadge}`}</Text>
+          ) : null}
+        </Text>
         <Text style={styles.coverSubtitle}>
           {props.visaType} — {props.beneficiaryName}
         </Text>
@@ -55,6 +76,19 @@ export function CoverPage(props: CoverPageProps) {
         </Text>
         <Text style={styles.coverField}>{DISCLAIMER}</Text>
       </View>
+
+      {props.pendingNotice ? (
+        <View style={styles.coverPendingBox}>
+          <Text style={[styles.coverField, styles.coverFieldLabel]}>
+            {props.pendingNotice.headline}
+          </Text>
+          {props.pendingNotice.lines.map((line, i) => (
+            <Text key={i} style={styles.coverField}>
+              • {line}
+            </Text>
+          ))}
+        </View>
+      ) : null}
 
       <DisclaimerFooter />
     </Page>
