@@ -7,8 +7,8 @@ import {
   AppShell,
   AttorneySidebar,
   AttorneyTopbar,
+  UserCard,
 } from "@/components/layout";
-import { SignOutForm } from "@/components/layout/SignOutForm";
 import { PostHogIdentify } from "@/components/analytics/PostHogIdentify";
 
 /**
@@ -61,6 +61,7 @@ export default async function WorkspaceLayout(props: {
       sidebar={
         <AttorneySidebar
           pipelineCounts={pipelineCounts}
+          isAdmin={me.roles.includes("admin")}
           userCard={
             <UserCard
               name={me.user.name ?? me.user.email}
@@ -74,42 +75,5 @@ export default async function WorkspaceLayout(props: {
       <PostHogIdentify userId={session.user.id} />
       {props.children}
     </AppShell>
-  );
-}
-
-function UserCard(props: {
-  name: string;
-  email: string;
-}): React.ReactElement {
-  const initials = props.name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((p) => p.charAt(0).toUpperCase())
-    .join("");
-  return (
-    <div className="flex items-center gap-2">
-      <span
-        className="flex h-7 w-7 items-center justify-center rounded-sm text-[11px] font-medium"
-        style={{
-          background: "rgba(245,241,232,0.12)",
-          color: "rgba(245,241,232,0.92)",
-        }}
-      >
-        {initials || "·"}
-      </span>
-      <div className="min-w-0 flex-1 text-[12px] leading-tight">
-        <p className="truncate font-medium" style={{ color: "var(--cream)" }}>
-          {props.name}
-        </p>
-        <p
-          className="truncate"
-          style={{ color: "rgba(245,241,232,0.55)" }}
-        >
-          {props.email}
-        </p>
-      </div>
-      <SignOutForm label="Out" />
-    </div>
   );
 }

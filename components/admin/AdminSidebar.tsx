@@ -3,18 +3,25 @@ import {
   Sidebar,
   type SidebarSectionDef,
 } from "@/components/layout/Sidebar";
+import { UserCard } from "@/components/layout/UserCard";
 
 /**
  * Admin-area sidebar — thin wrapper that supplies the admin nav
  * structure to the generic `Sidebar` primitive. Visual chrome,
  * desktop-vs-mobile drawer logic, and a11y plumbing all live in
  * `components/layout/Sidebar.tsx`; this file only owns the section
- * definitions + brand block.
+ * definitions, brand block, and the footer user card.
  *
- * Server component now — Sidebar handles its own client surface.
- * Drives a route rename to APP_ROUTES updates from the source-of-truth
- * (avoids hardcoded paths per CLAUDE.md §7).
+ * Server component — Sidebar handles its own client surface.
  */
+
+export type AdminSidebarProps = {
+  /** Identity for the footer user card. Surfaces the same affordance
+   *  as the attorney sidebar so admins can sign out without leaving
+   *  the admin area. Optional only to support storybook / dev pages
+   *  that render this without a session; production callers pass it. */
+  user?: { name: string; email: string };
+};
 
 const SECTIONS: ReadonlyArray<SidebarSectionDef> = [
   {
@@ -39,15 +46,24 @@ const SECTIONS: ReadonlyArray<SidebarSectionDef> = [
       { label: "Audit log", href: APP_ROUTES.adminAuditLog, icon: "shield" },
     ],
   },
+  {
+    label: "Switch",
+    items: [
+      { label: "Attorney dashboard", href: APP_ROUTES.dashboard, icon: "home" },
+    ],
+  },
 ];
 
-export function AdminSidebar(): React.ReactElement {
+export function AdminSidebar(
+  props: AdminSidebarProps = {},
+): React.ReactElement {
   return (
     <Sidebar
       brand={<AdminBrand />}
       ariaLabel="Admin navigation"
       mobileMenuLabel="Open admin menu"
       sections={SECTIONS}
+      footer={props.user ? <UserCard {...props.user} /> : undefined}
     />
   );
 }

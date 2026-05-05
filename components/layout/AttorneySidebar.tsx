@@ -22,6 +22,9 @@ export type AttorneySidebarProps = {
     review: number;
     filed: number;
   };
+  /** When true, append a "Switch" section with an Admin console link.
+   *  Driven by `me.roles.includes("admin")` — see workspace layout. */
+  isAdmin?: boolean;
   /** Footer slot — typically the user card. Optional. */
   userCard?: React.ReactNode;
 };
@@ -89,6 +92,20 @@ export function AttorneySidebar(
         },
       ],
     },
+    ...(props.isAdmin
+      ? [
+          {
+            label: "Switch",
+            items: [
+              {
+                label: "Admin console",
+                href: APP_ROUTES.admin,
+                icon: "shield" as const,
+              },
+            ],
+          },
+        ]
+      : []),
   ];
 
   return (

@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import type { ReactNode } from "react";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
+import { getMe } from "@/lib/me-cache";
 import { AdminSidebar } from "@/components/admin";
 import { APP_ROUTES } from "@/config";
 
@@ -31,9 +32,19 @@ export default async function AdminLayout(props: {
     throw err;
   }
 
+  // `getMe` is request-cached; the workspace layout already calls it
+  // for non-admin pages, but admin-only routes need their own load.
+  // Falls back to session.user values when getMe returns null (rare —
+  // admin gate already passed, so the user row exists).
+  const me = await getMe();
+  const sidebarUser = {
+    name: me?.user.name ?? session.user.email ?? "Admin",
+    email: me?.user.email ?? session.user.email ?? "",
+  };
+
   return (
     <div className="flex min-h-screen flex-col lg:grid lg:grid-cols-[216px_1fr]">
-      <AdminSidebar />
+      <AdminSidebar user={sidebarUser} />
       <main className="min-w-0">
         <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
           {props.children}

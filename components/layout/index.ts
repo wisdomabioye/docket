@@ -19,3 +19,4 @@ export {
 } from "./Sidebar";
 export { SignOutForm, type SignOutFormProps } from "./SignOutForm";
 export { Topbar, type TopbarProps } from "./Topbar";
+export { UserCard, type UserCardProps } from "./UserCard";
