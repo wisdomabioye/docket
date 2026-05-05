@@ -47,10 +47,10 @@ export function Hero(): React.ReactElement {
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-4">
             <Link
-              href={APP_ROUTES.login}
+              href="#waitlist"
               className="rounded-md bg-[var(--ink)] px-5 py-3 text-sm font-medium text-[var(--cream)] transition hover:opacity-90"
             >
-              Apply for partnership →
+              Join the waitlist →
             </Link>
             <Link
               href="#how"
@@ -58,6 +58,18 @@ export function Hero(): React.ReactElement {
               style={{ color: "var(--ink-muted)" }}
             >
               See how it works ↓
+            </Link>
+            <span
+              className="hidden h-4 w-px sm:inline-block"
+              style={{ background: "var(--border, rgba(0,0,0,0.15))" }}
+              aria-hidden="true"
+            />
+            <Link
+              href={APP_ROUTES.login}
+              className="text-sm underline-offset-2 hover:underline"
+              style={{ color: "var(--ink-muted)" }}
+            >
+              Already invited? Sign in →
             </Link>
           </div>
 

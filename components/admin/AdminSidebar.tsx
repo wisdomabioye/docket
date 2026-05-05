@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { APP_ROUTES } from "@/config";
 import {
   Sidebar,
@@ -70,7 +71,9 @@ export function AdminSidebar(
 
 function AdminBrand(): React.ReactElement {
   return (
-    <div
+    <Link
+      href={APP_ROUTES.admin}
+      aria-label="Docket Admin — go to admin overview"
       className="flex items-center gap-2 text-[22px] tracking-[-0.01em]"
       style={{ fontFamily: "var(--font-serif), Georgia, serif" }}
     >
@@ -84,6 +87,6 @@ function AdminBrand(): React.ReactElement {
       >
         ADMIN
       </span>
-    </div>
+    </Link>
   );
 }

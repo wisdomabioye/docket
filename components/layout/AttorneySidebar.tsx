@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { APP_ROUTES } from "@/config";
 import {
   Sidebar,
@@ -121,12 +122,14 @@ export function AttorneySidebar(
 
 function AttorneyBrand(): React.ReactElement {
   return (
-    <div
+    <Link
+      href={APP_ROUTES.dashboard}
+      aria-label="Docket — go to dashboard"
       className="flex items-center gap-1 text-[22px] tracking-[-0.01em]"
       style={{ fontFamily: "var(--font-serif), Georgia, serif" }}
     >
       Docket
       <span style={{ color: "var(--accent-ink, var(--accent))" }}>.</span>
-    </div>
+    </Link>
   );
 }

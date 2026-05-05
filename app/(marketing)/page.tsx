@@ -30,9 +30,9 @@ export default function HomePage(): React.ReactElement {
       <OutputsSection />
       <NumbersBand />
       <PartnershipSection />
+      <WaitlistSection />
       <FaqSection />
       <CloserSection />
-      <WaitlistSection />
     </>
   );
 }
