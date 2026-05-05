@@ -3,22 +3,15 @@ import { APP_ROUTES } from "@/config";
 import { shortCaseId } from "@/lib/case-id";
 
 /**
- * Stage 11 dashboard caseline row — grid layout that mirrors
- * `dashboard.html .caseline`. Replaces the plain `<table><tr>` rows
- * the dashboard used to ship with.
+ * Stage 11 dashboard caseline row — responsive layout.
  *
- * Each column is a slot the caller fills:
- *   - avatar / initials block
- *   - client name + case-id sub
- *   - visa type + sub
- *   - stage progress (label + percent, rendered as a thin bar)
- *   - next-action label + due hint
- *   - assignee initials + name
- *   - last-updated timestamp
+ *   - `md+`  → 6-column grid mirroring `dashboard.html .caseline`
+ *              (avatar / beneficiary / visa / stage / next action / updated).
+ *   - below  → stacked card: avatar + name on row 1, visa + updated on
+ *              row 2, stage bar on row 3, next action on row 4.
  *
- * Server-component-friendly. Whole row is a `<Link>` so the entire
- * caseline is clickable; nested kebab/buttons for case-row actions
- * land in Stage 12 (table row actions).
+ * Grid template lives in one place (`CASELINE_GRID`) so the row and
+ * the list header stay aligned without two copies drifting.
  */
 export type CaselineProps = {
   caseId: string;
@@ -35,27 +28,38 @@ export type CaselineProps = {
   updatedLabel: string;
 };
 
+/** Shared 6-column grid template. Used by both row and header so the
+ *  header label positions match the row cells exactly. Compact mins
+ *  let the grid fit in the dashboard's narrow main column at `lg`. */
+export const CASELINE_GRID =
+  "md:grid-cols-[28px_minmax(120px,1.2fr)_minmax(64px,0.5fr)_minmax(120px,1.2fr)_minmax(120px,1fr)_72px]";
+
 export function Caseline(props: CaselineProps): React.ReactElement {
   return (
     <Link
       href={APP_ROUTES.case(props.caseId)}
-      className="grid items-center gap-3 rounded-md border border-transparent px-3 py-3 text-sm transition hover:border-[var(--border,rgba(0,0,0,0.08))] hover:bg-[var(--surface,#fff)]"
-      style={{
-        gridTemplateColumns:
-          "32px minmax(160px, 1.2fr) minmax(80px, 0.6fr) minmax(140px, 1.2fr) minmax(140px, 1fr) 90px",
-      }}
+      className={`flex flex-col gap-2 rounded-md border border-transparent px-3 py-3 text-sm transition hover:border-[var(--border,rgba(0,0,0,0.08))] hover:bg-[var(--surface,#fff)] md:grid md:items-center md:gap-3 ${CASELINE_GRID}`}
     >
-      <Avatar name={props.beneficiaryName} />
-      <div className="min-w-0">
-        <div className="truncate font-medium">{props.beneficiaryName}</div>
+      <div className="flex items-center gap-3 md:contents">
+        <Avatar name={props.beneficiaryName} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium">{props.beneficiaryName}</div>
+          <div
+            className="mono truncate text-[10px] uppercase tracking-wider"
+            style={{ color: "var(--ink-muted)" }}
+          >
+            {shortCaseId(props.caseId)}
+          </div>
+        </div>
         <div
-          className="mono truncate text-[10px] uppercase tracking-wider"
+          className="mono shrink-0 text-[11px] uppercase tracking-wider md:hidden"
           style={{ color: "var(--ink-muted)" }}
         >
-          {shortCaseId(props.caseId)}
+          {props.updatedLabel}
         </div>
       </div>
-      <div className="min-w-0">
+
+      <div className="min-w-0 md:block">
         <div className="mono text-xs uppercase tracking-wider">
           {props.visaType}
         </div>
@@ -68,19 +72,23 @@ export function Caseline(props: CaselineProps): React.ReactElement {
           </div>
         ) : null}
       </div>
+
       <div className="min-w-0">
         <StageBar percent={props.stagePercent} />
         <div
-          className="mt-1 truncate text-[11px]"
+          className="mt-1 text-[11px] leading-snug break-words"
           style={{ color: "var(--ink-soft)" }}
         >
           {props.stageLabel}
         </div>
       </div>
+
       <div className="min-w-0">
         {props.nextAction ? (
           <>
-            <div className="truncate text-xs">{props.nextAction}</div>
+            <div className="text-xs leading-snug break-words">
+              {props.nextAction}
+            </div>
             {props.nextDue ? (
               <div
                 className="mono text-[10px] uppercase tracking-wider"
@@ -94,8 +102,9 @@ export function Caseline(props: CaselineProps): React.ReactElement {
           <span style={{ color: "var(--ink-muted)" }}>—</span>
         )}
       </div>
+
       <div
-        className="text-right text-[11px]"
+        className="hidden text-right text-[11px] md:block"
         style={{ color: "var(--ink-muted)" }}
       >
         {props.updatedLabel}
@@ -113,7 +122,7 @@ function Avatar(props: { name: string }): React.ReactElement {
     .join("");
   return (
     <span
-      className="flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-medium"
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-medium"
       style={{
         background: "var(--ink)",
         color: "var(--cream, white)",
@@ -144,4 +153,3 @@ function StageBar(props: { percent: number }): React.ReactElement {
     </div>
   );
 }
-
