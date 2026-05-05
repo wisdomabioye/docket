@@ -55,6 +55,13 @@ export default async function DashboardPage({
   const status = me.attorneyProfile.status;
 
   if (status === "pending") {
+    // `pending` covers two states: invited-but-not-yet-submitted (route to
+    // the onboarding form) and submitted-awaiting-admin-activation (show
+    // the inline card). `submittedAt` is the canonical discriminator —
+    // the same signal the admin activation queue keys off (admin.ts).
+    if (!me.attorneyProfile.submittedAt) {
+      redirect(APP_ROUTES.onboarding);
+    }
     return (
       <div className="space-y-6">
         <GreetingBand name={me.user.name ?? me.user.email} />
