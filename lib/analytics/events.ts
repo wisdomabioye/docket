@@ -33,6 +33,8 @@ export const EVENT_NAMES = [
   // Attorney lifecycle (2)
   "attorney.onboarded",
   "attorney.activated",
+  // Signatures (1)
+  "signature.signed",
   // Case lifecycle (4)
   "case.created",
   "case.intake_submitted",
@@ -76,6 +78,12 @@ export type EventPayloads = {
   };
   "attorney.activated": {
     attorney_id: string;
+  };
+  "signature.signed": {
+    signature_id: string;
+    /** Discriminator from `lib/constants.ts` `SIGNED_DOCUMENT_KINDS`. */
+    document_kind: string;
+    document_version: string;
   };
   "case.created": {
     case_id: string;

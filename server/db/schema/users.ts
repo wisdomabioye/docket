@@ -67,8 +67,10 @@ export const attorneyProfiles = pgTable(
     // hasn't filled out the form.
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
 
+    // Denormalized convenience flag — the legal record is the row in
+    // `signed_documents`. Set from `signed_documents.signed_at` when
+    // the attorney submits onboarding (`attorney.submitOnboarding`).
     agreementSignedAt: timestamp("agreement_signed_at", { withTimezone: true }),
-    agreementStoragePath: text("agreement_storage_path"),
     acceptedTermsVersion: text("accepted_terms_version"),
 
     /** Stripe Customer id, lazily created on first invoice (Stage 10).

@@ -12,10 +12,15 @@ import {
   caseStatusEnum,
   cases,
   organizations,
+  signedDocuments,
   users,
   visaTypeEnum,
   waitlistEntries,
 } from "@/server/db/schema";
+import {
+  CONTRACTOR_AGREEMENT_KIND,
+  CONTRACTOR_AGREEMENT_VERSION,
+} from "@/server/auth/contractor-agreement";
 import { adminProcedure, router } from "@/server/api/trpc";
 import { withAudit } from "@/server/services/audit";
 import { getRedis } from "@/server/services/redis";
@@ -1103,6 +1108,35 @@ export const adminRouter = router({
         .orderBy(desc(cases.updatedAt))
         .limit(10);
 
+      // Active contractor-agreement signature for this user, if any.
+      // The unique partial index guarantees at most one row.
+      const [signatureRow] = await db
+        .select({
+          id: signedDocuments.id,
+          documentVersion: signedDocuments.documentVersion,
+          contentHash: signedDocuments.contentHash,
+          fullLegalName: signedDocuments.fullLegalName,
+          signedAt: signedDocuments.signedAt,
+          ipAddress: signedDocuments.ipAddress,
+        })
+        .from(signedDocuments)
+        .where(
+          and(
+            eq(signedDocuments.userId, input.userId),
+            eq(signedDocuments.documentKind, CONTRACTOR_AGREEMENT_KIND),
+            isNull(signedDocuments.revokedAt),
+          ),
+        )
+        .orderBy(desc(signedDocuments.signedAt))
+        .limit(1);
+      const contractorSignature = signatureRow
+        ? {
+            ...signatureRow,
+            isCurrentVersion:
+              signatureRow.documentVersion === CONTRACTOR_AGREEMENT_VERSION,
+          }
+        : null;
+
       return {
         userId: row.userId,
         name: row.name,
@@ -1123,6 +1157,7 @@ export const adminRouter = router({
               }
             : null,
         recentCases,
+        contractorSignature,
       };
     }),
 

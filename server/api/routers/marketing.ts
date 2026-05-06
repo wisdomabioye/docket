@@ -3,6 +3,7 @@ import { z } from "zod";
 import { waitlistEntries } from "@/server/db/schema";
 import { db } from "@/server/db/client";
 import { publicProcedure, router } from "@/server/api/trpc";
+import { readIp } from "@/server/api/headers";
 
 /**
  * Public marketing surface — waitlist signup. Runs as a public procedure
@@ -73,27 +74,3 @@ export const marketingRouter = router({
     }),
 });
 
-/**
- * Best-effort client IP from the request headers. Vercel sets
- * `x-forwarded-for` (comma-separated; first entry is the client).
- *
- * Returns `null` if the header is absent OR not a valid IP. The DB
- * column is `inet` — Postgres would reject any non-IP value, so a
- * malicious `x-forwarded-for` could otherwise abort the insert.
- */
-function readIp(headers: Headers): string | null {
-  const xff = headers.get("x-forwarded-for");
-  const candidate = xff?.split(",")[0]?.trim() ?? headers.get("x-real-ip");
-  if (!candidate) return null;
-  return isValidIp(candidate) ? candidate : null;
-}
-
-/** RFC-5321-ish IPv4 + IPv6 sniff. Strict enough for `inet` casts. */
-function isValidIp(s: string): boolean {
-  // IPv4: four 0-255 octets.
-  const v4 = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
-  if (v4.test(s)) return true;
-  // IPv6: at least one colon, hex+colon chars only. Defer to Postgres for
-  // pedantic validation; we just block obvious non-IPs from getting near it.
-  return /^[0-9a-fA-F:]+$/.test(s) && s.includes(":");
-}

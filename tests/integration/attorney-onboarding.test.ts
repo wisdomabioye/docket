@@ -6,9 +6,15 @@ import {
   auditLog,
   organizationMembers,
   organizations,
+  signedDocuments,
   userRoles,
   users,
 } from "@/server/db/schema";
+import {
+  CONTRACTOR_AGREEMENT_HASH,
+  CONTRACTOR_AGREEMENT_KIND,
+  CONTRACTOR_AGREEMENT_VERSION,
+} from "@/server/auth/contractor-agreement";
 
 vi.mock("@/server/auth/config", () => ({
   auth: vi.fn(() => Promise.resolve(null)),
@@ -36,6 +42,13 @@ const ORG = "60000000-0000-4000-8000-dddd00000001";
 
 let db: TestDb | null = null;
 let rlsReady = false;
+/** Per-test signature id, refreshed in `beforeEach`. The onboarding
+ *  submit handler validates the signature row's owner + kind +
+ *  version, so each test gets a freshly-inserted, owner-correct row.
+ *  The signature-service flow itself (PDF render, audit log) has its
+ *  own dedicated test surface — here we only need a valid row to
+ *  stand in for "Step 1 was completed". */
+let signatureId = "";
 
 const callerFactory = createCallerFactory(appRouter);
 const callAs = (userId: string | null) =>
@@ -90,6 +103,19 @@ beforeEach(async () => {
     .insert(attorneyProfiles)
     .values({ userId: ATTORNEY, status: "pending" });
   await db.execute(sql`delete from audit_log where action = 'attorney.activate' and target_id = ${ATTORNEY}`);
+  // Fresh signature row for each test — stand-in for completed Step 1.
+  await db.delete(signedDocuments).where(eq(signedDocuments.userId, ATTORNEY));
+  const [sig] = await db
+    .insert(signedDocuments)
+    .values({
+      userId: ATTORNEY,
+      documentKind: CONTRACTOR_AGREEMENT_KIND,
+      documentVersion: CONTRACTOR_AGREEMENT_VERSION,
+      contentHash: CONTRACTOR_AGREEMENT_HASH,
+      fullLegalName: "Test Attorney",
+    })
+    .returning({ id: signedDocuments.id });
+  signatureId = sig?.id ?? "";
 });
 
 afterAll(async () => {
@@ -104,7 +130,7 @@ describe("attorney.submitOnboarding", () => {
       barNumber: "TEST-12345",
       barStates: ["NY", "CA"],
       termsAcceptedVersion: "v1",
-      agreementFilename: "agreement.pdf",
+      signatureId,
     });
     expect(result.ok).toBe(true);
 
@@ -116,8 +142,9 @@ describe("attorney.submitOnboarding", () => {
     expect(row?.barStates).toEqual(["NY", "CA"]);
     expect(row?.acceptedTermsVersion).toBe("v1");
     expect(row?.submittedAt).toBeInstanceOf(Date);
+    // The denormalized timestamp mirrors the signature row's
+    // signed_at; the legal record is the signed_documents row.
     expect(row?.agreementSignedAt).toBeInstanceOf(Date);
-    expect(row?.agreementStoragePath).toMatch(/^pending-upload\//);
     expect(row?.status).toBe("pending"); // admin still must activate
   });
 
@@ -128,7 +155,7 @@ describe("attorney.submitOnboarding", () => {
         barNumber: "TEST-12345",
         barStates: [],
         termsAcceptedVersion: "v1",
-        agreementFilename: "x.pdf",
+        signatureId,
       }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
@@ -140,7 +167,7 @@ describe("attorney.submitOnboarding", () => {
         barNumber: "TEST",
         barStates: ["NEW YORK"], // length !== 2
         termsAcceptedVersion: "v1",
-        agreementFilename: "x.pdf",
+        signatureId,
       }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
@@ -156,7 +183,7 @@ describe("attorney.submitOnboarding", () => {
         barNumber: "TEST",
         barStates: ["NY"],
         termsAcceptedVersion: "v1",
-        agreementFilename: "x.pdf",
+        signatureId,
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
@@ -172,7 +199,7 @@ describe("attorney.submitOnboarding", () => {
         barNumber: "TEST",
         barStates: ["NY"],
         termsAcceptedVersion: "v1",
-        agreementFilename: "x.pdf",
+        signatureId,
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
@@ -188,7 +215,7 @@ describe("attorney.submitOnboarding", () => {
         barNumber: "TEST",
         barStates: ["NY"],
         termsAcceptedVersion: "v1",
-        agreementFilename: "x.pdf",
+        signatureId,
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
@@ -201,7 +228,7 @@ describe("attorney.submitOnboarding", () => {
         barStates: ["NY"],
         // Cast past the literal type to simulate a malicious / stale client.
         termsAcceptedVersion: "v0" as "v1",
-        agreementFilename: "x.pdf",
+        signatureId,
       }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
@@ -212,7 +239,7 @@ describe("attorney.submitOnboarding", () => {
       barNumber: "TEST-NORM",
       barStates: ["ny", "Ca", "tX"], // mixed-case input
       termsAcceptedVersion: "v1",
-      agreementFilename: "x.pdf",
+      signatureId,
     });
     expect(result.ok).toBe(true);
 
@@ -230,9 +257,63 @@ describe("attorney.submitOnboarding", () => {
         barNumber: "TEST",
         barStates: ["NY"],
         termsAcceptedVersion: "v1",
-        agreementFilename: "x.pdf",
+        signatureId,
       }),
     ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("BAD_REQUEST when signatureId belongs to another user", async (ctx) => {
+    const db = gate(ctx);
+    const [other] = await db
+      .insert(signedDocuments)
+      .values({
+        userId: NON_ADMIN,
+        documentKind: CONTRACTOR_AGREEMENT_KIND,
+        documentVersion: CONTRACTOR_AGREEMENT_VERSION,
+        contentHash: CONTRACTOR_AGREEMENT_HASH,
+        fullLegalName: "Other Person",
+      })
+      .returning({ id: signedDocuments.id });
+    await expect(
+      callAs(ATTORNEY).attorney.submitOnboarding({
+        barNumber: "TEST",
+        barStates: ["NY"],
+        termsAcceptedVersion: "v1",
+        signatureId: other!.id,
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("BAD_REQUEST when signature is for an outdated version", async (ctx) => {
+    const db = gate(ctx);
+    await db
+      .update(signedDocuments)
+      .set({ documentVersion: "v0" })
+      .where(eq(signedDocuments.id, signatureId));
+    await expect(
+      callAs(ATTORNEY).attorney.submitOnboarding({
+        barNumber: "TEST",
+        barStates: ["NY"],
+        termsAcceptedVersion: "v1",
+        signatureId,
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("BAD_REQUEST when signature has been revoked", async (ctx) => {
+    const db = gate(ctx);
+    await db
+      .update(signedDocuments)
+      .set({ revokedAt: new Date() })
+      .where(eq(signedDocuments.id, signatureId));
+    await expect(
+      callAs(ATTORNEY).attorney.submitOnboarding({
+        barNumber: "TEST",
+        barStates: ["NY"],
+        termsAcceptedVersion: "v1",
+        signatureId,
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
 
@@ -250,7 +331,7 @@ describe("admin.listPendingAttorneys", () => {
       barNumber: "ADMIN-LIST",
       barStates: ["NY"],
       termsAcceptedVersion: "v1",
-      agreementFilename: "x.pdf",
+      signatureId,
     });
 
     const list = await callAs(ADMIN).admin.listPendingAttorneys();
@@ -273,7 +354,7 @@ describe("admin.listPendingAttorneys", () => {
       barNumber: "SOFT-DELETED",
       barStates: ["NY"],
       termsAcceptedVersion: "v1",
-      agreementFilename: "x.pdf",
+      signatureId,
     });
     // Confirm baseline visibility.
     let list = await callAs(ADMIN).admin.listPendingAttorneys();
@@ -303,7 +384,7 @@ describe("admin.activateAttorney", () => {
       barNumber: "TO-ACTIVATE",
       barStates: ["NY"],
       termsAcceptedVersion: "v1",
-      agreementFilename: "x.pdf",
+      signatureId,
     });
 
     const result = await callAs(ADMIN).admin.activateAttorney({
@@ -343,7 +424,7 @@ describe("admin.activateAttorney", () => {
       barNumber: "EMPTY-REASON",
       barStates: ["NY"],
       termsAcceptedVersion: "v1",
-      agreementFilename: "x.pdf",
+      signatureId,
     });
     await expect(
       callAs(ADMIN).admin.activateAttorney({
@@ -366,7 +447,7 @@ describe("admin.activateAttorney", () => {
       barNumber: "ALREADY-ACTIVE",
       barStates: ["NY"],
       termsAcceptedVersion: "v1",
-      agreementFilename: "x.pdf",
+      signatureId,
     });
     await db
       .update(attorneyProfiles)
@@ -396,6 +477,9 @@ async function teardown(db: TestDb): Promise<void> {
   await db.execute(sql`delete from organizations where id = ${ORG}`);
   await db.execute(
     sql`delete from attorney_profiles where user_id in (${ATTORNEY}, ${ADMIN}, ${NON_ADMIN})`,
+  );
+  await db.execute(
+    sql`delete from signed_documents where user_id in (${ATTORNEY}, ${ADMIN}, ${NON_ADMIN})`,
   );
   await db.execute(
     sql`delete from user_roles where user_id in (${ATTORNEY}, ${ADMIN}, ${NON_ADMIN})`,

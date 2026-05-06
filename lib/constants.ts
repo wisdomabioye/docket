@@ -105,3 +105,11 @@ export const CASE_STATUSES = [
 ] as const;
 
 export type CaseStatus = (typeof CASE_STATUSES)[number];
+
+/** Discriminator values for `signed_documents.document_kind`. Phase 1
+ *  ships only `'contractor_agreement'`. Phase 2 will add applicant-side
+ *  kinds (engagement letters, ToS acceptances, etc.) — extend this
+ *  array, not the enum file (the column is `text` by design). */
+export const SIGNED_DOCUMENT_KINDS = ["contractor_agreement"] as const;
+
+export type SignedDocumentKind = (typeof SIGNED_DOCUMENT_KINDS)[number];

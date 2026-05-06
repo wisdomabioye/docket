@@ -12,4 +12,5 @@ export * from "./recommenders";
 export * from "./invoices";
 export * from "./audit";
 export * from "./marketing";
+export * from "./signatures";
 export * from "./relations";

@@ -46,6 +46,14 @@ const SAMPLE_EVENT_PAYLOADS: Record<EventName, AnalyticsEvent> = {
     name: "attorney.activated",
     properties: { attorney_id: "user-uuid-1" },
   },
+  "signature.signed": {
+    name: "signature.signed",
+    properties: {
+      signature_id: "sig-uuid-1",
+      document_kind: "contractor_agreement",
+      document_version: "v1",
+    },
+  },
   "case.created": {
     name: "case.created",
     properties: { case_id: "case-uuid-1", visa_type: "O-1A" },

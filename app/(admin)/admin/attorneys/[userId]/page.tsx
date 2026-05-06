@@ -9,6 +9,7 @@ import { attorneyStatusVariant } from "@/lib/status-style";
 import { formatDate } from "@/lib/utils";
 import { ActivateButton } from "../ActivateButton";
 import { SuspendButton } from "../SuspendButton";
+import { DownloadSignatureButton } from "./DownloadSignatureButton";
 
 type Props = { params: Promise<{ userId: string }> };
 
@@ -74,12 +75,36 @@ export default async function AttorneyDetailPage({ params }: Props) {
                     : "—"}
                 </span>
               </Field>
-              <Field label="Agreement signed">
-                <span className="mono">
-                  {data.profile.agreementSignedAt
-                    ? formatDate(data.profile.agreementSignedAt, { style: "full" })
-                    : "—"}
-                </span>
+              <Field label="Contractor agreement">
+                {data.contractorSignature ? (
+                  <div className="space-y-1">
+                    <div className="mono">
+                      {formatDate(data.contractorSignature.signedAt, {
+                        style: "full",
+                      })}{" "}
+                      · {data.contractorSignature.documentVersion}
+                      {!data.contractorSignature.isCurrentVersion ? (
+                        <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] uppercase text-amber-900">
+                          Outdated
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="text-xs text-[var(--ink-muted)]">
+                      {data.contractorSignature.fullLegalName} (typed)
+                    </div>
+                    <div className="mono text-[10px] text-[var(--ink-muted)]">
+                      sha256 {data.contractorSignature.contentHash.slice(0, 16)}…
+                      {data.contractorSignature.ipAddress
+                        ? ` · IP ${data.contractorSignature.ipAddress}`
+                        : ""}
+                    </div>
+                    <DownloadSignatureButton id={data.contractorSignature.id} />
+                  </div>
+                ) : (
+                  <span className="text-xs text-[var(--ink-muted)]">
+                    Not signed yet
+                  </span>
+                )}
               </Field>
             </dl>
           ) : (

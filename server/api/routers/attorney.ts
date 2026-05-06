@@ -1,18 +1,25 @@
 import { TRPCError } from "@trpc/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { attorneyProfiles } from "@/server/db/schema";
+import { attorneyProfiles, signedDocuments } from "@/server/db/schema";
 import { protectedProcedure, router } from "@/server/api/trpc";
 import { TERMS_VERSION } from "@/server/auth/terms";
+import {
+  CONTRACTOR_AGREEMENT_KIND,
+  CONTRACTOR_AGREEMENT_VERSION,
+} from "@/server/auth/contractor-agreement";
 import { emitFromCtx } from "@/server/services/analytics/emit";
 
 /**
  * Attorney-side procedures: onboarding form submission. Status flips
- * pending → pending+submitted; admin then activates via `admin.activateAttorney`.
+ * pending → pending+submitted; admin then activates via
+ * `admin.activateAttorney`.
  *
- * Phase 1 stub for the agreement upload — we accept a placeholder
- * `agreementFilename` string. Stage 06 wires real Supabase / S3 upload
- * and replaces this with a storage-path round-trip.
+ * The contractor agreement is signed in a separate step via
+ * `signature.signContractorAgreement`; the resulting signature id is
+ * passed in here. We re-validate ownership + kind + version + not
+ * revoked at submission time so a version bump between Step 1 and
+ * Step 2 forces a re-sign.
  */
 
 const SubmitOnboardingInput = z.object({
@@ -22,7 +29,7 @@ const SubmitOnboardingInput = z.object({
   barStates: z.array(z.string().length(2)).min(1).max(50),
   // Must equal the current TERMS_VERSION. Rejects stale or fake versions.
   termsAcceptedVersion: z.literal(TERMS_VERSION),
-  agreementFilename: z.string().min(1).max(200), // Stage 06 placeholder
+  signatureId: z.string().uuid(),
 });
 
 export const attorneyRouter = router({
@@ -67,6 +74,42 @@ export const attorneyRouter = router({
         });
       }
 
+      // Verify the signature row is the caller's, the right kind, the
+      // current version, and not revoked. The signed_documents RLS
+      // policy already restricts SELECT to the caller, but we re-check
+      // explicitly so version drift surfaces as a clear app-level
+      // error rather than a silent NOT_FOUND.
+      const [signature] = await db
+        .select({
+          userId: signedDocuments.userId,
+          documentKind: signedDocuments.documentKind,
+          documentVersion: signedDocuments.documentVersion,
+          signedAt: signedDocuments.signedAt,
+          revokedAt: signedDocuments.revokedAt,
+        })
+        .from(signedDocuments)
+        .where(eq(signedDocuments.id, input.signatureId))
+        .limit(1);
+
+      if (
+        !signature ||
+        signature.userId !== userId ||
+        signature.documentKind !== CONTRACTOR_AGREEMENT_KIND ||
+        signature.revokedAt !== null
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Sign the contractor agreement before submitting onboarding.",
+        });
+      }
+      if (signature.documentVersion !== CONTRACTOR_AGREEMENT_VERSION) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "The contractor agreement was updated. Please re-read and sign the latest version.",
+        });
+      }
+
       const normalizedBarStates = input.barStates.map((s) => s.toUpperCase());
       const now = new Date();
 
@@ -76,9 +119,9 @@ export const attorneyRouter = router({
           barNumber: input.barNumber,
           barStates: normalizedBarStates,
           acceptedTermsVersion: input.termsAcceptedVersion,
-          // Storage path is a placeholder until Stage 06 wires real upload.
-          agreementStoragePath: `pending-upload/${userId}/${input.agreementFilename}`,
-          agreementSignedAt: now,
+          // Denormalized convenience flag — legal record is the
+          // signed_documents row referenced by `input.signatureId`.
+          agreementSignedAt: signature.signedAt,
           submittedAt: now,
         })
         .where(eq(attorneyProfiles.id, profile.id));

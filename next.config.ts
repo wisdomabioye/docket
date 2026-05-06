@@ -16,6 +16,14 @@ const nextConfig: NextConfig = {
     "pdfjs-dist",
     "@aws-sdk/s3-request-presigner",
   ],
+  // The contractor agreement body is read from disk at module load
+  // (`server/auth/contractor-agreement.ts` → readFileSync). Next's
+  // tracer doesn't follow `readFileSync(process.cwd() + ...)` calls
+  // through string concatenation, so the `.md` source is declared
+  // explicitly here for every server route.
+  outputFileTracingIncludes: {
+    "/*": ["./server/auth/agreements/**/*.md"],
+  },
 };
 
 export default withSentryConfig(nextConfig, {

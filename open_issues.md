@@ -1165,6 +1165,43 @@ Status: Tracked.
 
 ## Resolved
 
+### #51 — Onboarding "signed contractor agreement" is a free-text filename (theater, not a signature)
+
+Resolved: 2026-05-06 — Stage 03b shipped.
+
+Replaced the free-text `agreementFilename` input with a real in-app
+electronic-signature flow. The contractor agreement body is now
+versioned in-repo (`server/auth/agreements/contractor-v1.md` +
+`server/auth/contractor-agreement.ts`), with a sha256 hash recomputed
+at module load and pinned via `z.literal` at the signing boundary.
+
+A generic `signed_documents` table records every signature with
+`document_kind`, `document_version`, `content_hash`, typed legal
+name, IP, UA, and a path to the persisted PDF artifact (rendered
+once at sign time, never regenerated). RLS is self-SELECT +
+self-INSERT only; UPDATE/DELETE are admin-only by omission.
+
+`attorney.submitOnboarding` now requires a `signatureId` and
+re-validates ownership + kind + version + not revoked at submit
+time. Onboarding is a server-decided two-step flow: Step 1
+(`<SignAgreementStep>`) gates the Sign button on scroll-to-bottom +
+typed name + ESIGN intent checkbox; Step 2 (`<OnboardingForm>`)
+collects bar credentials and references the existing signature row.
+
+The admin attorney detail page surfaces the signature with date,
+version, typed name, sha256 prefix, IP, and a "Download signed PDF"
+button that mints a fresh 5-minute signed URL on click. The
+generic `signed_documents` table will be reused in Phase 2 for
+applicant-side engagement letters and other one-sided agreements
+without schema changes (the discriminator is text, not enum).
+
+`attorney_profiles.agreement_storage_path` was dropped;
+`agreement_signed_at` remains as a denormalized convenience flag
+written from the signature row's `signed_at` at submission time.
+
+See `build_stages/03b_contractor_signature.md` for the full
+implementation record.
+
 ### #1 — Schema design gaps to settle before generating Stage 01 migration
 
 Resolved: 2026-04-27 — "Apply revised plan."

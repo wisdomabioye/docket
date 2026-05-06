@@ -29,6 +29,7 @@ export type AuditTargetType =
   | "case"
   | "attorney_profile"
   | "waitlist_entry"
+  | "signed_document"
   | "system";
 
 export type LogAdminActionArgs = {
@@ -52,10 +53,53 @@ export type LogAdminActionArgs = {
   userAgent?: string | null;
 };
 
+/**
+ * Thin alias for `insertAuditEntry` that documents intent at admin
+ * call sites. Does NOT enforce the admin role — the caller is
+ * trusted (typically inside an `adminProcedure`) to pass an actually-
+ * admin user id. Non-admin actors writing to the audit log
+ * (signature signing, etc.) should call `insertAuditEntry`
+ * directly.
+ */
 export async function logAdminAction(args: LogAdminActionArgs): Promise<void> {
+  await insertAuditEntry({
+    db: args.db,
+    actorUserId: args.adminId,
+    action: args.action,
+    targetType: args.targetType,
+    targetId: args.targetId ?? null,
+    details: args.details ?? null,
+    ipAddress: args.ipAddress ?? null,
+    userAgent: args.userAgent ?? null,
+  });
+}
+
+/**
+ * Generic audit-log writer used by both `logAdminAction` and the
+ * non-admin signing flow (`server/services/signatures/`). The audit
+ * table's RLS allows admin-only writes; the only safe DB instance to
+ * pass here is the owner-role connection (`@/server/db/client`'s `db`)
+ * or an admin-engaged ctx.db. Per CLAUDE.md §6.10 we also keep the
+ * column population centralized here so PII redaction (Sentry
+ * `beforeSend`) stays applied at one boundary.
+ */
+export type InsertAuditEntryArgs = {
+  db: Db;
+  actorUserId: string;
+  action: AuditActionName;
+  targetType: AuditTargetType;
+  targetId?: string | null;
+  details?: Record<string, unknown> | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+};
+
+export async function insertAuditEntry(
+  args: InsertAuditEntryArgs,
+): Promise<void> {
   await args.db.insert(auditLog).values({
     actorType: "user",
-    actorUserId: args.adminId,
+    actorUserId: args.actorUserId,
     action: args.action,
     targetType: args.targetType,
     ...(args.targetId !== undefined && args.targetId !== null
@@ -113,21 +157,15 @@ export async function withAudit<T>(
 ): Promise<T> {
   const result = await fn();
   const details = meta.detailsFrom?.(result) ?? null;
-  await logAdminAction({
+  await insertAuditEntry({
     db: meta.db,
-    adminId: meta.adminId,
+    actorUserId: meta.adminId,
     action: meta.action,
-    ...(meta.targetId !== undefined && meta.targetId !== null
-      ? { targetId: meta.targetId }
-      : {}),
     targetType: meta.targetType,
+    targetId: meta.targetId ?? null,
     details,
-    ...(meta.ipAddress !== undefined && meta.ipAddress !== null
-      ? { ipAddress: meta.ipAddress }
-      : {}),
-    ...(meta.userAgent !== undefined && meta.userAgent !== null
-      ? { userAgent: meta.userAgent }
-      : {}),
+    ipAddress: meta.ipAddress ?? null,
+    userAgent: meta.userAgent ?? null,
   });
   return result;
 }

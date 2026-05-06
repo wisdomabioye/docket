@@ -12,6 +12,7 @@ import {
 } from "./cases";
 import { caseRecommenders } from "./recommenders";
 import { auditLog } from "./audit";
+import { signedDocuments } from "./signatures";
 
 /**
  * Drizzle relations for `db.query.*.findMany({ with: { ... } })`.
@@ -49,6 +50,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   caseEventsActed: many(caseEvents),
   auditLogEntries: many(auditLog),
   beneficiaryOnCases: many(cases),
+  signedDocuments: many(signedDocuments),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -208,3 +210,13 @@ export const auditLogRelations = relations(auditLog, ({ one }) => ({
     references: [users.id],
   }),
 }));
+
+export const signedDocumentsRelations = relations(
+  signedDocuments,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [signedDocuments.userId],
+      references: [users.id],
+    }),
+  }),
+);

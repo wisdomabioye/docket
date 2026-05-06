@@ -9,6 +9,7 @@ import { outputRouter } from "./routers/output";
 import { recommenderRouter } from "./routers/recommender";
 import { revenueRouter } from "./routers/revenue";
 import { searchRouter } from "./routers/search";
+import { signatureRouter } from "./routers/signature";
 
 /**
  * Root tRPC router. Add new domain routers here.
@@ -27,6 +28,7 @@ export const appRouter = router({
   recommender: recommenderRouter,
   revenue: revenueRouter,
   search: searchRouter,
+  signature: signatureRouter,
 });
 
 export type AppRouter = typeof appRouter;

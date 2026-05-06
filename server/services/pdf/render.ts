@@ -42,6 +42,17 @@ export function packagePdfKey(args: {
   return `cases/${args.caseId}/pdf/package-${args.timestampMs}.pdf`;
 }
 
+/** Stage 03b: signed contractor agreement (and future signed
+ *  documents). One PDF per signature row; never regenerated. Lives
+ *  outside the case-scoped tree because contractor signatures are
+ *  user-scoped, not case-scoped. */
+export function signaturePdfKey(args: {
+  userId: string;
+  signatureId: string;
+}): string {
+  return `users/${args.userId}/signatures/${args.signatureId}.pdf`;
+}
+
 /** Render a React-PDF document to a Buffer. Throws on render failure
  *  (which happens for, e.g., a Document with zero pages). Tests can
  *  `vi.mock` this whole module to avoid the SDK's heavy startup cost. */
