@@ -11,7 +11,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
 import { APP_ROUTES } from "@/config";
-import { Card, EmptyState } from "@/components/ui";
+import { Card, DateInput, EmptyState } from "@/components/ui";
 import type { BeneficiaryData } from "@/server/db/schema/zod/beneficiary";
 import { RecommenderListEditor } from "./RecommenderListEditor";
 
@@ -503,6 +503,14 @@ function FieldRow(props: {
           className={inputClass}
           style={inputStyle}
         />
+      ) : props.field.control === "date" ? (
+        <DateInput
+          id={id}
+          value={typeof props.value === "string" ? props.value : ""}
+          disabled={props.disabled}
+          onChange={(v) => props.onChange(v)}
+          className={inputClass}
+        />
       ) : (
         <input
           id={id}
@@ -602,9 +610,10 @@ function FooterBar(props: {
 // ─────────────────────────────────────────────────────────────────────
 
 function inputType(control: FieldDef["control"]): string {
+  // `"date"` is handled by `<DateInput>` upstream — never reaches
+  // here. `"textarea"` short-circuits in `FieldRow` before this is
+  // called.
   switch (control) {
-    case "date":
-      return "date";
     case "number":
       return "number";
     case "email":

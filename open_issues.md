@@ -13,6 +13,52 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #52 — pnpm reports 23 deprecated transitive dependencies on every install
+
+Status: Tech debt — not blocking; clean up incrementally as upstreams release.
+Surfaced: 2026-05-06 (during Stage 03b → date-picker install).
+
+Every `pnpm add` re-prints the full deprecation list. Verified via
+`pnpm why` that **none** are from packages we directly depend on for
+new work — they're all transitive from existing top-level deps. The
+fix landscape:
+
+- **17 × `@react-email/*` subdeps + `@react-email/components@1.0.12`**
+  — Stage 11 transactional-email stack. The components library was
+  marked "no longer supported" by its maintainer; the active package
+  is now `@react-email/render` + per-component packages or migration
+  to alternatives. Re-evaluate when we wire real Postmark sends in
+  Stage 11.
+
+- **`@esbuild-kit/core-utils@3.3.2`, `@esbuild-kit/esm-loader@2.6.5`**
+  — pulled by `drizzle-kit` → `@esbuild-kit/esm-loader` → core-utils.
+  Drizzle's own dep; resolved when drizzle-kit upstream switches to
+  modern `tsx`/`tsimp`. No action on our side.
+
+- **`node-domexception@1.0.0`** — pulled by `inngest` →
+  `@opentelemetry/auto-instrumentations-node` → `gcp-metadata` →
+  `gaxios`. Three transitive hops; resolved upstream.
+
+- **`serialize-error-cjs@0.1.4`** — Inngest transitive. Same shape.
+
+What we should NOT do:
+- Don't add `pnpm.overrides` to silence them — that risks silently
+  pinning a sibling to an incompatible version on next bump. The
+  warnings are a maintenance signal, not a runtime hazard.
+
+What to do when working in the relevant area:
+- During Stage 11 polish: audit `@react-email/components` upgrade
+  path and decide whether to migrate or wait.
+- On every `pnpm up` of `drizzle-kit` / `inngest`: re-check this list
+  and prune entries that are gone.
+
+What was NOT introduced by Stage 03b additions:
+- `react-day-picker@9.14.0` pulls only `date-fns` (already locked),
+  `@date-fns/tz`, `date-fns-jalali`, `@tabby_ai/hijri-converter`.
+- `@radix-ui/react-popover@1.1.15` pulls 13 `@radix-ui/*` siblings +
+  `aria-hidden` + `react-remove-scroll`.
+- All maintained, none deprecated.
+
 ### #50 — Signed recommendation letters are not linkable to specific recommenders
 
 Status: Tracked. Phase-2 schema work.

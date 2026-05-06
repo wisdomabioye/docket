@@ -4,6 +4,7 @@
 
 export { Badge, type BadgeVariant } from "./Badge";
 export { Card } from "./Card";
+export { DateInput, type DateInputProps } from "./DateInput";
 export {
   Checklist,
   type ChecklistItem,
