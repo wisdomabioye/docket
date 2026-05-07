@@ -36,7 +36,7 @@ export default function PricingPage(): React.ReactElement {
         </p>
         <div className="mt-6">
           <Link
-            href={APP_ROUTES.login}
+            href={APP_ROUTES.apply}
             className="inline-block rounded-md bg-[var(--ink)] px-5 py-2.5 text-sm font-medium text-[var(--cream)]"
           >
             Apply for partnership →

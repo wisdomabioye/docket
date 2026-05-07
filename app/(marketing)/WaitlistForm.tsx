@@ -20,6 +20,7 @@ export function WaitlistForm(): React.ReactElement {
     if (!email) return;
     const utm = readUtm();
     join.mutate({
+      kind: "general",
       email,
       name: name || undefined,
       source: "landing",

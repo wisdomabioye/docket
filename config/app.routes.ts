@@ -11,6 +11,8 @@ export const APP_ROUTES = {
   pricing: "/pricing",
   terms: "/terms",
   privacy: "/privacy",
+  waitlist: "/waitlist",
+  apply: "/apply",
 
   // Auth (SSO-only)
   login: "/login",
@@ -51,6 +53,8 @@ export const PUBLIC_ROUTES: readonly string[] = [
   APP_ROUTES.pricing,
   APP_ROUTES.terms,
   APP_ROUTES.privacy,
+  APP_ROUTES.waitlist,
+  APP_ROUTES.apply,
   APP_ROUTES.login,
   APP_ROUTES.authCallback,
   APP_ROUTES.authError,

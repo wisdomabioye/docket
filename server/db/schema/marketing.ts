@@ -2,12 +2,14 @@ import { sql } from "drizzle-orm";
 import {
   index,
   inet,
+  jsonb,
   pgTable,
   text,
   timestamp,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { WaitlistDetails } from "./zod/waitlist-details";
 
 /**
  * Pre-launch / waitlist signups. Captured from the marketing site (Stage 04).
@@ -33,6 +35,16 @@ export const waitlistEntries = pgTable(
     utmCampaign: text("utm_campaign"),
     referrer: text("referrer"),
     ipAddress: inet("ip_address"),
+
+    // Submission funnel: `general` = "join the waitlist" (email + name only);
+    // `attorney` = "apply for partnership" (carries structured firm/bar info
+    // in `details`). Plain text + Zod-at-boundary instead of pg_enum: cheap
+    // to add a third funnel later without an ALTER TYPE.
+    kind: text("kind").notNull().default("general"),
+
+    // Funnel-specific structured payload. Shape lives in
+    // `schema/zod/waitlist-details.ts` so the column type stays honest.
+    details: jsonb("details").$type<WaitlistDetails>(),
 
     // Invite gate. `approved_at IS NULL` = on the waitlist but not yet
     // permitted to sign in. Set by admin via `approveWaitlistEntry`.

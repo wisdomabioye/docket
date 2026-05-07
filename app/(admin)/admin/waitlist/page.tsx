@@ -20,6 +20,7 @@ export const metadata = { title: pageTitle("Waitlist") };
 const COLUMNS: readonly Column[] = [
   { key: "email", label: "Email", mono: true },
   { key: "name", label: "Name", hideBelow: "sm" },
+  { key: "kind", label: "Kind" },
   { key: "source", label: "Source", hideBelow: "lg" },
   { key: "joined", label: "Joined", hideBelow: "md" },
   { key: "status", label: "Status" },
@@ -83,7 +84,46 @@ export default async function AdminWaitlistPage(props: {
             case "email":
               return e.email;
             case "name":
-              return e.name ?? "—";
+              return (
+                <div>
+                  <div>{e.name ?? "—"}</div>
+                  {e.kind === "attorney" && e.details ? (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-[10px] uppercase tracking-[0.12em] text-[var(--ink-muted)]">
+                        application details
+                      </summary>
+                      <dl className="mt-1 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-[11px] text-[var(--ink-muted)]">
+                        <dt>Firm</dt>
+                        <dd className="text-[var(--ink)]">{e.details.firmName}</dd>
+                        <dt>State</dt>
+                        <dd className="text-[var(--ink)]">{e.details.stateOfAdmission}</dd>
+                        <dt>Bar #</dt>
+                        <dd className="mono text-[var(--ink)]">{e.details.barNumber}</dd>
+                        <dt>AILA</dt>
+                        <dd className="text-[var(--ink)]">{e.details.ailaMember ? "yes" : "no"}</dd>
+                        {e.details.yearsPracticing !== undefined ? (
+                          <>
+                            <dt>Years</dt>
+                            <dd className="text-[var(--ink)]">{e.details.yearsPracticing}</dd>
+                          </>
+                        ) : null}
+                        {e.details.notes ? (
+                          <>
+                            <dt>Notes</dt>
+                            <dd className="text-[var(--ink)]">{e.details.notes}</dd>
+                          </>
+                        ) : null}
+                      </dl>
+                    </details>
+                  ) : null}
+                </div>
+              );
+            case "kind":
+              return (
+                <Badge variant={e.kind === "attorney" ? "accent" : "neutral"}>
+                  {e.kind}
+                </Badge>
+              );
             case "source":
               return (
                 <span className="text-xs text-[var(--ink-muted)]">

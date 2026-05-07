@@ -1211,6 +1211,24 @@ Status: Tracked.
 
 ## Resolved
 
+### #53 — Migration journal was missing `0021_case_recommenders_rls` entry
+
+Resolved: 2026-05-07.
+
+The orphan file was renamed `0021_case_recommenders_rls.sql` →
+`0025_case_recommenders_rls.sql` and a matching journal entry appended
+(idx 24). `pnpm db:migrate` then ran the SQL — and the `drop ... if
+exists` notices proved the policies and trigger had **never** been
+applied to the local DB either, despite the file living in the repo
+since Stage 11. RLS is now enabled on `case_recommenders` with both
+the participant + admin policies and the `updated_at` trigger
+installed (verified via `pg_policy` + `pg_trigger`).
+
+Root cause: the file was hand-authored without `pnpm db:generate:custom
+--name=...`, so the journal was never bumped — and drizzle's migrator
+walks the journal, not the directory, so the file was a silent no-op.
+Lesson logged below.
+
 ### #51 — Onboarding "signed contractor agreement" is a free-text filename (theater, not a signature)
 
 Resolved: 2026-05-06 — Stage 03b shipped.

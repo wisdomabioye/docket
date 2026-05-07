@@ -31,7 +31,7 @@ export function CloserSection(): React.ReactElement {
           business day.
         </p>
         <Link
-          href={APP_ROUTES.login}
+          href={APP_ROUTES.apply}
           className="inline-block rounded-md bg-[var(--cream,_#f5f1e8)] px-6 py-3 text-sm font-medium"
           style={{ color: "var(--ink, #0B1221)" }}
         >

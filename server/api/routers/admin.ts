@@ -266,6 +266,8 @@ export const adminRouter = router({
             email: waitlistEntries.email,
             name: waitlistEntries.name,
             source: waitlistEntries.source,
+            kind: waitlistEntries.kind,
+            details: waitlistEntries.details,
             createdAt: waitlistEntries.createdAt,
             approvedAt: waitlistEntries.approvedAt,
             approvedByEmail: approver.email,

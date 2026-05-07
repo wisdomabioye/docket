@@ -20,3 +20,4 @@ export * from "./criteria-analysis";
 export * from "./document-checklist";
 export * from "./output-metadata";
 export * from "./audit-details";
+export * from "./waitlist-details";
