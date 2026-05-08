@@ -94,6 +94,8 @@ export const documentTypeEnum = pgEnum("document_type", [
   "recommendation_letter",
   "employment_letter",
   "salary_evidence",
+  "peer_review",
+  "critical_role",
   "other",
 ]);
 

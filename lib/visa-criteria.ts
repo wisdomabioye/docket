@@ -141,8 +141,8 @@ const O1A_REQUIRED_DOCS: ReadonlyArray<RequiredDocDef> = [
   { key: "awards", label: "Awards evidence", docType: "award", criterion: 1 },
   { key: "membership", label: "Membership letters", docType: "membership", criterion: 2 },
   { key: "press", label: "Press / media", docType: "press", criterion: 3 },
-  { key: "peer_review", label: "Peer review evidence", docType: "recommendation_letter", criterion: 5 },
-  { key: "critical_role", label: "Critical role letter", docType: "employment_letter", criterion: 7 },
+  { key: "peer_review", label: "Peer review evidence", docType: "peer_review", criterion: 5 },
+  { key: "critical_role", label: "Critical role letter", docType: "critical_role", criterion: 7 },
   { key: "salary", label: "High salary proof", docType: "salary_evidence", criterion: 8 },
   { key: "publication", label: "Scholarly publication", docType: "publication", criterion: 4 },
   { key: "citation_report", label: "Citation report", docType: null, criterion: 4 },
@@ -185,6 +185,8 @@ const DOCUMENT_TYPE_TO_CRITERIA: Readonly<
   recommendation_letter: [5, 7],
   employment_letter: [7],
   salary_evidence: [8],
+  peer_review: [5],
+  critical_role: [7],
   other: [],
 };
 

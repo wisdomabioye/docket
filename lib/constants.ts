@@ -43,6 +43,8 @@ export const DOCUMENT_TYPES = [
   "recommendation_letter",
   "employment_letter",
   "salary_evidence",
+  "peer_review",
+  "critical_role",
   "other",
 ] as const;
 
@@ -58,6 +60,8 @@ export const DOCUMENT_TYPE_LABELS: Record<DocumentType, string> = {
   recommendation_letter: "Recommendation letter",
   employment_letter: "Employment letter",
   salary_evidence: "Salary evidence",
+  peer_review: "Peer review evidence",
+  critical_role: "Critical role letter",
   other: "Other",
 };
 
