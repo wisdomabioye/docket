@@ -10,6 +10,7 @@ import {
 } from "@/lib/output-types";
 import type { OutputType } from "@/server/services/computer/types";
 import { getCurrentOutputs } from "@/server/services/output";
+import { formatExhibitIndexAsMarkdown } from "@/server/services/output/format-structured";
 import {
   computeRecommenderLetterCoverage,
   type RecommenderLetterCoverage,
@@ -117,7 +118,10 @@ function bodyDescriptorFor(args: {
       kind: "exhibit-index",
       beneficiaryName: args.beneficiaryName,
       visaType: args.visaType,
-      content: args.content,
+      // `content` is canonical JSON (Stage 7 prompt is JSON-mode).
+      // Format it to markdown HERE so the page template stays a thin
+      // shell over `MarkdownRenderer` and doesn't pull in a parser.
+      content: formatExhibitIndexAsMarkdown(args.content),
       exhibitCount,
     };
   }

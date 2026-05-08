@@ -4,6 +4,7 @@ import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { OUTPUT_TYPE_DISPLAY } from "@/lib/output-types";
 import { CaseHeader } from "@/components/case";
+import { formatExhibitIndexAsMarkdown } from "@/server/services/output/format-structured";
 import { OutputDetailPanel } from "./OutputDetailPanel";
 
 type Props = {
@@ -81,6 +82,15 @@ export default async function OutputDetailPage({
           outputVersion: output.outputVersion,
           subgroupKey: output.subgroupKey,
           content: output.content ?? "",
+          // Structured-output types (`exhibit_index`) store JSON in
+          // `content`; the editor needs a readable markdown form.
+          // Computed once on the server here so the panel stays a
+          // pure consumer (no client-side formatter import). `null`
+          // = use raw `content` (the default for prose types).
+          displayContent:
+            output.outputType === "exhibit_index"
+              ? formatExhibitIndexAsMarkdown(output.content ?? "")
+              : null,
           // Stage 11 W3: surface the pending draft (if any) so the
           // editor opens to the attorney's last unsaved keystrokes
           // instead of the committed `content` baseline.

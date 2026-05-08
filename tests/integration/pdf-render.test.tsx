@@ -314,15 +314,37 @@ describe("compileFullPackagePdf", () => {
     expect(result.bytes).toBeGreaterThan(2000);
   });
 
-  it("includes an exhibit_index output (exhibitCount metadata path)", async (ctx) => {
+  it("renders an exhibit_index output via the structured formatter (open_issues #55)", async (ctx) => {
     const d = gate(ctx);
+    // Stage 7 prompt is JSON-mode — `content` is canonical JSON, not
+    // prose. Pre-fix the renderer fed the JSON string directly to
+    // `MarkdownRenderer` and the package pages contained literal
+    // `{"entries":[...]}` text. The formatter (commit B) turns it into
+    // sectioned markdown before render.
     await d.insert(caseOutputs).values({
       caseId: CASE_ID,
       outputType: "exhibit_index",
       outputVersion: 1,
       isCurrent: true,
       author: "computer",
-      content: "1. Exhibit A — CV\n2. Exhibit B — Publications",
+      content: JSON.stringify({
+        entries: [
+          {
+            label: "Exhibit A",
+            documentId: "doc-1",
+            filename: "cv.pdf",
+            description: "Curriculum vitae listing peer-reviewed publications.",
+            supportsCriteria: ["authorship_of_scholarly_articles"],
+          },
+          {
+            label: "Exhibit B",
+            documentId: "doc-2",
+            filename: "publications.pdf",
+            description: "Bibliography with citation counts.",
+            supportsCriteria: ["original_contributions_of_major_significance"],
+          },
+        ],
+      }),
       metadata: {
         type: "exhibit_index",
         exhibitCount: 2,
@@ -336,6 +358,25 @@ describe("compileFullPackagePdf", () => {
       caseId: CASE_ID,
     });
     expect(result.bytes).toBeGreaterThan(1500);
+
+    // True end-to-end: read the rendered PDF back from the storage
+    // backend and assert the formatted text appears AND the raw JSON
+    // does not. Substring-matching the binary buffer is unreliable
+    // (PDF compression/encoding); we extract text via the same
+    // `pdf-parse` used by the document-extraction service.
+    const { storage } = await import("@/server/services/storage");
+    const buffer = await storage.get(result.key);
+    const { PDFParse } = await import("pdf-parse");
+    const parser = new PDFParse({ data: new Uint8Array(buffer) });
+    const text = (await parser.getText()).text;
+    // Formatter output is present.
+    expect(text).toContain("Exhibit A");
+    expect(text).toContain("cv.pdf");
+    expect(text).toContain("Curriculum vitae");
+    // Raw JSON markers MUST NOT appear in the rendered PDF.
+    expect(text).not.toContain('"entries"');
+    expect(text).not.toContain('"documentId"');
+    expect(text).not.toContain('"supportsCriteria"');
   });
 
   it("excludes unapproved outputs from the package", async (ctx) => {

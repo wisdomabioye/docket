@@ -42,6 +42,12 @@ export type InitialOutput = {
   outputVersion: number;
   subgroupKey: string | null;
   content: string;
+  /** Pre-formatted markdown for structured-output types
+   *  (`exhibit_index`) whose canonical `content` is JSON. `null` for
+   *  prose types — the panel falls back to `content` directly.
+   *  Computed once on the server (the page RSC); the client never
+   *  imports the formatter. */
+  displayContent: string | null;
   /** Pending draft, NULL if no in-progress edits since last commit. */
   draftContent: string | null;
   attorneyApproved: boolean;
@@ -92,10 +98,20 @@ export function OutputDetailPanel(
   // version that happens to match, etc.
   const hasPendingDraft = liveDraft !== null && liveDraft !== liveContent;
 
+  // Structured-output types (`exhibit_index`) store JSON in `content`
+  // and the editor must show formatted markdown instead. Until the
+  // structured form editor lands (commit C), the type is read-only
+  // and displays the server-formatted markdown — drafts are ignored
+  // because there's no edit path that would have produced one.
+  const isStructuredType = props.initialOutput.outputType === "exhibit_index";
   // Editor opens to the draft if one is pending (preserves the
   // attorney's last unsaved keystrokes across a tab close + reopen).
   // Otherwise the committed content is the baseline.
-  const editorBaseline = hasPendingDraft && liveDraft !== null ? liveDraft : liveContent;
+  const editorBaseline = isStructuredType
+    ? props.initialOutput.displayContent ?? liveContent
+    : hasPendingDraft && liveDraft !== null
+      ? liveDraft
+      : liveContent;
   const currentVersion = live?.outputVersion ?? props.initialOutput.outputVersion;
   const attorneyApproved =
     live?.attorneyApproved ?? props.initialOutput.attorneyApproved;
@@ -113,12 +129,17 @@ export function OutputDetailPanel(
   // `useState(initializer)` runs once on mount — opens in Edit mode if
   // the loaded payload has a pending draft. Subsequent prop changes do
   // NOT re-derive (changing mode would be jarring mid-edit).
-  const [mode, setMode] = useState<"read" | "edit">(() =>
-    props.initialOutput.draftContent !== null &&
-    props.initialOutput.draftContent !== props.initialOutput.content
+  // Structured types always open in Read — no edit path exists until
+  // commit C, so opening in Edit (because of a stale pre-commit-B
+  // draft) would just show disabled save chrome over a non-editable
+  // surface.
+  const [mode, setMode] = useState<"read" | "edit">(() => {
+    if (isStructuredType) return "read";
+    return props.initialOutput.draftContent !== null &&
+      props.initialOutput.draftContent !== props.initialOutput.content
       ? "edit"
-      : "read",
-  );
+      : "read";
+  });
   const [saveError, setSaveError] = useState<string | null>(null);
   const [autoSavedAt, setAutoSavedAt] = useState<Date | null>(() =>
     // Lazy init — `new Date()` is impure and would otherwise be
@@ -402,7 +423,7 @@ export function OutputDetailPanel(
             <button
               type="button"
               onClick={() => setMode("edit")}
-              disabled={attorneyApproved}
+              disabled={attorneyApproved || isStructuredType}
               className="rounded-sm px-2 py-1 disabled:opacity-50"
               style={{
                 background:
@@ -410,9 +431,11 @@ export function OutputDetailPanel(
                 color: mode === "edit" ? "var(--white)" : "var(--ink-soft)",
               }}
               title={
-                attorneyApproved
-                  ? "Un-approve before editing."
-                  : "Switch to edit mode."
+                isStructuredType
+                  ? "Structured editor coming soon — for now, regenerate to update."
+                  : attorneyApproved
+                    ? "Un-approve before editing."
+                    : "Switch to edit mode."
               }
             >
               Edit
@@ -488,7 +511,11 @@ export function OutputDetailPanel(
             >
               <TiptapEditor
                 initialMarkdown={editorBaseline}
-                readOnly={mode === "read"}
+                // Structured types are read-only end-to-end until the
+                // form editor lands (commit C). The mode toggle's Edit
+                // button is also disabled, so this guard is belt+
+                // suspenders against a stale `mode === "edit"` state.
+                readOnly={isStructuredType || mode === "read"}
                 onDirtyChange={handleDirtyChange}
                 onReady={tiptap.setApi}
               />

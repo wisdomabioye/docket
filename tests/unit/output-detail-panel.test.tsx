@@ -242,6 +242,9 @@ const baseProps = {
     outputVersion: 1,
     subgroupKey: null as string | null,
     content: "# Title\n\nBody.",
+    // `null` for prose types — only structured-output types
+    // (`exhibit_index`) carry a server-formatted markdown view.
+    displayContent: null as string | null,
     // Stage 11 W3 — no pending autosave by default; per-test overrides
     // can spread `{ ...baseProps.initialOutput, draftContent: "..." }`
     // to exercise the draft-recovery path.
@@ -279,6 +282,26 @@ describe("OutputDetailPanel — mode toggle", () => {
       />,
     );
     expect(screen.getByRole("button", { name: /^edit$/i })).toBeDisabled();
+  });
+
+  it("Edit button is disabled for structured types (exhibit_index) with a 'coming soon' tooltip", () => {
+    // Locks commit B's intermediate state: structured types are
+    // read-only because TiptapEditor's markdown round-trip would
+    // mangle the canonical JSON. Commit C swaps in the form editor.
+    render(
+      <OutputDetailPanel
+        {...baseProps}
+        initialOutput={{
+          ...baseProps.initialOutput,
+          outputType: "exhibit_index" as const,
+          content: '{"entries":[]}',
+          displayContent: "_No exhibits indexed yet — regenerate after uploading evidence._",
+        }}
+      />,
+    );
+    const editBtn = screen.getByRole("button", { name: /^edit$/i });
+    expect(editBtn).toBeDisabled();
+    expect(editBtn.getAttribute("title")).toMatch(/structured editor/i);
   });
 });
 
