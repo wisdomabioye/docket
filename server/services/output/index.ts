@@ -575,11 +575,14 @@ export async function getCaseSpendCents(args: {
 export type UpdateOutputContentArgs = {
   tx: Db;
   outputId: string;
-  /** Markdown source. Sanitized HTML cache is computed by the caller
-   *  via `lib/markdown.ts` so this service stays free of the marked +
-   *  turndown dependency surface. */
+  /** Canonical content. Markdown for prose types, JSON-stringified
+   *  payload for structured types (exhibit_index). The trim-emptiness
+   *  guard treats both forms uniformly. */
   content: string;
-  contentHtml: string;
+  /** Sanitized HTML cache for prose. Pass `null` for structured types
+   *  whose render path goes through a JSON→markdown formatter at
+   *  read time instead of a stored HTML cache. */
+  contentHtml: string | null;
   attorneyId: string;
 };
 

@@ -16,6 +16,7 @@
 export * from "./beneficiary";
 export * from "./recommender";
 export * from "./evidence-plan";
+export * from "./exhibit-index";
 export * from "./criteria-analysis";
 export * from "./document-checklist";
 export * from "./output-metadata";

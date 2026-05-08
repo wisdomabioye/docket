@@ -26,6 +26,7 @@ import {
 } from "@/server/services/pdf";
 import { mdToSafeHtml } from "@/lib/markdown";
 import { isInternalOutputType } from "@/lib/output-types";
+import { ExhibitIndexSchema } from "@/server/services/computer/prompts/exhibit-index";
 import { rateLimit } from "@/server/services/ratelimit";
 import { inngest } from "@/server/jobs/client";
 import {
@@ -74,6 +75,32 @@ const UpdateInput = z.object({
   outputId: z.uuid(),
   content: z.string().min(1).max(200_000),
 });
+
+/**
+ * Typed-payload commit for output types whose canonical `content` is
+ * JSON, not markdown. The discriminator is `outputType`; each branch
+ * carries the validated typed object. The router serializes via
+ * `JSON.stringify` and writes through the same `updateOutputContent`
+ * service that the prose path uses, so the version graph + draft
+ * flush + approve mechanics are identical.
+ *
+ * `output.update` rejects these output types so a stale client can't
+ * smuggle markdown into the JSON column and silently break the
+ * downstream `_context.ts` `JSON.parse(content)` path.
+ */
+const UpdateStructuredInput = z.discriminatedUnion("outputType", [
+  z.object({
+    outputType: z.literal("exhibit_index"),
+    outputId: z.uuid(),
+    payload: ExhibitIndexSchema,
+  }),
+]);
+
+/** Output types that require `updateStructured`. Source-of-truth list
+ *  for the rejection check on `output.update` / `saveDraft`. Adding a
+ *  new structured type means: (1) extend `UpdateStructuredInput`,
+ *  (2) add to this set. */
+const STRUCTURED_OUTPUT_TYPES = new Set<OutputType>(["exhibit_index"]);
 
 // Drafts allow `""` (the user cleared the editor in mid-edit) — see
 // `saveOutputDraft` JSDoc. Same length cap as commits.
@@ -240,6 +267,17 @@ export const outputRouter = router({
         ctxDb: ctx.db,
         outputId: input.outputId,
       });
+      // Defense in depth: structured-output types (exhibit_index)
+      // store JSON in `content`. A markdown draft from a stale client
+      // would silently corrupt the JSON contract that downstream
+      // `_context.ts` parsers depend on.
+      if (STRUCTURED_OUTPUT_TYPES.has(access.outputType)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This output type does not accept markdown drafts — use the structured editor.",
+        });
+      }
       try {
         const r = await ownerDb.transaction(async (tx) =>
           saveOutputDraft({
@@ -297,6 +335,16 @@ export const outputRouter = router({
         ctxDb: ctx.db,
         outputId: input.outputId,
       });
+      // Reject markdown commits on structured types — they go through
+      // `output.updateStructured` so the JSON contract that
+      // `_context.ts` depends on is preserved.
+      if (STRUCTURED_OUTPUT_TYPES.has(access.outputType)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This output type requires a structured payload — use updateStructured.",
+        });
+      }
 
       try {
         const result = await ownerDb.transaction(async (tx) =>
@@ -309,6 +357,67 @@ export const outputRouter = router({
             // Tiptap (defense in depth — paste-from-Word can leak past
             // the editor's schema).
             contentHtml: mdToSafeHtml(input.content),
+            attorneyId: userId,
+          }),
+        );
+        emitFromCtx(ctx, {
+          name: "output.version_saved",
+          properties: {
+            case_id: access.caseId,
+            output_id: result.outputId,
+            version: result.outputVersion,
+          },
+        });
+        return {
+          ok: true as const,
+          outputId: result.outputId,
+          outputVersion: result.outputVersion,
+        };
+      } catch (err) {
+        rethrowAsTrpc(err);
+      }
+    }),
+
+  /**
+   * Typed-payload commit for JSON-mode output types (currently
+   * `exhibit_index`). The Zod discriminator validates the payload
+   * shape; the router serializes via `JSON.stringify` and writes
+   * through the same `updateOutputContent` service the prose path
+   * uses, so the version graph + draft flush + approve mechanics are
+   * shared. Drafts for structured types are out of scope until a
+   * follow-up commit; for now Save is the only mutation path.
+   */
+  updateStructured: attorneyProcedure
+    .input(UpdateStructuredInput)
+    .mutation(async ({ ctx, input }) => {
+      const { userId } = ctx;
+      const access = await gateOutputAccess({
+        ctxDb: ctx.db,
+        outputId: input.outputId,
+      });
+      // Defense in depth: cross-check that the input's discriminator
+      // matches the row's actual `output_type`. Without this an
+      // attacker who mints an `exhibit_index` payload but supplies the
+      // outputId of a `personal_statement` row would corrupt that row
+      // with stringified JSON.
+      if (access.outputType !== input.outputType) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `outputType mismatch: row is ${access.outputType}, payload is ${input.outputType}`,
+        });
+      }
+      const serialized = JSON.stringify(input.payload);
+      try {
+        const result = await ownerDb.transaction(async (tx) =>
+          updateOutputContent({
+            tx: tx as unknown as Db,
+            outputId: input.outputId,
+            content: serialized,
+            // Structured types render through the JSON→markdown
+            // formatter at read time, not via a stored HTML cache.
+            // `null` to keep `case_outputs.content_html` consistent
+            // with "no pre-rendered HTML for this output".
+            contentHtml: null,
             attorneyId: userId,
           }),
         );

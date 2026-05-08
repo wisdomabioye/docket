@@ -13,10 +13,38 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #56 — Structured-output autosave (drafts) deferred for exhibit_index
+
+Status: Deferred — explicit Save is the only mutation path for now.
+Surfaced: 2026-05-08 (commit C scoping).
+
+`output.saveDraft` writes a markdown string to
+`case_outputs.draft_content`. For structured types the equivalent
+contract would be: write a (possibly schema-violating) partial
+payload as JSON, then have the approve-flush path serialize the
+partial payload back through schema validation before committing.
+That introduces a parallel draft code path with subtle semantics
+(should an invalid draft block approve? what does "flush" mean for a
+partial structured payload?) that warrants its own review pass.
+
+Today the editor flips dirty in memory; Cancel resets to the server
+canonical, Save commits via `output.updateStructured`. Closed-tab +
+reopen drops in-progress edits — same UX as a typical form. Add
+structured drafts when the autosave pattern matures.
+
+Related: a stale `case_outputs.draft_content` from before commit B
+(when exhibit_index briefly went through TiptapEditor's markdown
+path) is currently ignored on load — `OutputDetailPanel.tsx`'s mode
+initializer forces `read` for structured types and the editor
+baseline is `displayContent` (formatted markdown) in read mode and
+`liveContent` (raw JSON) in edit mode. The stale draft never reaches
+the renderer. The follow-up structured-draft commit should also
+include a one-time cleanup of stale drafts on first structured save.
+
 ### #55 — evidence_plan and exhibit_index render as raw JSON in editor + package
 
-Status: Open — product gap, attorneys cannot review or file these
-outputs. Surfaced: 2026-05-08.
+Status: Resolved 2026-05-08 by commits A → B → C.
+Original surface: 2026-05-08.
 
 Cause: both output types are generated in JSON mode (prompts in
 `server/services/computer/prompts/{evidence-plan,exhibit-index}.ts`)

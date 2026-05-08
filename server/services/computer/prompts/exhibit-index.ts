@@ -1,8 +1,18 @@
 import "server-only";
 import { z } from "zod";
+import {
+  ExhibitIndexEntrySchema,
+  ExhibitIndexSchema,
+} from "@/server/db/schema/zod/exhibit-index";
 import { buildSystemPrompt } from "./system";
 import { snippet } from "./_shared";
 import type { BuildContext, PromptSpec } from "./context";
+
+// Re-export the canonical schemas. They live in `server/db/schema/zod/`
+// (no `server-only` marker) so the structured editor can import them
+// from a client component. This file's other consumers can keep
+// importing `ExhibitIndexSchema` from here unchanged.
+export { ExhibitIndexEntrySchema, ExhibitIndexSchema };
 
 /**
  * Exhibit index — the structured table-of-evidence the petition letter
@@ -51,26 +61,6 @@ export function buildExhibitIndexPrompt(ctx: BuildContext): PromptSpec {
     maxTokens: 3000,
   };
 }
-
-/** Local Zod schema for the exhibit index — the canonical type isn't
- *  defined elsewhere yet (Stage 8 may move it to `case_outputs.metadata`
- *  per-type schema). Defined here so the JSON Schema sent to Sonar and
- *  the eventual `JSON.parse(...)` validator stay in sync via one source. */
-export const ExhibitIndexEntrySchema = z
-  .object({
-    label: z.string(), // "Exhibit A"
-    documentId: z.string(),
-    filename: z.string(),
-    description: z.string(),
-    supportsCriteria: z.array(z.string()),
-  })
-  .strict();
-
-export const ExhibitIndexSchema = z
-  .object({
-    entries: z.array(ExhibitIndexEntrySchema),
-  })
-  .strict();
 
 const EXHIBIT_INDEX_JSON_SCHEMA = z.toJSONSchema(ExhibitIndexSchema, {
   target: "draft-2020-12",

@@ -120,6 +120,9 @@ vi.mock("@/lib/trpc/react", () => ({
     output: {
       get: { useQuery: useGetMock },
       update: { useMutation: useUpdateMock },
+      updateStructured: {
+        useMutation: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
+      },
       saveDraft: { useMutation: useSaveDraftMock },
       clearDraft: { useMutation: useClearDraftMock },
       // Mocks for components rendered inside the panel.
@@ -284,10 +287,7 @@ describe("OutputDetailPanel — mode toggle", () => {
     expect(screen.getByRole("button", { name: /^edit$/i })).toBeDisabled();
   });
 
-  it("Edit button is disabled for structured types (exhibit_index) with a 'coming soon' tooltip", () => {
-    // Locks commit B's intermediate state: structured types are
-    // read-only because TiptapEditor's markdown round-trip would
-    // mangle the canonical JSON. Commit C swaps in the form editor.
+  it("Edit button is enabled for structured types (exhibit_index) — commit C wired the form editor", () => {
     render(
       <OutputDetailPanel
         {...baseProps}
@@ -295,13 +295,16 @@ describe("OutputDetailPanel — mode toggle", () => {
           ...baseProps.initialOutput,
           outputType: "exhibit_index" as const,
           content: '{"entries":[]}',
-          displayContent: "_No exhibits indexed yet — regenerate after uploading evidence._",
+          displayContent:
+            "_No exhibits indexed yet — regenerate after uploading evidence._",
         }}
       />,
     );
     const editBtn = screen.getByRole("button", { name: /^edit$/i });
-    expect(editBtn).toBeDisabled();
-    expect(editBtn.getAttribute("title")).toMatch(/structured editor/i);
+    expect(editBtn).not.toBeDisabled();
+    // Tooltip falls back to the standard "switch to edit" copy now
+    // that the structured editor is available.
+    expect(editBtn.getAttribute("title")).toMatch(/edit mode/i);
   });
 });
 

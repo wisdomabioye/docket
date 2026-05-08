@@ -8,9 +8,11 @@ import { Badge } from "@/components/ui";
 import {
   ApprovalActions,
   DisclaimerBanner,
+  ExhibitIndexEditor,
   RegeneratePanel,
   TiptapEditor,
   VersionHistory,
+  useExhibitIndexEditorState,
   useTiptapState,
 } from "@/components/output";
 import { trpc } from "@/lib/trpc/react";
@@ -74,6 +76,11 @@ export function OutputDetailPanel(
   const utils = trpc.useUtils();
   const router = useRouter();
   const tiptap = useTiptapState();
+  // The structured editor mounts only for `exhibit_index`. Hooks are
+  // unconditional (React rules) — the `null` API stays harmless when
+  // the prose Tiptap path is active. `dispatchedDirty` below selects
+  // the right `isDirty` source.
+  const exhibit = useExhibitIndexEditorState();
 
   // Refresh `output.get` to pick up new versions after a successful
   // save / regenerate / restore. `staleTime: 0` so post-mutation
@@ -99,14 +106,14 @@ export function OutputDetailPanel(
   const hasPendingDraft = liveDraft !== null && liveDraft !== liveContent;
 
   // Structured-output types (`exhibit_index`) store JSON in `content`
-  // and the editor must show formatted markdown instead. Until the
-  // structured form editor lands (commit C), the type is read-only
-  // and displays the server-formatted markdown — drafts are ignored
-  // because there's no edit path that would have produced one.
+  // and need a typed form editor. Read mode renders the formatted
+  // markdown via Tiptap (consistent with the package PDF render);
+  // edit mode swaps in the structured form. Drafts for structured
+  // types are not yet implemented — Save is the only mutation path.
   const isStructuredType = props.initialOutput.outputType === "exhibit_index";
-  // Editor opens to the draft if one is pending (preserves the
-  // attorney's last unsaved keystrokes across a tab close + reopen).
-  // Otherwise the committed content is the baseline.
+  // For Tiptap (read-mode for structured types, both modes for prose).
+  // Structured types always feed the formatted markdown; prose types
+  // open to the draft if one is pending.
   const editorBaseline = isStructuredType
     ? props.initialOutput.displayContent ?? liveContent
     : hasPendingDraft && liveDraft !== null
@@ -129,10 +136,9 @@ export function OutputDetailPanel(
   // `useState(initializer)` runs once on mount — opens in Edit mode if
   // the loaded payload has a pending draft. Subsequent prop changes do
   // NOT re-derive (changing mode would be jarring mid-edit).
-  // Structured types always open in Read — no edit path exists until
-  // commit C, so opening in Edit (because of a stale pre-commit-B
-  // draft) would just show disabled save chrome over a non-editable
-  // surface.
+  // Structured types always open in Read because their draft path is
+  // not yet implemented; a stale `draft_content` from before commit B
+  // would otherwise nudge the panel into Edit on first load.
   const [mode, setMode] = useState<"read" | "edit">(() => {
     if (isStructuredType) return "read";
     return props.initialOutput.draftContent !== null &&
@@ -257,6 +263,12 @@ export function OutputDetailPanel(
     if (dirty) scheduleAutoSave();
   }
 
+  /** Dirty hook for the structured editor. No autosave (structured
+   *  drafts not yet implemented in this commit). */
+  function handleStructuredDirtyChange(dirty: boolean): void {
+    exhibit.setDirty(dirty);
+  }
+
   // Cleanup on unmount: clear any pending timer so it doesn't fire
   // after the editor is gone. The in-flight promise is allowed to
   // settle (no point cancelling a save that's already on the wire).
@@ -288,7 +300,28 @@ export function OutputDetailPanel(
     onError: (err) => setSaveError(err.message),
   });
 
+  // Structured-output commit (currently `exhibit_index`). Same
+  // post-success bookkeeping as `updateMutation` minus the markdown
+  // draft cleanup — structured drafts are not yet implemented.
+  const updateStructuredMutation = trpc.output.updateStructured.useMutation({
+    onSuccess: async () => {
+      setSaveError(null);
+      await Promise.all([
+        utils.output.get.invalidate({ outputId: props.initialOutput.id }),
+        utils.output.list.invalidate(),
+        utils.output.listVersions.invalidate(),
+      ]);
+      exhibit.setDirty(false);
+      setMode("read");
+    },
+    onError: (err) => setSaveError(err.message),
+  });
+
   function handleSave(): void {
+    if (isStructuredType) {
+      handleSaveStructured();
+      return;
+    }
     if (!tiptap.api) return;
     // Pre-empt any queued autosave: the explicit commit supersedes it.
     if (debounceTimerRef.current) {
@@ -320,8 +353,37 @@ export function OutputDetailPanel(
       });
   }
 
+  function handleSaveStructured(): void {
+    if (!exhibit.api) return;
+    const value = exhibit.api.getValue();
+    if (value === null) {
+      setSaveError(
+        "Exhibit index has invalid entries — every row needs a label, filename, and description.",
+      );
+      return;
+    }
+    setSaveError(null);
+    // No in-flight autosave to chain behind for structured types
+    // (drafts aren't implemented yet); fire the mutation directly.
+    updateStructuredMutation.mutate({
+      outputType: "exhibit_index",
+      outputId: props.initialOutput.id,
+      payload: value,
+    });
+  }
+
   function handleCancel(): void {
-    if (tiptap.isDirty && !window.confirm("Discard your edits?")) return;
+    const isDirty = isStructuredType ? exhibit.isDirty : tiptap.isDirty;
+    if (isDirty && !window.confirm("Discard your edits?")) return;
+    if (isStructuredType) {
+      // Reset the structured editor to the canonical server content.
+      // No clearDraft tRPC call — structured types don't write drafts.
+      exhibit.api?.setContent(liveContent);
+      exhibit.setDirty(false);
+      setMode("read");
+      setSaveError(null);
+      return;
+    }
     // Pre-empt any queued autosave so it doesn't re-write the draft we
     // just asked the server to clear.
     if (debounceTimerRef.current) {
@@ -423,7 +485,7 @@ export function OutputDetailPanel(
             <button
               type="button"
               onClick={() => setMode("edit")}
-              disabled={attorneyApproved || isStructuredType}
+              disabled={attorneyApproved}
               className="rounded-sm px-2 py-1 disabled:opacity-50"
               style={{
                 background:
@@ -431,11 +493,9 @@ export function OutputDetailPanel(
                 color: mode === "edit" ? "var(--white)" : "var(--ink-soft)",
               }}
               title={
-                isStructuredType
-                  ? "Structured editor coming soon — for now, regenerate to update."
-                  : attorneyApproved
-                    ? "Un-approve before editing."
-                    : "Switch to edit mode."
+                attorneyApproved
+                  ? "Un-approve before editing."
+                  : "Switch to edit mode."
               }
             >
               Edit
@@ -452,15 +512,24 @@ export function OutputDetailPanel(
                     {saveError}
                   </span>
                 ) : null}
-                <AutoSaveStatus
-                  pending={saveDraftMutation.isPending}
-                  errorMessage={autoSaveError}
-                  savedAt={autoSavedAt}
-                />
+                {/* Autosave status only renders for the prose path —
+                 *  structured types don't have an in-progress draft
+                 *  buffer in this commit. */}
+                {!isStructuredType ? (
+                  <AutoSaveStatus
+                    pending={saveDraftMutation.isPending}
+                    errorMessage={autoSaveError}
+                    savedAt={autoSavedAt}
+                  />
+                ) : null}
                 <button
                   type="button"
                   onClick={handleCancel}
-                  disabled={updateMutation.isPending}
+                  disabled={
+                    isStructuredType
+                      ? updateStructuredMutation.isPending
+                      : updateMutation.isPending
+                  }
                   className="px-2 py-1 text-[11px]"
                   style={{ color: "var(--ink-soft)" }}
                 >
@@ -469,15 +538,24 @@ export function OutputDetailPanel(
                 <button
                   type="button"
                   onClick={handleSave}
-                  disabled={updateMutation.isPending || !tiptap.isDirty}
+                  disabled={
+                    isStructuredType
+                      ? updateStructuredMutation.isPending || !exhibit.isDirty
+                      : updateMutation.isPending || !tiptap.isDirty
+                  }
                   className="rounded-sm px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
                   style={{ background: "var(--accent, var(--ink))" }}
-                  // "Save version" makes the commit-vs-draft distinction
-                  // explicit: the autosave handles in-progress edits;
-                  // this button creates a new versioned commit.
-                  title="Commit current draft as a new version"
+                  title={
+                    isStructuredType
+                      ? "Commit the current exhibit index as a new version"
+                      : "Commit current draft as a new version"
+                  }
                 >
-                  {updateMutation.isPending ? "Saving…" : "Save version"}
+                  {(isStructuredType
+                    ? updateStructuredMutation.isPending
+                    : updateMutation.isPending)
+                    ? "Saving…"
+                    : "Save version"}
                 </button>
               </>
             ) : (
@@ -509,16 +587,25 @@ export function OutputDetailPanel(
                 boxShadow: "var(--shadow-sm)",
               }}
             >
-              <TiptapEditor
-                initialMarkdown={editorBaseline}
-                // Structured types are read-only end-to-end until the
-                // form editor lands (commit C). The mode toggle's Edit
-                // button is also disabled, so this guard is belt+
-                // suspenders against a stale `mode === "edit"` state.
-                readOnly={isStructuredType || mode === "read"}
-                onDirtyChange={handleDirtyChange}
-                onReady={tiptap.setApi}
-              />
+              {isStructuredType && mode === "edit" ? (
+                // Structured-type edit path. The form mutates a typed
+                // payload directly and commits via `updateStructured`;
+                // it never round-trips through markdown.
+                <ExhibitIndexEditor
+                  caseId={props.caseId}
+                  initialContent={liveContent}
+                  readOnly={false}
+                  onDirtyChange={handleStructuredDirtyChange}
+                  onReady={exhibit.setApi}
+                />
+              ) : (
+                <TiptapEditor
+                  initialMarkdown={editorBaseline}
+                  readOnly={mode === "read"}
+                  onDirtyChange={handleDirtyChange}
+                  onReady={tiptap.setApi}
+                />
+              )}
             </div>
           </div>
         </section>

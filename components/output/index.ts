@@ -11,4 +11,9 @@ export {
   useTiptapState,
   type TiptapEditorApi,
 } from "./TiptapEditor";
+export {
+  ExhibitIndexEditor,
+  useExhibitIndexEditorState,
+  type ExhibitIndexEditorApi,
+} from "./ExhibitIndexEditor";
 export { VersionHistory } from "./VersionHistory";

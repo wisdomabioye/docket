@@ -394,6 +394,121 @@ describe("output.update", () => {
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+
+  it("BAD_REQUEST when called on a structured-output type (exhibit_index)", async (ctx) => {
+    // Structured types must go through `updateStructured` so the JSON
+    // contract that downstream `_context.ts` parsers depend on is
+    // preserved. A stale client that POSTs markdown to `update` would
+    // otherwise corrupt the row.
+    const d = gate(ctx);
+    const id = await insertOutput(d, {
+      outputType: "exhibit_index",
+      content: JSON.stringify({ entries: [] }),
+    });
+    await expect(
+      callAs(ATTORNEY).output.update({
+        outputId: id,
+        content: "## Some markdown",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
+describe("output.updateStructured (commit C)", () => {
+  const VALID_PAYLOAD = {
+    entries: [
+      {
+        label: "Exhibit A",
+        documentId: "doc-1",
+        filename: "cv.pdf",
+        description: "Curriculum vitae.",
+        supportsCriteria: ["authorship_of_scholarly_articles"],
+      },
+    ],
+  };
+
+  it("creates a new version with JSON-stringified payload", async (ctx) => {
+    const d = gate(ctx);
+    const id = await insertOutput(d, {
+      outputType: "exhibit_index",
+      content: JSON.stringify({ entries: [] }),
+    });
+    const r = await callAs(ATTORNEY).output.updateStructured({
+      outputType: "exhibit_index",
+      outputId: id,
+      payload: VALID_PAYLOAD,
+    });
+    expect(r.outputVersion).toBe(2);
+    expect(r.outputId).not.toBe(id);
+
+    const [v2] = await d
+      .select({
+        author: caseOutputs.author,
+        parentId: caseOutputs.parentId,
+        content: caseOutputs.content,
+        contentHtml: caseOutputs.contentHtml,
+      })
+      .from(caseOutputs)
+      .where(eq(caseOutputs.id, r.outputId));
+    expect(v2?.author).toBe("attorney");
+    expect(v2?.parentId).toBe(id);
+    // Canonical content is JSON-stringified — round-trip cleanly.
+    expect(JSON.parse(v2?.content ?? "null")).toEqual(VALID_PAYLOAD);
+    // Structured types intentionally don't store an HTML cache —
+    // their render path goes through the JSON→markdown formatter
+    // at read time.
+    expect(v2?.contentHtml).toBeNull();
+  });
+
+  it("BAD_REQUEST when outputType discriminator does not match the row's actual type", async (ctx) => {
+    // Defense in depth — without this check, an attacker crafting an
+    // `exhibit_index` payload but pointing at a `personal_statement`
+    // row's outputId would corrupt that row with stringified JSON.
+    const d = gate(ctx);
+    const proseId = await insertOutput(d, {
+      outputType: "personal_statement",
+      content: "real prose",
+    });
+    await expect(
+      callAs(ATTORNEY).output.updateStructured({
+        outputType: "exhibit_index",
+        outputId: proseId,
+        payload: VALID_PAYLOAD,
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("VALIDATION rejects payload missing required fields (Zod schema enforced server-side)", async (ctx) => {
+    const d = gate(ctx);
+    const id = await insertOutput(d, {
+      outputType: "exhibit_index",
+      content: JSON.stringify({ entries: [] }),
+    });
+    await expect(
+      callAs(ATTORNEY).output.updateStructured({
+        outputType: "exhibit_index",
+        outputId: id,
+        // @ts-expect-error — missing required `entries` (intentional bad input)
+        payload: { not: "valid" },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("CONFLICT when parent row is already approved (must un-approve first)", async (ctx) => {
+    const d = gate(ctx);
+    const id = await insertOutput(d, {
+      outputType: "exhibit_index",
+      content: JSON.stringify({ entries: [] }),
+      attorneyApproved: true,
+    });
+    await expect(
+      callAs(ATTORNEY).output.updateStructured({
+        outputType: "exhibit_index",
+        outputId: id,
+        payload: VALID_PAYLOAD,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
 });
 
 describe("output.approve / unapprove (idempotency + branches)", () => {
