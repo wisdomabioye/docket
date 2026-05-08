@@ -589,6 +589,7 @@ export async function updateOutputContent(
       outputType: caseOutputs.outputType,
       subgroupKey: caseOutputs.subgroupKey,
       attorneyApproved: caseOutputs.attorneyApproved,
+      metadata: caseOutputs.metadata,
     })
     .from(caseOutputs)
     .where(
@@ -605,6 +606,9 @@ export async function updateOutputContent(
     );
   }
 
+  // Inherit prior metadata so type-specific fields (recommenderName,
+  // provider/sessionId/model, citations) survive the new version. The
+  // version graph already records the edit via `parent_id` + `author`.
   return await saveOutputVersion({
     tx: args.tx,
     caseId: parent.caseId,
@@ -614,10 +618,7 @@ export async function updateOutputContent(
     parentId: args.outputId,
     content: args.content,
     contentHtml: args.contentHtml,
-    metadata: {
-      editedFromVersionId: args.outputId,
-      attorneyId: args.attorneyId,
-    },
+    ...(parent.metadata ? { metadata: parent.metadata } : {}),
     // Attorney edits don't burn provider budget. usdCents=0 short-
     // circuits the budget guard cleanly (still produces a $0 ledger row,
     // which is desired audit trail).
@@ -782,6 +783,7 @@ export async function restoreOutputVersion(
       subgroupKey: caseOutputs.subgroupKey,
       content: caseOutputs.content,
       contentHtml: caseOutputs.contentHtml,
+      metadata: caseOutputs.metadata,
     })
     .from(caseOutputs)
     .where(
@@ -801,6 +803,9 @@ export async function restoreOutputVersion(
     );
   }
 
+  // Carry the source version's metadata onto the restored row — restore
+  // is a faithful copy, so type-specific fields (recommenderName, etc.)
+  // must travel with the content. `parent_id` records the source link.
   return await saveOutputVersion({
     tx: args.tx,
     caseId: source.caseId,
@@ -810,10 +815,7 @@ export async function restoreOutputVersion(
     parentId: args.fromVersionId,
     content: source.content,
     contentHtml: source.contentHtml,
-    metadata: {
-      restoredFromVersionId: args.fromVersionId,
-      attorneyId: args.attorneyId,
-    },
+    ...(source.metadata ? { metadata: source.metadata } : {}),
     computerSessionId: `attorney-restore-${args.attorneyId}`,
     computeDurationMs: 0,
     promptTokens: 0,
@@ -937,6 +939,7 @@ export async function approveOutput(
       content: caseOutputs.content,
       draftContent: caseOutputs.draftContent,
       isCurrent: caseOutputs.isCurrent,
+      metadata: caseOutputs.metadata,
     })
     .from(caseOutputs)
     .where(
@@ -979,11 +982,11 @@ export async function approveOutput(
       // caller does — this is the same markdown→HTML round-trip Tiptap
       // already used to render the draft, so the cache is consistent.
       contentHtml: mdToSafeHtml(row.draftContent),
-      metadata: {
-        editedFromVersionId: args.outputId,
-        attorneyId: args.attorneyId,
-        flushedOnApprove: true,
-      },
+      // Inherit prior metadata so `recommenderName` (and other type-
+      // specific fields read by OutputCard / PDF) survive the flush.
+      // The audit trail for "this version was flushed by an attorney"
+      // lives in `parent_id` + `author = "attorney"`.
+      ...(row.metadata ? { metadata: row.metadata } : {}),
       // Attorney edits don't burn provider budget — same convention
       // `updateOutputContent` uses.
       computerSessionId: `attorney-edit-${args.attorneyId}`,

@@ -13,6 +13,49 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #53 — Approve on rec-letter / exhibit-index with pending draft throws ZodError
+
+Status: Resolved 2026-05-08.
+Surfaced: 2026-05-08 (user report from outputs tab).
+
+Fix: all three attorney-edit call sites in `server/services/output/index.ts`
+(`updateOutputContent`, `restoreOutputVersion`, `approveOutput` flush
+path) now inherit the prior row's `metadata` via the SELECT instead of
+writing a fresh `{ editedFromVersionId, attorneyId, flushedOnApprove }`
+envelope. This both unblocks the strict branches of
+`OutputMetadataSchema` AND fixes the latent `recommenderName` /
+`provider` / `sessionId` loss that would have manifested as soon as the
+strict-branch error was resolved. Audit attribution still flows via
+`parent_id` + `author = "attorney"`. Regression test: `tests/integration/
+output-draft.test.ts` — "flush-on-approve preserves prior metadata".
+
+Repro: open a `recommendation_letter_template` (or `exhibit_index`)
+output, edit it so a `draft_content` exists, click Approve. The server
+returns 500:
+`Unrecognized keys: "editedFromVersionId", "attorneyId", "flushedOnApprove"`.
+
+Cause: `approveOutput` (`server/services/output/index.ts:970`) flushes
+the pending draft via `saveOutputVersion` and stamps these three keys
+into `metadata`. `saveOutputVersion` (`index.ts:122`) then runs
+`OutputMetadataSchema.parse({ ...metadata, type: outputType })`. The
+schema (`server/db/schema/zod/output-metadata.ts`) makes
+`RecommendationLetterMetadata` and `ExhibitIndexMetadata` `.strict()`
+(closed open_issues #19.4) while `GenericMetadata` remains
+`.passthrough()` — so the strict branches reject the flush-attribution
+keys; every other output type silently passes them through.
+
+Fix shape: either (a) add a shared base
+`{ editedFromVersionId, attorneyId, flushedOnApprove }` to all branches
+of `OutputMetadataSchema`, or (b) stop carrying flush attribution in
+`metadata` and add real columns / a separate audit row. (a) is the
+smaller change; (b) is the right long-term call since these aren't
+provider metadata.
+
+Side observation: the flush path passes a fresh `metadata` object
+instead of merging onto the prior row's metadata, so the new version
+loses provider/sessionId/model attribution. Consider preserving those
+when fixing the strict-branch issue.
+
 ### #52 — pnpm reports 23 deprecated transitive dependencies on every install
 
 Status: Tech debt — not blocking; clean up incrementally as upstreams release.

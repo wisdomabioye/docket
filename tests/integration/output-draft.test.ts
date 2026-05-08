@@ -457,6 +457,68 @@ describe("approveOutput — flush-then-approve (W4.3)", () => {
     expect(row?.outputVersion).toBe(1);
   });
 
+  it("flush-on-approve preserves prior metadata (open_issues #53 — strict-branch fix)", async (ctx) => {
+    const d = gate(ctx);
+    // Seed a recommendation_letter_template row whose metadata uses the
+    // strict branch of OutputMetadataSchema. Pre-fix, the flush path
+    // wrote a fresh `{ editedFromVersionId, attorneyId, flushedOnApprove }`
+    // metadata block which the strict branch rejected with
+    // "unrecognized_keys". Post-fix the prior metadata is inherited so
+    // `recommenderName` (read by OutputCard + PDF) survives.
+    const { outputId: v1Id } = await d.transaction(async (tx) =>
+      saveOutputVersion({
+        tx: tx as never,
+        caseId: CASE_ID,
+        outputType: "recommendation_letter_template",
+        subgroupKey: "rec-1",
+        content: "Recommender draft v1.",
+        metadata: {
+          recommenderName: "Dr. Test",
+          recommenderTitle: "Professor",
+          provider: "perplexity",
+          sessionId: "rec-letter-session-1",
+        },
+        computerSessionId: "mock-rec-1",
+        computeDurationMs: 100,
+        promptTokens: 50,
+        completionTokens: 100,
+        usdCents: 5,
+      }),
+    );
+    await d.transaction(async (tx) =>
+      saveOutputDraft({
+        tx: tx as never,
+        outputId: v1Id,
+        content: "Recommender draft v1 with attorney polish.",
+      }),
+    );
+
+    const r = await d.transaction(async (tx) =>
+      approveOutput({ tx: tx as never, outputId: v1Id, attorneyId: ATTORNEY }),
+    );
+    expect(r.draftFlushed).toBe(true);
+    expect(r.approvedOutputId).not.toBe(v1Id);
+
+    const [v2] = await d
+      .select({
+        attorneyApproved: caseOutputs.attorneyApproved,
+        author: caseOutputs.author,
+        parentId: caseOutputs.parentId,
+        metadata: caseOutputs.metadata,
+      })
+      .from(caseOutputs)
+      .where(eq(caseOutputs.id, r.approvedOutputId));
+    expect(v2?.attorneyApproved).toBe(true);
+    expect(v2?.author).toBe("attorney");
+    expect(v2?.parentId).toBe(v1Id);
+    // Prior metadata travels onto the flushed version. Without this the
+    // OutputCard / PDF subtitle "Letter for Dr. Test" disappears the
+    // moment an attorney edits + approves a recommender letter.
+    const md = v2?.metadata as { recommenderName?: string; provider?: string } | null;
+    expect(md?.recommenderName).toBe("Dr. Test");
+    expect(md?.provider).toBe("perplexity");
+  });
+
   it("refuses approval on a non-current version", async (ctx) => {
     const d = gate(ctx);
     const { outputId: v1Id } = await seedBaselineOutput(d);
