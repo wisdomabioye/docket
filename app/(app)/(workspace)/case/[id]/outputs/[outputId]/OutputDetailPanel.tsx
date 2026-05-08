@@ -18,6 +18,7 @@ import {
 import { trpc } from "@/lib/trpc/react";
 import { APP_ROUTES } from "@/config";
 import type { OutputType } from "@/server/services/computer/types";
+import { isStructuredOutputType } from "@/lib/output-types";
 import { track } from "@/lib/analytics/client";
 
 /**
@@ -110,7 +111,7 @@ export function OutputDetailPanel(
   // markdown via Tiptap (consistent with the package PDF render);
   // edit mode swaps in the structured form. Drafts for structured
   // types are not yet implemented — Save is the only mutation path.
-  const isStructuredType = props.initialOutput.outputType === "exhibit_index";
+  const isStructuredType = isStructuredOutputType(props.initialOutput.outputType);
   // For Tiptap (read-mode for structured types, both modes for prose).
   // Structured types always feed the formatted markdown; prose types
   // open to the draft if one is pending.

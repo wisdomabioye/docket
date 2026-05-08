@@ -16,6 +16,16 @@ if (process.env.TEST_DATABASE_URL) {
   process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 }
 
+// Force deterministic mock backends regardless of what the dev env
+// has configured. Tests that *want* to exercise the real R2 / Sonar
+// integrations would set these explicitly themselves. Without these
+// overrides, a developer with `PERPLEXITY_API_KEY` or
+// `STORAGE_BACKEND=s3` in `.env.local` sees flaky failures across
+// every job-runner / signed-URL test because the suite hits real
+// services it doesn't mean to.
+delete process.env.PERPLEXITY_API_KEY;
+process.env.STORAGE_BACKEND = "local";
+
 import { afterAll, beforeAll } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { closeTestDb, getTestDb } from "./helpers/db";

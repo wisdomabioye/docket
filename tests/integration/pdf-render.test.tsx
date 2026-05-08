@@ -331,14 +331,14 @@ describe("compileFullPackagePdf", () => {
         entries: [
           {
             label: "Exhibit A",
-            documentId: "doc-1",
+            documentId: "00000000-0000-4000-8000-000000000001",
             filename: "cv.pdf",
             description: "Curriculum vitae listing peer-reviewed publications.",
             supportsCriteria: ["authorship_of_scholarly_articles"],
           },
           {
             label: "Exhibit B",
-            documentId: "doc-2",
+            documentId: "00000000-0000-4000-8000-000000000002",
             filename: "publications.pdf",
             description: "Bibliography with citation counts.",
             supportsCriteria: ["original_contributions_of_major_significance"],

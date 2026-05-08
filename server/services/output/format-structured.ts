@@ -1,4 +1,5 @@
 import "server-only";
+import type { OutputType } from "@/server/services/computer/types";
 import { ExhibitIndexSchema } from "@/server/services/computer/prompts/exhibit-index";
 
 /**
@@ -82,6 +83,28 @@ export function formatExhibitIndexAsMarkdown(json: string): string {
     }
   }
   return blocks.join("\n\n");
+}
+
+/**
+ * Returns true iff `content` parses as a schema-valid payload for the
+ * given structured output type. Used by `approveOutput` to guard the
+ * draft-flush path: a stale markdown draft on a structured row (from
+ * before the structured editor existed) would otherwise be committed
+ * verbatim into the JSON `content` column. When this returns false on
+ * a pending draft, callers should treat the row as having no flushable
+ * draft and approve the canonical content as-is.
+ *
+ * Returns false for non-structured output types — the caller is
+ * expected to gate on `isStructuredOutputType` first.
+ */
+export function isValidStructuredContent(
+  outputType: OutputType,
+  content: string,
+): boolean {
+  if (outputType === "exhibit_index") {
+    return safeParseExhibitIndex(content) !== null;
+  }
+  return false;
 }
 
 function safeParseExhibitIndex(

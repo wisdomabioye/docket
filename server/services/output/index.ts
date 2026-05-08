@@ -10,7 +10,11 @@ import { OutputMetadataSchema } from "@/server/db/schema/zod";
 import type { Db } from "@/server/db/client";
 import { AppError } from "@/lib/errors";
 import { mdToSafeHtml } from "@/lib/markdown";
-import { INTERNAL_OUTPUT_TYPES } from "@/lib/output-types";
+import {
+  INTERNAL_OUTPUT_TYPES,
+  isStructuredOutputType,
+} from "@/lib/output-types";
+import { isValidStructuredContent } from "@/server/services/output/format-structured";
 import type { OutputType } from "@/server/services/computer/types";
 
 /**
@@ -303,9 +307,9 @@ export async function getCurrentOutputsForList(args: {
         isNull(caseOutputs.deletedAt),
         // Hide upstream-scaffolding types (e.g. evidence_plan) — they
         // feed prompt builders but aren't attorney-facing artifacts.
-        // `INTERNAL_OUTPUT_TYPES` is empty-safe; `notInArray` over an
-        // empty array returns SQL `true` so this is a no-op when no
-        // internals are declared.
+        // The conditional spread makes this a no-op when the list is
+        // empty (Drizzle's `notInArray([])` behavior across versions
+        // is not guaranteed, so we don't even call it).
         ...(INTERNAL_OUTPUT_TYPES.length > 0
           ? [notInArray(caseOutputs.outputType, [...INTERNAL_OUTPUT_TYPES])]
           : []),
@@ -523,7 +527,8 @@ export async function summarizeOutputApprovals(args: {
         isNull(caseOutputs.deletedAt),
         // Mirror `getCurrentOutputsForList` — internals don't count
         // against the tally, otherwise `total` always exceeds
-        // `approved` and `package.ready` never fires.
+        // `approved` and `package.ready` never fires. Conditional
+        // spread keeps this a no-op when the list is empty.
         ...(INTERNAL_OUTPUT_TYPES.length > 0
           ? [notInArray(caseOutputs.outputType, [...INTERNAL_OUTPUT_TYPES])]
           : []),
@@ -978,10 +983,25 @@ export async function approveOutput(
   const hasPendingDraft =
     row.draftContent !== null && row.draftContent !== row.content;
 
+  // For structured-output types (e.g. exhibit_index) the draft must
+  // validate against the type's canonical schema before we can commit
+  // it as the next version's `content`. A stale markdown draft from
+  // before the structured editor existed (Stage 11 W3 → commit B
+  // window) would otherwise land in the JSON column and silently
+  // corrupt the row. Treat invalid drafts as if no draft existed —
+  // approval lands on the canonical content; the stale draft gets
+  // cleared on the next version write via `saveOutputVersion`'s
+  // prior-row flip.
+  const draftIsFlushable =
+    hasPendingDraft &&
+    row.draftContent !== null &&
+    (!isStructuredOutputType(row.outputType) ||
+      isValidStructuredContent(row.outputType, row.draftContent));
+
   let approvedId = args.outputId;
   let draftFlushed = false;
 
-  if (hasPendingDraft && row.draftContent !== null) {
+  if (draftIsFlushable && row.draftContent !== null) {
     if (row.draftContent.trim().length === 0) {
       throw new AppError(
         "BAD_REQUEST",

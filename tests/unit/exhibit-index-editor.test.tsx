@@ -23,15 +23,18 @@ import {
  *     `null` when the payload would fail schema validation.
  */
 
+// Inline UUID literals because `vi.mock` factories are hoisted above
+// const declarations — referencing module-level constants here would
+// resolve to `undefined`. The constants below are for assertions only.
 vi.mock("@/lib/trpc/react", () => ({
   trpc: {
     document: {
       list: {
         useQuery: vi.fn(() => ({
           data: [
-            { id: "doc-1", originalFilename: "cv.pdf" },
-            { id: "doc-2", originalFilename: "publications.pdf" },
-            { id: "doc-3", originalFilename: "awards.pdf" },
+            { id: "00000000-0000-4000-8000-000000000001", originalFilename: "cv.pdf" },
+            { id: "00000000-0000-4000-8000-000000000002", originalFilename: "publications.pdf" },
+            { id: "00000000-0000-4000-8000-000000000003", originalFilename: "awards.pdf" },
           ],
           isLoading: false,
         })),
@@ -40,11 +43,15 @@ vi.mock("@/lib/trpc/react", () => ({
   },
 }));
 
+const DOC_1 = "00000000-0000-4000-8000-000000000001";
+const DOC_2 = "00000000-0000-4000-8000-000000000002";
+const DOC_3 = "00000000-0000-4000-8000-000000000003";
+
 const VALID_PAYLOAD = JSON.stringify({
   entries: [
     {
       label: "Exhibit A",
-      documentId: "doc-1",
+      documentId: "00000000-0000-4000-8000-000000000001",
       filename: "cv.pdf",
       description: "Curriculum vitae.",
       supportsCriteria: ["authorship_of_scholarly_articles"],
@@ -77,7 +84,7 @@ describe("ExhibitIndexEditor", () => {
     expect(screen.getByDisplayValue("cv.pdf")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Curriculum vitae.")).toBeInTheDocument();
     expect(
-      screen.getByText(/documentId: doc-1/),
+      screen.getByText(new RegExp(`documentId: ${DOC_1}`)),
     ).toBeInTheDocument();
   });
 
@@ -89,7 +96,7 @@ describe("ExhibitIndexEditor", () => {
     const value = api.getValue();
     expect(value).not.toBeNull();
     expect(value?.entries[0]?.description).toBe("Updated CV.");
-    expect(value?.entries[0]?.documentId).toBe("doc-1");
+    expect(value?.entries[0]?.documentId).toBe(DOC_1);
   });
 
   it("editing a field marks the editor dirty", () => {
@@ -104,12 +111,12 @@ describe("ExhibitIndexEditor", () => {
   it("Add row inserts an entry from document.list with auto-assigned label", () => {
     const { api } = setup();
     const select = screen.getByRole("combobox");
-    fireEvent.change(select, { target: { value: "doc-2" } });
+    fireEvent.change(select, { target: { value: DOC_2 } });
     fireEvent.click(screen.getByRole("button", { name: /^add to index$/i }));
     const value = api.getValue();
     expect(value?.entries).toHaveLength(2);
     const added = value?.entries[1];
-    expect(added?.documentId).toBe("doc-2");
+    expect(added?.documentId).toBe(DOC_2);
     expect(added?.filename).toBe("publications.pdf");
     // First letter not in use → "Exhibit B".
     expect(added?.label).toBe("Exhibit B");
@@ -118,15 +125,15 @@ describe("ExhibitIndexEditor", () => {
 
   it("Add-row picker hides documents already in the index", () => {
     setup();
-    // doc-1 is already in the index → only doc-2 + doc-3 should be
+    // DOC_1 is already in the index → only DOC_2 + DOC_3 should be
     // selectable. The placeholder option is also present so the
     // total option count is 3.
     const select = screen.getByRole("combobox");
     const options = Array.from(select.querySelectorAll("option"));
     const values = options.map((o) => (o as HTMLOptionElement).value);
-    expect(values).not.toContain("doc-1");
-    expect(values).toContain("doc-2");
-    expect(values).toContain("doc-3");
+    expect(values).not.toContain(DOC_1);
+    expect(values).toContain(DOC_2);
+    expect(values).toContain(DOC_3);
   });
 
   it("Remove drops a row and updates getValue", () => {
@@ -141,14 +148,14 @@ describe("ExhibitIndexEditor", () => {
         entries: [
           {
             label: "Exhibit A",
-            documentId: "doc-1",
+            documentId: "00000000-0000-4000-8000-000000000001",
             filename: "cv.pdf",
             description: "First.",
             supportsCriteria: [],
           },
           {
             label: "Exhibit B",
-            documentId: "doc-2",
+            documentId: "00000000-0000-4000-8000-000000000002",
             filename: "publications.pdf",
             description: "Second.",
             supportsCriteria: [],

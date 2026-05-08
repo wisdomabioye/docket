@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { caseOutputs, outputTypeEnum } from "@/server/db/schema";
+import { caseDocuments, caseOutputs, outputTypeEnum } from "@/server/db/schema";
 import type { OutputType } from "@/server/services/computer/types";
 import { db as ownerDb, type Db } from "@/server/db/client";
 import {
@@ -25,7 +25,10 @@ import {
   renderPerOutputPdf,
 } from "@/server/services/pdf";
 import { mdToSafeHtml } from "@/lib/markdown";
-import { isInternalOutputType } from "@/lib/output-types";
+import {
+  isInternalOutputType,
+  isStructuredOutputType,
+} from "@/lib/output-types";
 import { ExhibitIndexSchema } from "@/server/services/computer/prompts/exhibit-index";
 import { rateLimit } from "@/server/services/ratelimit";
 import { inngest } from "@/server/jobs/client";
@@ -95,12 +98,6 @@ const UpdateStructuredInput = z.discriminatedUnion("outputType", [
     payload: ExhibitIndexSchema,
   }),
 ]);
-
-/** Output types that require `updateStructured`. Source-of-truth list
- *  for the rejection check on `output.update` / `saveDraft`. Adding a
- *  new structured type means: (1) extend `UpdateStructuredInput`,
- *  (2) add to this set. */
-const STRUCTURED_OUTPUT_TYPES = new Set<OutputType>(["exhibit_index"]);
 
 // Drafts allow `""` (the user cleared the editor in mid-edit) — see
 // `saveOutputDraft` JSDoc. Same length cap as commits.
@@ -226,6 +223,13 @@ export const outputRouter = router({
   listVersions: protectedProcedure
     .input(ListVersionsInput)
     .query(async ({ ctx, input }) => {
+      // Internal scaffolding types (e.g. evidence_plan) feed prompt
+      // builders but aren't attorney-facing. Mirror `output.get`'s
+      // NOT_FOUND so version-history metadata isn't reachable via a
+      // direct procedure call either.
+      if (isInternalOutputType(input.outputType)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "output not found" });
+      }
       // Confirm the case is visible (RLS gate). The history query
       // itself doesn't enforce RLS because `getOutputVersionHistory`
       // accepts any Db; use ctx.db here so the check + read share one
@@ -271,7 +275,7 @@ export const outputRouter = router({
       // store JSON in `content`. A markdown draft from a stale client
       // would silently corrupt the JSON contract that downstream
       // `_context.ts` parsers depend on.
-      if (STRUCTURED_OUTPUT_TYPES.has(access.outputType)) {
+      if (isStructuredOutputType(access.outputType)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
@@ -338,7 +342,7 @@ export const outputRouter = router({
       // Reject markdown commits on structured types — they go through
       // `output.updateStructured` so the JSON contract that
       // `_context.ts` depends on is preserved.
-      if (STRUCTURED_OUTPUT_TYPES.has(access.outputType)) {
+      if (isStructuredOutputType(access.outputType)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
@@ -405,6 +409,37 @@ export const outputRouter = router({
           code: "BAD_REQUEST",
           message: `outputType mismatch: row is ${access.outputType}, payload is ${input.outputType}`,
         });
+      }
+      // FK integrity: every entry's `documentId` must reference a live
+      // `case_documents` row in this case. RLS on `case_documents`
+      // already filters cross-case access, so missing ids are either
+      // (a) deleted between client load and save (race) or (b) a
+      // stale/spoofed id. Reject with a list of the missing ids so the
+      // client can highlight them and resync.
+      if (input.outputType === "exhibit_index") {
+        const docIds = Array.from(
+          new Set(input.payload.entries.map((e) => e.documentId)),
+        );
+        if (docIds.length > 0) {
+          const found = await ctx.db
+            .select({ id: caseDocuments.id })
+            .from(caseDocuments)
+            .where(
+              and(
+                eq(caseDocuments.caseId, access.caseId),
+                inArray(caseDocuments.id, docIds),
+                isNull(caseDocuments.deletedAt),
+              ),
+            );
+          const foundSet = new Set(found.map((r) => r.id));
+          const missing = docIds.filter((id) => !foundSet.has(id));
+          if (missing.length > 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Exhibit index references ${missing.length} document${missing.length === 1 ? "" : "s"} that no longer exist on this case. Refresh the editor and remove the stale row${missing.length === 1 ? "" : "s"}.`,
+            });
+          }
+        }
       }
       const serialized = JSON.stringify(input.payload);
       try {

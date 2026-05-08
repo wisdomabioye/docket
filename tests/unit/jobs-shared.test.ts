@@ -213,7 +213,7 @@ describe("validateStructuredOutput", () => {
       entries: [
         {
           label: "Exhibit A",
-          documentId: "doc-1",
+          documentId: "00000000-0000-4000-8000-000000000001",
           filename: "x.pdf",
           description: "ok",
           supportsCriteria: ["Awards"],

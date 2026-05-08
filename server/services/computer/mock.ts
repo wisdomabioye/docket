@@ -141,12 +141,19 @@ function mockStructuredPayload(args: {
         ],
       });
     case "exhibit_index":
-      // Conforms to `ExhibitIndexSchema` (server/services/computer/prompts/exhibit-index.ts).
+      // Conforms to `ExhibitIndexSchema` (server/db/schema/zod/exhibit-index.ts).
+      // `documentId` is `z.uuid()` — the mock can't reference a real
+      // case_documents row, so we generate a deterministic
+      // RFC-4122-shaped UUID derived from the caseId so re-runs of the
+      // same case produce the same stand-in exhibit. The downstream
+      // `updateStructured` FK check would reject this id (no matching
+      // case_documents row), but the build → save path doesn't run
+      // FK validation; this is dev/test-only output.
       return JSON.stringify({
         entries: [
           {
             label: "Exhibit A",
-            documentId: `mock-doc-${args.caseId.slice(0, 8)}`,
+            documentId: mockDocumentUuidFor(args.caseId),
             filename: "mock-stand-in.pdf",
             description: `[MOCK ${args.caseId}] Stand-in exhibit description for the dev pipeline.`,
             supportsCriteria: ["Critical role"],
@@ -168,4 +175,43 @@ function mockStructuredPayload(args: {
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Deterministic UUID derived from the caseId. Used by the mock
+ *  exhibit_index payload — `documentId` is now `z.uuid()` so the old
+ *  `mock-doc-<short>` placeholder no longer parses. We re-shape the
+ *  caseId itself (already a v4 UUID) into a related but distinct
+ *  UUID by zeroing the variant nibble and stamping the version
+ *  field — keeps the format strict, keeps re-runs stable, doesn't
+ *  collide with any real document id (which is randomly generated). */
+function mockDocumentUuidFor(caseId: string): string {
+  // Strip dashes so we can index hex characters directly. caseId
+  // shape: `xxxxxxxx-xxxx-Mxxx-Nxxx-xxxxxxxxxxxx` where M=4 (version)
+  // and N is the variant. We bit-flip the version+variant blocks so
+  // the produced UUID is in the same "random v4" family but not equal
+  // to caseId.
+  const hex = caseId.replace(/-/g, "");
+  // Default to a fixed UUID if caseId is malformed (defensive — the
+  // mock is dev-only but should never throw).
+  if (hex.length !== 32) return "00000000-0000-4000-8000-000000000001";
+  const bytes = hex.split("");
+  // Force version=4 at hex[12] and variant=8 at hex[16] (RFC 4122 v4).
+  bytes[12] = "4";
+  bytes[16] = "8";
+  // XOR-flip a deterministic pair of nibbles so this UUID differs
+  // from caseId itself.
+  const flip = (i: number): void => {
+    const v = parseInt(bytes[i] ?? "0", 16) ^ 0xf;
+    bytes[i] = v.toString(16);
+  };
+  flip(0);
+  flip(31);
+  const reformatted = bytes.join("");
+  return [
+    reformatted.slice(0, 8),
+    reformatted.slice(8, 12),
+    reformatted.slice(12, 16),
+    reformatted.slice(16, 20),
+    reformatted.slice(20, 32),
+  ].join("-");
 }

@@ -51,6 +51,34 @@ export const INTERNAL_OUTPUT_TYPES: ReadonlyArray<OutputType> =
   INTERNAL_OUTPUT_TYPES_ARRAY;
 
 /**
+ * Output types whose canonical `case_outputs.content` is JSON, not
+ * markdown. They commit through `output.updateStructured` (typed
+ * payload) instead of `output.update` (markdown), and render through
+ * a JSON→markdown formatter at read time.
+ *
+ * Adding a new structured type requires:
+ *   1. Add the type here.
+ *   2. Extend `UpdateStructuredInput` (in `server/api/routers/output.ts`).
+ *   3. Add a formatter branch in `format-structured.ts`.
+ *   4. Add a validator branch in `isValidStructuredContent` (same file).
+ *   5. Add a typed editor in `components/output/`.
+ *   6. Add a dispatch branch in `OutputDetailPanel.tsx`.
+ */
+const STRUCTURED_OUTPUT_TYPES_ARRAY: ReadonlyArray<OutputType> = [
+  "exhibit_index",
+];
+const STRUCTURED_OUTPUT_TYPES_SET: ReadonlySet<OutputType> = new Set(
+  STRUCTURED_OUTPUT_TYPES_ARRAY,
+);
+
+export function isStructuredOutputType(t: OutputType): boolean {
+  return STRUCTURED_OUTPUT_TYPES_SET.has(t);
+}
+
+export const STRUCTURED_OUTPUT_TYPES: ReadonlyArray<OutputType> =
+  STRUCTURED_OUTPUT_TYPES_ARRAY;
+
+/**
  * Pulls the recommender's display name out of an output's metadata
  * (when the output is `recommendation_letter_template`). Returns null
  * for non-recommendation types AND for missing/malformed metadata.

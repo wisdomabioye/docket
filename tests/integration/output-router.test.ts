@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { eq, sql } from "drizzle-orm";
 import {
   attorneyProfiles,
+  caseDocuments,
   caseOutputs,
   caseParticipants,
   cases,
@@ -106,9 +107,15 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   if (!db) return;
-  // Reset the per-case output rows but keep the user/org/case shells.
+  // Reset the per-case rows (outputs + documents) but keep the
+  // user/org/case shells. `case_documents` is also reset so the
+  // structured-mutation tests can seed `SEED_DOC_ID` cleanly without
+  // PK collisions across test runs in the same file.
   await db.execute(
     sql`delete from case_outputs where case_id = ${CASE_ID}` as never,
+  );
+  await db.execute(
+    sql`delete from case_documents where case_id = ${CASE_ID}` as never,
   );
   sendMock.mockClear();
   rateLimitMock.mockClear();
@@ -246,11 +253,14 @@ describe("output.list / get / listVersions", () => {
   });
 
   it("listVersions returns the chain newest-first", async (ctx) => {
+    // Uses `personal_statement` rather than `evidence_plan` because
+    // internal types are now NOT_FOUND on listVersions (#M1). The
+    // ordering invariant is type-agnostic.
     const d = gate(ctx);
     await d.insert(caseOutputs).values([
       {
         caseId: CASE_ID,
-        outputType: "evidence_plan",
+        outputType: "personal_statement",
         outputVersion: 1,
         isCurrent: false,
         author: "computer",
@@ -258,7 +268,7 @@ describe("output.list / get / listVersions", () => {
       },
       {
         caseId: CASE_ID,
-        outputType: "evidence_plan",
+        outputType: "personal_statement",
         outputVersion: 2,
         isCurrent: true,
         author: "computer",
@@ -267,7 +277,7 @@ describe("output.list / get / listVersions", () => {
     ]);
     const r = await callAs(ATTORNEY).output.listVersions({
       caseId: CASE_ID,
-      outputType: "evidence_plan",
+      outputType: "personal_statement",
     });
     expect(r.map((v) => v.outputVersion)).toEqual([2, 1]);
   });
@@ -300,6 +310,32 @@ describe("output.list / get / listVersions", () => {
       subgroupKey: "rec-a",
     });
     expect(r).toHaveLength(1);
+  });
+
+  it("listVersions NOT_FOUND for internal types (evidence_plan)", async (ctx) => {
+    // Mirrors `output.get`'s NOT_FOUND so version-history metadata for
+    // internal scaffolding types isn't reachable via a direct
+    // procedure call either.
+    const d = gate(ctx);
+    await d.insert(caseOutputs).values({
+      caseId: CASE_ID,
+      outputType: "evidence_plan",
+      outputVersion: 1,
+      isCurrent: true,
+      author: "computer",
+      content: JSON.stringify({
+        visaType: "O-1A",
+        overallStrength: "strong",
+        criteria: [],
+        generatedAt: new Date().toISOString(),
+      }),
+    });
+    await expect(
+      callAs(ATTORNEY).output.listVersions({
+        caseId: CASE_ID,
+        outputType: "evidence_plan",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
 
@@ -415,11 +451,12 @@ describe("output.update", () => {
 });
 
 describe("output.updateStructured (commit C)", () => {
+  const SEED_DOC_ID = "55555555-0000-4000-8000-aaaa00000005";
   const VALID_PAYLOAD = {
     entries: [
       {
         label: "Exhibit A",
-        documentId: "doc-1",
+        documentId: SEED_DOC_ID,
         filename: "cv.pdf",
         description: "Curriculum vitae.",
         supportsCriteria: ["authorship_of_scholarly_articles"],
@@ -427,8 +464,23 @@ describe("output.updateStructured (commit C)", () => {
     ],
   };
 
+  async function seedSharedDoc(d: TestDb): Promise<void> {
+    await d.insert(caseDocuments).values({
+      id: SEED_DOC_ID,
+      caseId: CASE_ID,
+      uploadedBy: ATTORNEY,
+      documentType: "cv_resume",
+      originalFilename: "cv.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1024n,
+      sha256: "5".repeat(64),
+      storagePath: "fake/key-shared",
+    });
+  }
+
   it("creates a new version with JSON-stringified payload", async (ctx) => {
     const d = gate(ctx);
+    await seedSharedDoc(d);
     const id = await insertOutput(d, {
       outputType: "exhibit_index",
       content: JSON.stringify({ entries: [] }),
@@ -465,6 +517,7 @@ describe("output.updateStructured (commit C)", () => {
     // `exhibit_index` payload but pointing at a `personal_statement`
     // row's outputId would corrupt that row with stringified JSON.
     const d = gate(ctx);
+    await seedSharedDoc(d);
     const proseId = await insertOutput(d, {
       outputType: "personal_statement",
       content: "real prose",
@@ -494,8 +547,37 @@ describe("output.updateStructured (commit C)", () => {
     ).rejects.toThrow();
   });
 
+  it("VALIDATION rejects non-UUID documentId (Zod boundary, before FK lookup)", async (ctx) => {
+    // Schema tightening: `documentId` is `z.uuid()` so non-UUID values
+    // fail Zod before the router's `case_documents` FK check would
+    // hit PG with a parse error on a literal like `'doc-1'`.
+    const d = gate(ctx);
+    const id = await insertOutput(d, {
+      outputType: "exhibit_index",
+      content: JSON.stringify({ entries: [] }),
+    });
+    await expect(
+      callAs(ATTORNEY).output.updateStructured({
+        outputType: "exhibit_index",
+        outputId: id,
+        payload: {
+          entries: [
+            {
+              label: "Exhibit A",
+              documentId: "not-a-uuid",
+              filename: "cv.pdf",
+              description: "x",
+              supportsCriteria: [],
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
   it("CONFLICT when parent row is already approved (must un-approve first)", async (ctx) => {
     const d = gate(ctx);
+    await seedSharedDoc(d);
     const id = await insertOutput(d, {
       outputType: "exhibit_index",
       content: JSON.stringify({ entries: [] }),
@@ -508,6 +590,121 @@ describe("output.updateStructured (commit C)", () => {
         payload: VALID_PAYLOAD,
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("BAD_REQUEST when an exhibit references a documentId that doesn't exist on this case", async (ctx) => {
+    // FK integrity: every entry's `documentId` must reference a live
+    // `case_documents` row. A stale id (deleted between client load
+    // and save, or spoofed) gets rejected so the client can highlight
+    // the row and resync.
+    const d = gate(ctx);
+    const id = await insertOutput(d, {
+      outputType: "exhibit_index",
+      content: JSON.stringify({ entries: [] }),
+    });
+    // Seed one real document, but reference a different id in the payload.
+    await d.insert(caseDocuments).values({
+      id: "11111111-0000-4000-8000-aaaa00000001",
+      caseId: CASE_ID,
+      uploadedBy: ATTORNEY,
+      documentType: "cv_resume",
+      originalFilename: "real.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1024n,
+      sha256: "a".repeat(64),
+      storagePath: "fake/key-1",
+    });
+    await expect(
+      callAs(ATTORNEY).output.updateStructured({
+        outputType: "exhibit_index",
+        outputId: id,
+        payload: {
+          entries: [
+            {
+              label: "Exhibit A",
+              documentId: "22222222-0000-4000-8000-aaaa00000002",
+              filename: "ghost.pdf",
+              description: "A document that does not exist.",
+              supportsCriteria: [],
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("succeeds when all documentIds reference live case_documents rows", async (ctx) => {
+    const d = gate(ctx);
+    const id = await insertOutput(d, {
+      outputType: "exhibit_index",
+      content: JSON.stringify({ entries: [] }),
+    });
+    const docId = "33333333-0000-4000-8000-aaaa00000003";
+    await d.insert(caseDocuments).values({
+      id: docId,
+      caseId: CASE_ID,
+      uploadedBy: ATTORNEY,
+      documentType: "cv_resume",
+      originalFilename: "cv.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1024n,
+      sha256: "b".repeat(64),
+      storagePath: "fake/key-3",
+    });
+    const r = await callAs(ATTORNEY).output.updateStructured({
+      outputType: "exhibit_index",
+      outputId: id,
+      payload: {
+        entries: [
+          {
+            label: "Exhibit A",
+            documentId: docId,
+            filename: "cv.pdf",
+            description: "Curriculum vitae.",
+            supportsCriteria: [],
+          },
+        ],
+      },
+    });
+    expect(r.outputVersion).toBe(2);
+  });
+
+  it("BAD_REQUEST when documentId points at a soft-deleted case_documents row", async (ctx) => {
+    const d = gate(ctx);
+    const id = await insertOutput(d, {
+      outputType: "exhibit_index",
+      content: JSON.stringify({ entries: [] }),
+    });
+    const docId = "44444444-0000-4000-8000-aaaa00000004";
+    await d.insert(caseDocuments).values({
+      id: docId,
+      caseId: CASE_ID,
+      uploadedBy: ATTORNEY,
+      documentType: "cv_resume",
+      originalFilename: "deleted.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1024n,
+      sha256: "c".repeat(64),
+      storagePath: "fake/key-4",
+      deletedAt: new Date(),
+    });
+    await expect(
+      callAs(ATTORNEY).output.updateStructured({
+        outputType: "exhibit_index",
+        outputId: id,
+        payload: {
+          entries: [
+            {
+              label: "Exhibit A",
+              documentId: docId,
+              filename: "deleted.pdf",
+              description: "Doc that was deleted.",
+              supportsCriteria: [],
+            },
+          ],
+        },
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
 

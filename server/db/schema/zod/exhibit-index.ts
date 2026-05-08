@@ -20,8 +20,11 @@ export const ExhibitIndexEntrySchema = z
     label: z.string(),
     /** FK to `case_documents.id`. The structured editor treats this
      *  as read-only per row — changing the underlying document is a
-     *  remove + re-add, not an in-place mutation. */
-    documentId: z.string(),
+     *  remove + re-add, not an in-place mutation. UUID-validated so
+     *  bad payloads are rejected at the Zod boundary before the
+     *  router's `case_documents` FK lookup hits PG with a parse
+     *  error on a non-UUID literal. */
+    documentId: z.uuid(),
     /** Display filename. Defaults from `case_documents.original_filename`
      *  when a row is added; editable so the index can show a cleaner
      *  presentation than the upload's original name. */

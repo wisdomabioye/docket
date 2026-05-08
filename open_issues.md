@@ -16,6 +16,8 @@ When a gap is identified but not fixed in the same response, it goes here.
 ### #56 — Structured-output autosave (drafts) deferred for exhibit_index
 
 Status: Deferred — explicit Save is the only mutation path for now.
+The stale-draft corruption surface (R1 in the C-review) was closed
+2026-05-08 by `approveOutput`'s structured-content validator.
 Surfaced: 2026-05-08 (commit C scoping).
 
 `output.saveDraft` writes a markdown string to

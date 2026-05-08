@@ -457,6 +457,138 @@ describe("approveOutput — flush-then-approve (W4.3)", () => {
     expect(row?.outputVersion).toBe(1);
   });
 
+  it("approve on structured type with stale markdown draft skips flush + lands on canonical content", async (ctx) => {
+    // Regression guard for the R1 finding from the C1/C2/C3 review.
+    // Pre-commit-B, exhibit_index briefly used TiptapEditor and could
+    // accumulate stale markdown in `case_outputs.draft_content`.
+    // Without the structured-content validator in `approveOutput`,
+    // clicking Approve would commit that markdown verbatim into the
+    // JSON `content` column and corrupt the row. The validator
+    // treats invalid drafts as "no flushable draft" and approves the
+    // existing canonical content as-is.
+    const d = gate(ctx);
+    const validJson = JSON.stringify({
+      entries: [
+        {
+          label: "Exhibit A",
+          documentId: "00000000-0000-4000-8000-000000000001",
+          filename: "cv.pdf",
+          description: "Curriculum vitae.",
+          supportsCriteria: [],
+        },
+      ],
+    });
+    const { outputId } = await d.transaction(async (tx) =>
+      saveOutputVersion({
+        tx: tx as never,
+        caseId: CASE_ID,
+        outputType: "exhibit_index",
+        content: validJson,
+        computerSessionId: "mock-eix",
+        computeDurationMs: 100,
+        promptTokens: 50,
+        completionTokens: 100,
+        usdCents: 5,
+      }),
+    );
+    // Stale markdown draft from the pre-structured-editor era.
+    await d.transaction(async (tx) =>
+      saveOutputDraft({
+        tx: tx as never,
+        outputId,
+        content: "## Stale markdown\n\nThis was typed in the old editor.",
+      }),
+    );
+
+    const r = await d.transaction(async (tx) =>
+      approveOutput({ tx: tx as never, outputId, attorneyId: ATTORNEY }),
+    );
+    // No flush — approval stays on v1 with canonical JSON intact.
+    expect(r.draftFlushed).toBe(false);
+    expect(r.approvedOutputId).toBe(outputId);
+
+    const [row] = await d
+      .select({
+        attorneyApproved: caseOutputs.attorneyApproved,
+        outputVersion: caseOutputs.outputVersion,
+        content: caseOutputs.content,
+      })
+      .from(caseOutputs)
+      .where(eq(caseOutputs.id, outputId));
+    expect(row?.attorneyApproved).toBe(true);
+    expect(row?.outputVersion).toBe(1);
+    expect(row?.content).toBe(validJson);
+    // Row count for this (case, type) bucket is still 1 — no garbage v2 row.
+    const all = await d
+      .select({ id: caseOutputs.id })
+      .from(caseOutputs)
+      .where(eq(caseOutputs.caseId, CASE_ID));
+    expect(all.filter((r) => r.id !== undefined)).toHaveLength(1);
+  });
+
+  it("approve on structured type with VALID JSON draft DOES flush (no false negatives)", async (ctx) => {
+    // Counterpart to the previous test — when a future commit adds
+    // structured drafts, the same flush mechanics must work as long
+    // as the draft is schema-valid.
+    const d = gate(ctx);
+    const v1Json = JSON.stringify({
+      entries: [
+        {
+          label: "Exhibit A",
+          documentId: "00000000-0000-4000-8000-000000000001",
+          filename: "cv.pdf",
+          description: "Old.",
+          supportsCriteria: [],
+        },
+      ],
+    });
+    const v2DraftJson = JSON.stringify({
+      entries: [
+        {
+          label: "Exhibit A",
+          documentId: "00000000-0000-4000-8000-000000000001",
+          filename: "cv.pdf",
+          description: "Updated.",
+          supportsCriteria: ["awards"],
+        },
+      ],
+    });
+    const { outputId } = await d.transaction(async (tx) =>
+      saveOutputVersion({
+        tx: tx as never,
+        caseId: CASE_ID,
+        outputType: "exhibit_index",
+        content: v1Json,
+        computerSessionId: "mock-eix2",
+        computeDurationMs: 100,
+        promptTokens: 50,
+        completionTokens: 100,
+        usdCents: 5,
+      }),
+    );
+    await d.transaction(async (tx) =>
+      saveOutputDraft({ tx: tx as never, outputId, content: v2DraftJson }),
+    );
+
+    const r = await d.transaction(async (tx) =>
+      approveOutput({ tx: tx as never, outputId, attorneyId: ATTORNEY }),
+    );
+    expect(r.draftFlushed).toBe(true);
+    expect(r.approvedOutputId).not.toBe(outputId);
+
+    const [v2] = await d
+      .select({
+        outputVersion: caseOutputs.outputVersion,
+        attorneyApproved: caseOutputs.attorneyApproved,
+        content: caseOutputs.content,
+      })
+      .from(caseOutputs)
+      .where(eq(caseOutputs.id, r.approvedOutputId));
+    expect(v2?.outputVersion).toBe(2);
+    expect(v2?.attorneyApproved).toBe(true);
+    expect(JSON.parse(v2?.content ?? "null")).toEqual(JSON.parse(v2DraftJson));
+  });
+
   it("flush-on-approve preserves prior metadata (open_issues #53 — strict-branch fix)", async (ctx) => {
     const d = gate(ctx);
     // Seed a recommendation_letter_template row whose metadata uses the

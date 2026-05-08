@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { formatExhibitIndexAsMarkdown } from "@/server/services/output/format-structured";
+import {
+  formatExhibitIndexAsMarkdown,
+  isValidStructuredContent,
+} from "@/server/services/output/format-structured";
 
 /**
  * Locked behavior:
@@ -21,7 +24,7 @@ const VALID_PAYLOAD = JSON.stringify({
   entries: [
     {
       label: "Exhibit A",
-      documentId: "doc-1",
+      documentId: "00000000-0000-4000-8000-000000000001",
       filename: "cv.pdf",
       description: "Curriculum vitae listing 12 peer-reviewed publications.",
       supportsCriteria: [
@@ -31,7 +34,7 @@ const VALID_PAYLOAD = JSON.stringify({
     },
     {
       label: "Exhibit B",
-      documentId: "doc-2",
+      documentId: "00000000-0000-4000-8000-000000000002",
       filename: "bauer-prize-letter.pdf",
       description: "Award letter from the Bauer Prize selection committee.",
       supportsCriteria: ["receipt_of_nationally_recognized_awards"],
@@ -101,7 +104,7 @@ describe("formatExhibitIndexAsMarkdown", () => {
       entries: [
         {
           label: "Exhibit *A*",
-          documentId: "doc-1",
+          documentId: "00000000-0000-4000-8000-000000000001",
           filename: "snake_case_filename.pdf",
           description: "Description with _underscores_ and *stars*.",
           supportsCriteria: [],
@@ -115,12 +118,42 @@ describe("formatExhibitIndexAsMarkdown", () => {
     expect(md).toContain("\\*stars\\*");
   });
 
+  it("isValidStructuredContent: true for schema-valid exhibit_index JSON", () => {
+    expect(isValidStructuredContent("exhibit_index", VALID_PAYLOAD)).toBe(true);
+  });
+
+  it("isValidStructuredContent: false for malformed JSON on exhibit_index", () => {
+    expect(isValidStructuredContent("exhibit_index", "{not json")).toBe(false);
+  });
+
+  it("isValidStructuredContent: false for schema-violating JSON on exhibit_index", () => {
+    expect(
+      isValidStructuredContent("exhibit_index", JSON.stringify({ wrong: "shape" })),
+    ).toBe(false);
+  });
+
+  it("isValidStructuredContent: false for stale markdown content on exhibit_index", () => {
+    // The stale-draft scenario from open_issues #56b — used by
+    // `approveOutput` to skip the flush rather than commit markdown
+    // text into the JSON column.
+    expect(
+      isValidStructuredContent(
+        "exhibit_index",
+        "## Some markdown\n\nNot valid JSON",
+      ),
+    ).toBe(false);
+  });
+
+  it("isValidStructuredContent: false for non-structured types (caller should gate first)", () => {
+    expect(isValidStructuredContent("personal_statement", "anything")).toBe(false);
+  });
+
   it("omits the supportsCriteria bullet when the array is empty", () => {
     const noCriteria = JSON.stringify({
       entries: [
         {
           label: "Exhibit A",
-          documentId: "doc-1",
+          documentId: "00000000-0000-4000-8000-000000000001",
           filename: "cv.pdf",
           description: "CV.",
           supportsCriteria: [],
