@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CASE_STATUSES,
   canTransition,
+  canUploadInStatus,
   legalNextStatuses,
   type CaseStatus,
 } from "@/lib/case-status";
@@ -70,6 +71,36 @@ describe("case status state machine", () => {
       if (s === "archived") continue;
       expect(canTransition(s as CaseStatus, "archived")).toBe(true);
     }
+  });
+
+  describe("canUploadInStatus — recommendation_letter post-build window", () => {
+    it("blocks ordinary evidence in draft_ready", () => {
+      expect(canUploadInStatus("draft_ready", "cv_resume")).toBe(false);
+      expect(canUploadInStatus("draft_ready")).toBe(false);
+    });
+
+    it("allows recommendation_letter in draft_ready / in_review / approved", () => {
+      expect(canUploadInStatus("draft_ready", "recommendation_letter")).toBe(true);
+      expect(canUploadInStatus("in_review", "recommendation_letter")).toBe(true);
+      expect(canUploadInStatus("approved", "recommendation_letter")).toBe(true);
+    });
+
+    it("stops at approved — package_ready / delivered / filed reject", () => {
+      expect(canUploadInStatus("package_ready", "recommendation_letter")).toBe(false);
+      expect(canUploadInStatus("delivered", "recommendation_letter")).toBe(false);
+      expect(canUploadInStatus("filed", "recommendation_letter")).toBe(false);
+    });
+
+    it("recommendation_letter still works in pre-build statuses", () => {
+      expect(canUploadInStatus("intake", "recommendation_letter")).toBe(true);
+      expect(canUploadInStatus("ready_to_build", "recommendation_letter")).toBe(true);
+    });
+
+    it("rejects uploads while building/extracting regardless of type", () => {
+      expect(canUploadInStatus("building", "recommendation_letter")).toBe(false);
+      expect(canUploadInStatus("extracting", "cv_resume")).toBe(true); // extracting is in UPLOADABLE
+      expect(canUploadInStatus("building", "cv_resume")).toBe(false);
+    });
   });
 
   it("every status defines outgoing edges", () => {

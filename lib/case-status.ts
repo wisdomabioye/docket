@@ -18,9 +18,10 @@
  * transition service.
  */
 
-import type { caseStatusEnum } from "@/server/db/schema/enums";
+import type { caseStatusEnum, documentTypeEnum } from "@/server/db/schema/enums";
 
 export type CaseStatus = (typeof caseStatusEnum.enumValues)[number];
+type DocumentType = (typeof documentTypeEnum.enumValues)[number];
 
 export const CASE_STATUSES = [
   "intake",
@@ -86,7 +87,30 @@ export const UPLOADABLE_STATUSES = [
   "needs_revision",
 ] as const satisfies readonly CaseStatus[];
 
-export function canUploadInStatus(s: CaseStatus): boolean {
+/**
+ * Signed recommendation letters arrive *after* the build: the build
+ * produces `recommendation_letter_template` drafts → attorney sends to
+ * recommender → recommender returns a signed PDF → attorney uploads it
+ * as a `case_documents` row (`documentType = "recommendation_letter"`).
+ * That upload happens during the post-build review window, so the guard
+ * has to stay open through `approved`. We stop at `approved` because
+ * `package_ready` means the package PDF is already compiled — a new
+ * letter then would desync the bundle.
+ */
+export const RECOMMENDATION_LETTER_UPLOAD_STATUSES = [
+  ...UPLOADABLE_STATUSES,
+  "draft_ready",
+  "in_review",
+  "approved",
+] as const satisfies readonly CaseStatus[];
+
+export function canUploadInStatus(
+  s: CaseStatus,
+  documentType?: DocumentType,
+): boolean {
+  if (documentType === "recommendation_letter") {
+    return (RECOMMENDATION_LETTER_UPLOAD_STATUSES as readonly CaseStatus[]).includes(s);
+  }
   return (UPLOADABLE_STATUSES as readonly CaseStatus[]).includes(s);
 }
 

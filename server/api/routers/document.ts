@@ -65,7 +65,7 @@ export const documentRouter = router({
       }
       // Status guard delegated to `lib/case-status.ts` so adding a new
       // status (or changing the rule) updates a single source of truth.
-      if (!canUploadInStatus(authz.status as CaseStatus)) {
+      if (!canUploadInStatus(authz.status as CaseStatus, input.documentType)) {
         throw new TRPCError({
           code: "CONFLICT",
           message: `uploads locked while status is ${authz.status}`,

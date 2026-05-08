@@ -1353,6 +1353,26 @@ Status: Tracked.
 
 ## Resolved
 
+### #57 — Signed recommendation letter upload blocked in `draft_ready`
+
+Resolved: 2026-05-09.
+
+`canUploadInStatus` (`lib/case-status.ts`) used a single `UPLOADABLE_STATUSES`
+list that ended at `needs_revision`, so attempting to upload a
+recommender's signed PDF after the build threw `CONFLICT: uploads locked
+while status is draft_ready`. The recommendation-letter workflow is
+intrinsically post-build (build emits the template → recommender returns
+signed PDF → attorney uploads), so the guard was wrong for that one
+document type.
+
+Fix: made the guard `documentType`-aware. New
+`RECOMMENDATION_LETTER_UPLOAD_STATUSES` extends the base set with
+`draft_ready`, `in_review`, `approved`. `package_ready` and beyond stay
+closed because the package PDF is already compiled at that point and a
+new letter would desync the bundle. `server/api/routers/document.ts:68`
+forwards `input.documentType` through the guard. Regression tests
+in `tests/unit/case-status.test.ts` lock the new boundaries.
+
 ### #53 — Migration journal was missing `0021_case_recommenders_rls` entry
 
 Resolved: 2026-05-07.
