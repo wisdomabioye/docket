@@ -13,6 +13,39 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #55 — evidence_plan and exhibit_index render as raw JSON in editor + package
+
+Status: Open — product gap, attorneys cannot review or file these
+outputs. Surfaced: 2026-05-08.
+
+Cause: both output types are generated in JSON mode (prompts in
+`server/services/computer/prompts/{evidence-plan,exhibit-index}.ts`)
+and `_shared.ts:138` writes the raw JSON string into
+`case_outputs.content`. The display path (`TiptapEditor` in
+`OutputDetailPanel.tsx:489`, `MarkdownRenderer` in
+`pdf/exhibit-index-page.tsx:50` and the prose branch of
+`pdf/index.tsx:99`) treats `content` as markdown. There is no
+JSON→markdown step. `pdf/exhibit-index-page.tsx`'s own header comment
+admits "Stage 08 spec defers that to Stage 11 polish" — the polish
+never landed.
+
+Why JSON-on-disk is correct: `_context.ts:66` runs
+`EvidencePlanSchema.safeParse(JSON.parse(content))` so downstream
+prompts (personal_statement, petition_letter) can ground prose against
+the structured plan. Switching the storage format to markdown would
+break that grounding contract.
+
+Fix options:
+1. Server-side render-on-read formatter: JSON → markdown when serving
+   to editor + PDF, keep `content` as JSON, make editor read-only for
+   these two types (regenerate is the only mutation path).
+2. Dual-storage (`content` JSON + `display_content` markdown column).
+3. Switch outputs to markdown — risks downstream `.safeParse()` paths.
+4. Build a custom Tiptap structured view + real PDF table layout.
+
+Recommended: option 1. Smallest diff, keeps JSON contract, fixes
+editor + PDF together. Option 4 is the right long-term destination.
+
 ### #54 — Page-number footer dropped to work around react-pdf layout bug
 
 Status: Worked around 2026-05-08. Upstream fix not tracked yet.
