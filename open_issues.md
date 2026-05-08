@@ -13,6 +13,42 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #54 — Page-number footer dropped to work around react-pdf layout bug
+
+Status: Worked around 2026-05-08. Upstream fix not tracked yet.
+Surfaced: 2026-05-08 (user report — "Download Package" 500'd with
+`unsupported number: -1.8382390449784194e+21` from
+`PDFDocument.translate`).
+
+Cause: `@react-pdf/render@4.5.1` corrupts the layout-state of a
+`<Text fixed render={({pageNumber, totalPages}) => ...}>` when it sits
+beside another `<Text fixed>` sibling AND the page body is rendered
+through `MarkdownRenderer` (many sibling `<Text>` nodes — one per
+heading/paragraph) AND the body paginates (≥ ~3 pages). On subsequent
+pages the page-number element's translate matrix is built from
+uninitialized box values; pdfkit's `number()` validator catches the
+~-2^70 result and throws. Each condition alone renders cleanly; the
+combination is what breaks.
+
+Workaround: `DisclaimerFooter` now renders only the disclaimer
+`<Text fixed>`. Page numbers are gone from rendered PDFs until either
+(a) react-pdf releases a fix, (b) we move the page number to a fixed
+top-of-page Text (tested cleanly in repro — doesn't trigger the bug),
+or (c) we precompute "Page N of M" strings up front. Disclaimer carries
+the spec §17 mandate; page numbers were nice-to-have.
+
+Regression test: `tests/integration/pdf-render.test.tsx` —
+"renders multi-page markdown content without pdfkit translate failure".
+Seeds a 40-section markdown body (3+ pages) and asserts the package
+compiles.
+
+Why existing tests didn't catch it: every PDF render fixture uses
+one-paragraph content (e.g. `"I am a researcher."`) so multi-page
+rendering never got exercised. The user hit it the first time a
+package crossed the pagination threshold — not a regression from any
+recent code change; the latent bug shipped with the original
+`DisclaimerFooter` (commit 445b969).
+
 ### #53 — Approve on rec-letter / exhibit-index with pending draft throws ZodError
 
 Status: Resolved 2026-05-08.

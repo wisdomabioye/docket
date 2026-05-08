@@ -377,6 +377,36 @@ describe("compileFullPackagePdf", () => {
 
     expect(bothSize).toBeGreaterThan(approvedSize);
   });
+
+  it("renders multi-page markdown content without pdfkit translate failure (open_issues #54)", async (ctx) => {
+    const d = gate(ctx);
+    // Pre-fix: a paginated MarkdownRenderer body alongside the
+    // DisclaimerFooter's two `<Text fixed>` siblings (disclaimer +
+    // page-number-with-`render`-callback) corrupted react-pdf's layout
+    // and threw `unsupported number: -1.83…e+21` from PDFDocument.translate.
+    // Existing fixtures use one-paragraph content so multi-page never
+    // got exercised. This seeds enough markdown sections to span 3+ pages
+    // and asserts the package compiles.
+    const longContent = Array.from({ length: 40 }, (_, i) =>
+      `## Section ${i + 1}\n\n` + "prose words ".repeat(40),
+    ).join("\n\n");
+    await d.insert(caseOutputs).values({
+      caseId: CASE_ID,
+      outputType: "petition_letter",
+      outputVersion: 1,
+      isCurrent: true,
+      author: "computer",
+      content: longContent,
+      attorneyApproved: true,
+      approvedAt: new Date(),
+      approvedBy: ATTORNEY,
+    });
+    const result = await compileFullPackagePdf({
+      db: d as never,
+      caseId: CASE_ID,
+    });
+    expect(result.bytes).toBeGreaterThan(5000);
+  });
 });
 
 async function seedBase(d: TestDb): Promise<void> {
