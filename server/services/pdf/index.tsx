@@ -3,7 +3,11 @@ import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@/server/db/client";
 import { caseParticipants, cases, users } from "@/server/db/schema";
 import { AppError } from "@/lib/errors";
-import { OUTPUT_TYPE_DISPLAY, readRecommenderName } from "@/lib/output-types";
+import {
+  OUTPUT_TYPE_DISPLAY,
+  isInternalOutputType,
+  readRecommenderName,
+} from "@/lib/output-types";
 import type { OutputType } from "@/server/services/computer/types";
 import { getCurrentOutputs } from "@/server/services/output";
 import {
@@ -276,8 +280,17 @@ export async function compileFullPackagePdf(
     db: args.db,
     caseId: args.caseId,
   });
+  // Defense in depth: even if an internal type somehow ends up
+  // approved, it must never land in the filing package. Hidden from
+  // the outputs grid + detail page (commit A), so this filter would
+  // already be redundant under normal flow — kept so a service-layer
+  // caller can't bypass UI hiding.
   const approved = allCurrent.filter(
-    (o) => o.attorneyApproved && o.content && o.content.trim().length > 0,
+    (o) =>
+      o.attorneyApproved &&
+      o.content &&
+      o.content.trim().length > 0 &&
+      !isInternalOutputType(o.outputType),
   );
   if (approved.length === 0) {
     throw new AppError(

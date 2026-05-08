@@ -23,7 +23,9 @@ const PACKAGE_ORDER: ReadonlyArray<OutputType> = [
   "personal_statement",
   "recommendation_letter_template",
   "criteria_analysis",
-  "evidence_plan",
+  // `evidence_plan` is internal scaffolding (see `INTERNAL_OUTPUT_TYPES`
+  // in `lib/output-types.ts`) and never appears in the package — it's
+  // intentionally absent from this canonical-order list.
   "exhibit_index",
 ];
 

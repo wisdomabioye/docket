@@ -25,6 +25,7 @@ import {
   renderPerOutputPdf,
 } from "@/server/services/pdf";
 import { mdToSafeHtml } from "@/lib/markdown";
+import { isInternalOutputType } from "@/lib/output-types";
 import { rateLimit } from "@/server/services/ratelimit";
 import { inngest } from "@/server/jobs/client";
 import {
@@ -184,6 +185,12 @@ export const outputRouter = router({
       )
       .limit(1);
     if (!row) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "output not found" });
+    }
+    // Internal scaffolding types (e.g. evidence_plan) feed prompt
+    // builders but aren't attorney-facing — return NOT_FOUND rather
+    // than expose the JSON content via a direct-link bookmark.
+    if (isInternalOutputType(row.outputType)) {
       throw new TRPCError({ code: "NOT_FOUND", message: "output not found" });
     }
     return row;

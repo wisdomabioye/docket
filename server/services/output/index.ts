@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
 import {
   caseComputeLedger,
@@ -10,6 +10,7 @@ import { OutputMetadataSchema } from "@/server/db/schema/zod";
 import type { Db } from "@/server/db/client";
 import { AppError } from "@/lib/errors";
 import { mdToSafeHtml } from "@/lib/markdown";
+import { INTERNAL_OUTPUT_TYPES } from "@/lib/output-types";
 import type { OutputType } from "@/server/services/computer/types";
 
 /**
@@ -300,6 +301,14 @@ export async function getCurrentOutputsForList(args: {
         eq(caseOutputs.caseId, args.caseId),
         eq(caseOutputs.isCurrent, true),
         isNull(caseOutputs.deletedAt),
+        // Hide upstream-scaffolding types (e.g. evidence_plan) — they
+        // feed prompt builders but aren't attorney-facing artifacts.
+        // `INTERNAL_OUTPUT_TYPES` is empty-safe; `notInArray` over an
+        // empty array returns SQL `true` so this is a no-op when no
+        // internals are declared.
+        ...(INTERNAL_OUTPUT_TYPES.length > 0
+          ? [notInArray(caseOutputs.outputType, [...INTERNAL_OUTPUT_TYPES])]
+          : []),
       ),
     )
     .orderBy(
@@ -512,6 +521,12 @@ export async function summarizeOutputApprovals(args: {
         inArray(caseOutputs.caseId, [...args.caseIds]),
         eq(caseOutputs.isCurrent, true),
         isNull(caseOutputs.deletedAt),
+        // Mirror `getCurrentOutputsForList` — internals don't count
+        // against the tally, otherwise `total` always exceeds
+        // `approved` and `package.ready` never fires.
+        ...(INTERNAL_OUTPUT_TYPES.length > 0
+          ? [notInArray(caseOutputs.outputType, [...INTERNAL_OUTPUT_TYPES])]
+          : []),
       ),
     )
     .groupBy(caseOutputs.caseId);

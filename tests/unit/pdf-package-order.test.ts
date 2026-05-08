@@ -6,9 +6,13 @@ import { packageKeyFor, packageOrderRank } from "@/server/services/pdf/package";
  * package PDF. Locked behavior:
  *   - Listed types: petition_letter < personal_statement <
  *     recommendation_letter_template < criteria_analysis <
- *     evidence_plan < exhibit_index.
- *   - Unlisted types (`cover_letter`, `form_g1145`, `other`) fall
- *     through to a single sentinel rank, sorted last.
+ *     exhibit_index.
+ *   - `evidence_plan` is internal scaffolding (see
+ *     `INTERNAL_OUTPUT_TYPES`) and intentionally NOT in the canonical
+ *     order — it ranks with the unlisted-fallback sentinel.
+ *   - Unlisted types (`cover_letter`, `form_g1145`, `other`,
+ *     `evidence_plan`) fall through to a single sentinel rank,
+ *     sorted last.
  */
 describe("packageOrderRank", () => {
   it("ranks petition_letter first", () => {
@@ -27,22 +31,19 @@ describe("packageOrderRank", () => {
     );
   });
 
-  it("ranks criteria_analysis before evidence_plan", () => {
+  it("ranks criteria_analysis before exhibit_index", () => {
     expect(packageOrderRank("criteria_analysis")).toBeLessThan(
-      packageOrderRank("evidence_plan"),
-    );
-  });
-
-  it("ranks evidence_plan before exhibit_index", () => {
-    expect(packageOrderRank("evidence_plan")).toBeLessThan(
       packageOrderRank("exhibit_index"),
     );
   });
 
-  it("falls through to a sentinel for unlisted types (cover_letter, form_g1145, other)", () => {
+  it("falls through to a sentinel for unlisted types (cover_letter, form_g1145, other, evidence_plan)", () => {
     const sentinel = packageOrderRank("cover_letter");
     expect(packageOrderRank("form_g1145")).toBe(sentinel);
     expect(packageOrderRank("other")).toBe(sentinel);
+    // `evidence_plan` is internal — it has no canonical rank and
+    // shares the unlisted sentinel.
+    expect(packageOrderRank("evidence_plan")).toBe(sentinel);
     // Unlisted types sort AFTER every listed type.
     expect(sentinel).toBeGreaterThan(packageOrderRank("exhibit_index"));
   });
