@@ -183,6 +183,13 @@
       "when": 1778171898965,
       "tag": "0026_document_types_peer_review_critical_role",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1778335886925,
+      "tag": "0027_lifecycle_columns",
+      "breakpoints": true
     }
   ]
 }

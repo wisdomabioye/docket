@@ -84,12 +84,117 @@ Four sub-decisions, each tested separately:
 
 4. **`package_ready` collapses into `delivered`.** Today `compileFullPackagePdf` does compile + signed URL atomically — splitting one wall-clock event into two transitions is audit noise, not signal. `approved → delivered` directly inside the `downloadPackage` tx. The `package_ready` enum value stays (PG enum value removal is destructive and pointless here), but a unit test asserts no Phase 1 production code writes it. When Phase 2 splits packaging from delivery, we add one branch to the reconciler.
 
+**Concurrency contract.** The reconciler is the only caller of `transitionCase` for post-build edges, but it is not the only thing reading the case row. Specific commitments:
+
+- The reconciler's first statement is `select … from cases where id = $1 for update`. Output-row locks (taken by `setOutputApproval`) are not enough — two concurrent approves on different output rows can otherwise both observe `approved == total`. Locking the case row serializes the post-build edge writes, so each approve either drives the transition or sees it already happened.
+- The reconciler accepts a `Db` typed as the **owner connection** (`type OwnerDb` exported from `server/db/client.ts`), not the user-scoped tx. RLS is bypassed for the tally read by design — app-layer authorization is the gate, exactly as `transitionCase` and `markBuildStarted` do today. A user-scoped tx could underread the tally and produce wrong transitions silently; the type signature forbids it.
+- All lifecycle timestamps (`packageCompiledAt`, `deliveredAt`, `filedAt`) are set with the SQL `now()` expression, not app-side `new Date()`. SQL `now()` is fixed at transaction start and matches `case_events.created_at` exactly, so audit comparisons are byte-equal.
+
+**Status-gated mutations.** Editing or regenerating an output after the case is `delivered` or `filed` would silently desync the package PDF the attorney already downloaded. Without an explicit gate, the per-output mutation commits while the reconciler throws CONFLICT trying to transition `delivered → in_review`. We close that gap server-side, not by lighting up `needs_revision`. The gate is **centralized**, not duplicated — five procedures don't each carry their own check.
+
+`lib/case-status.ts` exports the table and the helper:
+
+```ts
+export const POST_PACKAGE_LOCKED_STATUSES = [
+  "delivered",
+  "filed",
+  "archived",
+] as const satisfies readonly CaseStatus[];
+
+/** Procedures that mutate output content/approval after build. */
+export type LockableOutputMutation =
+  | "output.update"
+  | "output.unapprove"
+  | "output.regenerate"
+  | "output.restoreVersion"
+  | "output.approve";
+
+/**
+ * Throws AppError("CONFLICT") if the case status forbids the
+ * given mutation. `output.approve` is allowed from any non-archived
+ * state — re-approving after a partial backslide is a normal
+ * review path. All others reject from POST_PACKAGE_LOCKED_STATUSES.
+ */
+export function assertOutputMutationAllowed(
+  status: CaseStatus,
+  mutation: LockableOutputMutation,
+): void;
+```
+
+Procedures call `assertOutputMutationAllowed(case.status, "output.update")` once at the top of their body. One helper, one truth source, one error message format. The mirror pattern of the existing `canRequestBuild` / `canEditIntake` / `canUploadInStatus` helpers in the same file — we are not introducing a new gate idiom, we are extending the one that already exists.
+
+The mutation matrix the helper enforces:
+
+| Procedure | Rejected when status ∈ | Reason |
+|---|---|---|
+| `output.update` (autosave + manual save) | `{delivered, filed, archived}` | content drift would invalidate downloaded package PDF |
+| `output.unapprove` | `{delivered, filed, archived}` | approval flip would orphan the case in `delivered` with no legal edge back |
+| `output.regenerate` | `{delivered, filed, archived}` | auto-unapprove inside regenerate has the same orphaning effect |
+| `output.restoreVersion` | `{delivered, filed, archived}` | restore can change `attorneyApproved`; same orphaning concern |
+| `output.approve` | `{archived}` only | re-approving after a partial backslide is a normal review path |
+
+The error message tells the attorney the package is locked and to ask an admin to unmark it (`admin.case.unmarkFiled`) if they need to revise. Phase 1 keeps `needs_revision` deferred (sub-decision 1); the gate is the substitute.
+
+**Reconciler return shape.** `reconcileCaseStatus` returns `{ from: CaseStatus, to: CaseStatus, changed: boolean, allApproved: boolean }`. Callers — specifically `output.approve` — use `allApproved` to drive Inngest notification fan-out (`package.ready` email) without re-reading the tally. The notification fan-out stays in the procedure body where it has always lived; the reconciler hands back the answer. `from === to && changed === false` is a legal no-op return.
+
+**Rules table — single source of truth.** The (current status × trigger × signal) → next status mapping lives in **one** exported constant in `server/services/cases/reconcile-status.ts`. The reconciler iterates it; the unit test imports it; the ADR prose describes it. Three readers, one truth source — no drift surface.
+
+```ts
+// One row per legal transition the reconciler may emit.
+// Reconciler iterates top-to-bottom; first matching row wins.
+// `predicate` evaluates against the signals snapshot the reconciler
+// reads under the case-row lock.
+export const LIFECYCLE_RULES: ReadonlyArray<{
+  from: CaseStatus;
+  trigger: ReconcileTrigger;
+  predicate: (s: LifecycleSignals) => boolean;
+  to: CaseStatus;
+}> = [
+  { from: "draft_ready",     trigger: "output_edited",            predicate: () => true,                      to: "in_review" },
+  { from: "draft_ready",     trigger: "output_approval_changed",  predicate: (s) => s.allApproved,            to: "approved"  },
+  { from: "draft_ready",     trigger: "output_approval_changed",  predicate: (s) => !s.allApproved,           to: "in_review" },
+  { from: "in_review",       trigger: "output_approval_changed",  predicate: (s) => s.allApproved,            to: "approved"  },
+  { from: "approved",        trigger: "output_approval_changed",  predicate: (s) => !s.allApproved,           to: "in_review" }, // Phase 1: NOT needs_revision
+  { from: "approved",        trigger: "package_delivered",        predicate: () => true,                      to: "delivered" },
+  { from: "delivered",       trigger: "filed_marked",             predicate: () => true,                      to: "filed"     },
+  { from: "filed",           trigger: "unfiled",                  predicate: () => true,                      to: "delivered" },
+];
+```
+
+`LifecycleSignals` is the shape the reconciler reads under the case-row lock: `{ allApproved: boolean, hasAnyApproval: boolean, packageCompiledAt: Date | null, deliveredAt: Date | null, filedAt: Date | null }`. The reconciler's body becomes mechanical: lock the case row, read signals, find the first `LIFECYCLE_RULES` row where `from === currentStatus`, `trigger === input.trigger`, and `predicate(signals)` is true; if found, call `transitionCase`. Otherwise return `{changed: false}`.
+
+Why this matters: when Phase 2 lights up `needs_revision` or `package_ready`, the change is a one-line append to `LIFECYCLE_RULES` plus one row in the unit test table. No switch statement to find, no prose to keep in sync.
+
+The unit test in Step 3 imports `LIFECYCLE_RULES` directly and asserts (a) every row maps to a `canTransition`-legal edge in `lib/case-status.ts`, (b) every Phase 1 trigger appears at least once, (c) no row writes a deferred status (`needs_revision`, `package_ready`).
+
+**Trigger union (locked).**
+
+```ts
+type ReconcileTrigger =
+  | "output_approval_changed"   // approve, unapprove, regenerate auto-unapprove
+  | "output_edited"             // updateOutputContent, restoreVersion
+  | "package_delivered"         // downloadPackage success
+  | "filed_marked"              // case.markFiled
+  | "unfiled";                  // admin.case.unmarkFiled
+```
+
+`output_edited` covers both first-edit (driving `draft_ready → in_review`) and version restore. The trigger names are part of the public contract and appear in the unit test table — adding a new trigger is a deliberate, reviewed change.
+
+**Analytics emit point.** A single emit lives at the reconciler's tail: when `changed === true`, emit `case.lifecycle_transition` with `{from, to, trigger, case_id}`. Per-status events (`case.approved`, `case.delivered`, `case.filed`) are NOT emitted separately — the funnel is reconstructed from this one event in PostHog. Notification emails (`package.ready`, etc.) stay where they are: in the calling procedure, driven by the reconciler's return shape. One emit point, one source of truth.
+
+**Idempotency policy.**
+- `case.markFiled` is idempotent on `filedAt`: if `filedAt` is non-null, the procedure returns success without overwriting `filedReceiptNumber`. Receipt-number typos cannot be corrected by re-calling `markFiled` — the attorney must ask an admin to `unmarkFiled` (which clears both columns) and re-mark with the correct value. The audit trail benefits from this: every receipt change has an explicit reverse-and-redo pair in `admin_audit_log`.
+- `output.downloadPackage` is idempotent on `packageCompiledAt` / `deliveredAt`: re-download returns a fresh signed URL without churning the timestamps or emitting another transition.
+- `admin.case.unmarkFiled` writes to `admin_audit_log` **inside the same tx** as the column-clear and reconciler call, **after** the reconciler succeeds. A CONFLICT (admin called from a non-`filed` status) rolls back the audit row along with everything else. The middleware does not pre-write the audit row — the procedure body owns that write.
+
 **Consequences:**
 - One file, one rule book. Adding a new lifecycle trigger means one more arm in the reconciler's switch and one more row in the unit test table.
-- Three new nullable columns on `cases` (`packageCompiledAt`, `deliveredAt`, `filedAt`) plus `filedReceiptNumber`. Additive migration, no backfill.
+- Three new nullable columns on `cases` (`packageCompiledAt`, `deliveredAt`, `filedReceiptNumber`) — `filedAt` already existed on the schema with no writers. Additive migration, no backfill. The partial unique index ships **without** `CONCURRENTLY`: `drizzle-kit migrate` wraps each migration file in a single transaction, and Postgres rejects `CONCURRENTLY` inside a transaction. Phase 1 has zero live attorneys so the brief ACCESS EXCLUSIVE lock is moot; migrating to a non-tx index pipeline before Phase 2 traffic is tracked as `open_issues.md` #23.
 - Phase 1 actively writes 11 of 14 statuses; `needs_revision` and `package_ready` stay reachable but unused. `build_failed` was already correctly handled.
 - A static-analysis-style unit test (`tests/unit/case-status-phase1-writers.test.ts`) greps `server/` and `app/` for `toStatus:` literals and asserts neither deferred status appears, so accidental drift gets caught at PR time.
-- Existing call sites for `output.approve`/`unapprove`/`regenerate` change shape, not count. `summarizeOutputApprovals` moves into the reconciler so the tally read happens in the same tx as the flip (closes the prior race window).
+- Existing call sites for `output.approve`/`unapprove`/`regenerate` change shape, not count. The case-row lock and tally read move into the reconciler; the procedure receives `{changed, allApproved}` and drives notifications from that.
 - The state-machine edge `filed → delivered` is added; `filed` is no longer a near-terminal state, but `archived` remains the only true terminal state.
+- `case.archive` continues to call `transitionCase` directly (not via the reconciler). Archive is a terminal flag, not lifecycle progress, and `* → archived` is legal from every non-archived state. Documented here so a future reader doesn't "fix" what isn't broken.
+- The `filed_receipt_number` partial unique index covers archived rows too. USCIS receipts are globally unique, so this is correct; a typo locked into an archived case would require admin action to release. Acceptable trade for the integrity guarantee.
 
 Linked: `build_stages/08_output_review.md` Session Log entry "2026-05-09 — lifecycle reconciler kickoff".

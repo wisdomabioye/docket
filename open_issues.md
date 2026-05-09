@@ -13,6 +13,21 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #58 — Migration pipeline cannot run `CREATE INDEX CONCURRENTLY`
+
+Status: Deferred to Phase 2 traffic. `drizzle-kit migrate` wraps each
+migration file in a single transaction; Postgres rejects
+`CONCURRENTLY` inside a transaction. Migration `0026_nappy_tenebrous`
+ships the `cases_filed_receipt_number_uniq` partial index without
+`CONCURRENTLY` for that reason. ADR-006 originally claimed the index
+would be concurrent — corrected in the ADR's Consequences section on
+2026-05-09. Phase 1 has zero live attorneys, so the brief ACCESS
+EXCLUSIVE lock is moot. Before Phase 2 traffic we need a non-tx
+migration mechanism (options: a sibling `pnpm db:migrate:concurrent`
+script that runs flagged files outside the migrator, or hand-applied
+SQL with manual journal updates). Recording so the next contributor
+who reaches for `CONCURRENTLY` finds it documented.
+
 ### #56 — Structured-output autosave (drafts) deferred for exhibit_index
 
 Status: Deferred — explicit Save is the only mutation path for now.

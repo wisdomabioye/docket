@@ -122,7 +122,7 @@ describe("case.create", () => {
   it("accepts beneficiaryData on create", async (ctx) => {
     const db = gate(ctx);
     const { id } = await callAs(ALICE).case.create({
-      visaType: "EB-1A",
+      visaType: "O-1A",
       beneficiaryData: { fullName: "Test Bene", nationality: "Canada" },
     });
     const [row] = await db.select().from(cases).where(eq(cases.id, id));
@@ -144,7 +144,7 @@ describe("case.list", () => {
   it("returns only the caller's cases (RLS scopes)", async (ctx) => {
     gate(ctx);
     const { id: aliceCase } = await callAs(ALICE).case.create({ visaType: "O-1A" });
-    await callAs(BOB).case.create({ visaType: "EB-1A" });
+    await callAs(BOB).case.create({ visaType: "O-1A" });
 
     const aliceList = await callAs(ALICE).case.list({});
     expect(aliceList.items.map((c) => c.id)).toEqual([aliceCase]);
@@ -160,9 +160,26 @@ describe("case.list", () => {
   });
 
   it("filters by visaType", async (ctx) => {
-    gate(ctx);
+    const db = gate(ctx);
     await callAs(ALICE).case.create({ visaType: "O-1A" });
-    await callAs(ALICE).case.create({ visaType: "EB-1A" });
+    // case.create is gated to supported visa types (Phase 1: O-1A only).
+    // The list filter still has to work for any DB-enum value, so seed
+    // the EB-1A row directly. Participant row needed for RLS scoping.
+    await db.insert(cases).values({
+      organizationId: ALICE_ORG,
+      visaType: "EB-1A",
+      status: "intake",
+    });
+    const [ebRow] = await db
+      .select({ id: cases.id })
+      .from(cases)
+      .where(eq(cases.visaType, "EB-1A"));
+    await db.insert(caseParticipants).values({
+      caseId: ebRow!.id,
+      userId: ALICE,
+      role: "attorney",
+      isPrimary: true,
+    });
     const list = await callAs(ALICE).case.list({ visaType: ["EB-1A"] });
     expect(list.items.every((c) => c.visaType === "EB-1A")).toBe(true);
   });
@@ -350,9 +367,24 @@ describe("case.completeIntake", () => {
 
   it("EB-1A intake completes with zero recommenders (no minimum configured)", async (ctx) => {
     // EB-1A has no `minRecommenders` in the visa config; the gate
-    // must skip the count check entirely.
+    // must skip the count check entirely. case.create is gated to
+    // O-1A in Phase 1, so seed the EB-1A row directly.
     const db = gate(ctx);
-    const { id } = await callAs(ALICE).case.create({ visaType: "EB-1A" });
+    const [seeded] = await db
+      .insert(cases)
+      .values({
+        organizationId: ALICE_ORG,
+        visaType: "EB-1A",
+        status: "intake",
+      })
+      .returning({ id: cases.id });
+    const id = seeded!.id;
+    await db.insert(caseParticipants).values({
+      caseId: id,
+      userId: ALICE,
+      role: "attorney",
+      isPrimary: true,
+    });
     const [row] = await db
       .select({ rev: cases.rowRevision })
       .from(cases)

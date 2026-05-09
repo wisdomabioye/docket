@@ -92,7 +92,18 @@ export const cases = pgTable(
 
     // Workflow
     reviewSlaHours: integer("review_sla_hours").notNull().default(72),
+    // Lifecycle timestamps (ADR-006). Each is the wall-clock at which
+    // the case crossed the corresponding post-build edge: package compiled
+    // → first signed-URL hand-off → attorney marked filed with USCIS.
+    // Set with SQL `now()` inside the same tx as the reconciler call so
+    // they match `case_events.created_at` byte-equal.
+    packageCompiledAt: timestamp("package_compiled_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     filedAt: timestamp("filed_at", { withTimezone: true }),
+    /** USCIS receipt number captured at mark-filed time. Globally
+     *  unique per the partial index below; nullable for cases not yet
+     *  filed. Connects the case to the real USCIS handler. */
+    filedReceiptNumber: text("filed_receipt_number"),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
 
     // Compute tracking (Stage 07). `bigint` matches the other money
@@ -144,6 +155,13 @@ export const cases = pgTable(
       .where(
         sql`${t.status} in ('building', 'draft_ready', 'needs_revision') and ${t.deletedAt} is null`,
       ),
+    // ADR-006: USCIS receipt numbers are globally unique. Partial
+    // unique on non-null values catches double-paste collisions at the
+    // DB. NULL rows are unconstrained — multiple cases without a
+    // receipt are fine.
+    uniqueIndex("cases_filed_receipt_number_uniq")
+      .on(t.filedReceiptNumber)
+      .where(sql`${t.filedReceiptNumber} is not null`),
   ],
 );
 

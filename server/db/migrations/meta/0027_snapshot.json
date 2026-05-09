@@ -1,6 +1,6 @@
 {
-  "id": "44d97b15-c087-40b1-b0b7-3ca7510d4a47",
-  "prevId": "3c30ecae-a74b-413f-8593-f3bccec9141f",
+  "id": "720549ed-a69f-45ad-9ca8-86834017e60e",
+  "prevId": "44d97b15-c087-40b1-b0b7-3ca7510d4a47",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1770,9 +1770,27 @@
           "notNull": true,
           "default": 72
         },
+        "package_compiled_at": {
+          "name": "package_compiled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "delivered_at": {
+          "name": "delivered_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "filed_at": {
           "name": "filed_at",
           "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "filed_receipt_number": {
+          "name": "filed_receipt_number",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -1919,6 +1937,22 @@
           ],
           "isUnique": false,
           "where": "\"cases\".\"status\" in ('building', 'draft_ready', 'needs_revision') and \"cases\".\"deleted_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "cases_filed_receipt_number_uniq": {
+          "name": "cases_filed_receipt_number_uniq",
+          "columns": [
+            {
+              "expression": "filed_receipt_number",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"cases\".\"filed_receipt_number\" is not null",
           "concurrently": false,
           "method": "btree",
           "with": {}
