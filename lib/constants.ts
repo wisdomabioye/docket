@@ -24,6 +24,18 @@ export const VISA_TYPES = [
 
 export type VisaType = (typeof VISA_TYPES)[number];
 
+// Visa types the build pipeline currently supports end-to-end. The
+// rest stay listed in `VISA_TYPES` (DB enum + admin filters) but are
+// gated in attorney-facing case creation until their criteria
+// taxonomy ships in `lib/visa-criteria.ts`.
+export const SUPPORTED_VISA_TYPES = ["O-1A"] as const satisfies readonly VisaType[];
+
+export type SupportedVisaType = (typeof SUPPORTED_VISA_TYPES)[number];
+
+export function isSupportedVisaType(v: VisaType): v is SupportedVisaType {
+  return (SUPPORTED_VISA_TYPES as readonly VisaType[]).includes(v);
+}
+
 export const ATTORNEY_STATUSES = [
   "pending",
   "active",

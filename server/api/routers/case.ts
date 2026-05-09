@@ -33,6 +33,7 @@ import {
   requiredDocsFor,
   visaCriteriaConfig,
 } from "@/lib/visa-criteria";
+import { isSupportedVisaType } from "@/lib/constants";
 import { rateLimit } from "@/server/services/ratelimit";
 import { emitFromCtx } from "@/server/services/analytics/emit";
 import { inngest } from "@/server/jobs/client";
@@ -96,6 +97,13 @@ export const caseRouter = router({
     .input(CreateInput)
     .mutation(async ({ ctx, input }) => {
       const { db, userId } = ctx;
+
+      if (!isSupportedVisaType(input.visaType)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Support for ${input.visaType} is in development — only O-1A cases can be created today.`,
+        });
+      }
 
       // Determine the caller's organization. Phase 1 each attorney has
       // exactly one org (auto-provisioned at sign-in). Pick the first.

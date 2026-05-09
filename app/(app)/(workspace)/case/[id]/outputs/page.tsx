@@ -125,7 +125,9 @@ export default async function OutputsPage({
         <p className="mt-1 text-sm" style={{ color: "var(--ink-muted)" }}>
           {totalCount > 0
             ? `${totalCount} output${totalCount === 1 ? "" : "s"} · ${approvedCount} approved · ${reviewCount} awaiting review`
-            : "No outputs yet — kick off a build to draft this case."}
+            : caseRow.status === "building"
+              ? "Build in progress — drafts will appear here as Computer finishes each one."
+              : "No outputs yet — kick off a build to draft this case."}
         </p>
       </header>
 
@@ -150,19 +152,26 @@ export default async function OutputsPage({
       ) : null}
 
       {totalCount === 0 ? (
-        <EmptyState
-          title="No outputs drafted yet"
-          subtitle="Run a build to generate the petition letter, personal statement, evidence plan, and exhibit index."
-          cta={
-            <Link
-              href={APP_ROUTES.caseBuild(id)}
-              className="rounded-sm border px-4 py-2 text-sm font-medium"
-              style={{ borderColor: "var(--border-strong)" }}
-            >
-              Go to build →
-            </Link>
-          }
-        />
+        caseRow.status === "building" ? (
+          <EmptyState
+            title="Building drafts…"
+            subtitle="Computer is generating the petition letter, personal statement, evidence plan, and exhibit index. Drafts will appear here as soon as each one is ready — usually within a few minutes."
+          />
+        ) : (
+          <EmptyState
+            title="No outputs drafted yet"
+            subtitle="Run a build to generate the petition letter, personal statement, evidence plan, and exhibit index."
+            cta={
+              <Link
+                href={APP_ROUTES.caseBuild(id)}
+                className="rounded-sm border px-4 py-2 text-sm font-medium"
+                style={{ borderColor: "var(--border-strong)" }}
+              >
+                Go to build →
+              </Link>
+            }
+          />
+        )
       ) : filtered.length === 0 ? (
         <EmptyState
           title={
