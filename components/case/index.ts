@@ -31,3 +31,4 @@ export {
   type PreflightGateView,
 } from "./PreflightCard";
 export { StorageCard, type StorageCardProps } from "./StorageCard";
+export { MarkFiledCard } from "./MarkFiledCard";

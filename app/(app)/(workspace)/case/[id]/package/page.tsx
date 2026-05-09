@@ -5,6 +5,7 @@ import { APP_ROUTES, pageTitle } from "@/config";
 import { Card } from "@/components/ui";
 import {
   CaseHeader,
+  MarkFiledCard,
   PackageAssemblyCard,
   PackageDraftNotice,
   PreflightCard,
@@ -153,6 +154,8 @@ export default async function PackagePage({
           </div>
         </Card>
       ) : null}
+
+      <MarkFiledCard caseId={id} caseStatus={caseRow.status} />
     </div>
   );
 }

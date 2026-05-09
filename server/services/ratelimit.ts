@@ -23,6 +23,7 @@ import { getRedis } from "./redis";
 
 export type RateLimitName =
   | "case.requestBuild"
+  | "case.markFiled"
   | "output.regenerate"
   | "output.saveDraft"
   | "revenue.logFee"
@@ -43,6 +44,12 @@ type LimitConfig = {
 // means the limit lives in one place when that middleware lands.
 const LIMITS: Record<RateLimitName, LimitConfig> = {
   "case.requestBuild": { limit: 10, window: "1 h" },
+  // Stage 08 / ADR-006 — `case.markFiled` is idempotent on `filedAt`,
+  // so spam is harmless after the first success. The limit exists to
+  // catch a pathological retry loop (UI bug or malicious client) and
+  // to bound the receipt-collision dance (each call holds the case
+  // row briefly). 30/hour is generous for one human attorney.
+  "case.markFiled": { limit: 30, window: "1 h" },
   // 20/hr per attorney — Stage 08 review flow lets attorneys regenerate
   // a single output (vs. the whole pipeline). Looser than `case.requestBuild`
   // because per-output regen burns ~1/5th the budget of a full build.

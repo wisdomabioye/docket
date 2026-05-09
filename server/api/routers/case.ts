@@ -24,6 +24,10 @@ import {
   transitionCase,
 } from "@/server/services/cases/transition";
 import { meetsBuildRequirements } from "@/server/services/cases/readiness";
+import {
+  reconcileCaseStatus,
+  type ReconcileResult,
+} from "@/server/services/cases/reconcile-status";
 import { computeCriteriaCoverage } from "@/server/services/cases/criteria-coverage";
 import { computePreflight } from "@/server/services/cases/preflight";
 import { computeRecommenderLetterCoverage } from "@/server/services/cases/recommender-coverage";
@@ -91,6 +95,16 @@ const GetInput = z.object({ caseId: z.uuid() });
 const RequestBuildInput = z.object({ caseId: z.uuid() });
 
 const ReadinessInput = z.object({ caseId: z.uuid() });
+
+const MarkFiledInput = z.object({
+  caseId: z.uuid(),
+  // Optional USCIS receipt (e.g. "MSC2200000001"). The DB has a
+  // partial unique index on non-null values (ADR-006 Step 1), so a
+  // collision across cases surfaces as BAD_REQUEST. Length cap mirrors
+  // USCIS's 13-character format with headroom for typos / future
+  // sub-formats.
+  receiptNumber: z.string().min(1).max(50).optional(),
+});
 
 export const caseRouter = router({
   create: protectedProcedure
@@ -607,6 +621,133 @@ export const caseRouter = router({
       }
 
       return { ok: true as const, eventId: ids[0] ?? null };
+    }),
+
+  /**
+   * ADR-006 Step 6 — attorney marks the case filed with USCIS.
+   *
+   * Strict idempotency: if `filedAt` is already set, returns success
+   * with `alreadyFiled: true` and DOES NOT overwrite either the
+   * timestamp or the receipt number. Receipt-number typos cannot be
+   * corrected via this mutation — the attorney must ask an admin to
+   * call `admin.case.unmarkFiled` and then re-mark.
+   *
+   * Receipt collisions across cases surface as BAD_REQUEST (the
+   * partial unique index in `0027_lifecycle_columns.sql` enforces
+   * global uniqueness).
+   */
+  markFiled: attorneyProcedure
+    .input(MarkFiledInput)
+    .mutation(async ({ ctx, input }) => {
+      const { userId } = ctx;
+
+      const rl = await rateLimit("case.markFiled", userId);
+      if (!rl.success) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Mark-filed rate limit reached (${rl.limit}/hour). Try again later.`,
+        });
+      }
+
+      let alreadyFiled = false;
+      let transition: ReconcileResult;
+      try {
+        const txResult = await ownerDb.transaction(async (tx) => {
+          // Read first under FOR UPDATE so the status gate, the
+          // idempotency check, and the conditional write happen
+          // atomically. A concurrent markFiled call sees the post-flip
+          // state and short-circuits — no duplicate receipt write,
+          // no duplicate transition.
+          const [row] = await tx
+            .select({ status: cases.status, filedAt: cases.filedAt })
+            .from(cases)
+            .where(
+              and(eq(cases.id, input.caseId), isNull(cases.deletedAt)),
+            )
+            .limit(1)
+            .for("update");
+          if (!row) {
+            throw new AppError("NOT_FOUND", `case ${input.caseId} not found`);
+          }
+          // Only `delivered` (forward path) and `filed` (idempotent
+          // re-mark) accept this mutation. The reconciler would
+          // also refuse `* → filed` from anything else, but without
+          // this gate the conditional UPDATE below would still set
+          // `filedAt` on (e.g.) an `approved` case, leaving the row
+          // desynced from its status. Fail fast; no row touched.
+          if (row.status !== "delivered" && row.status !== "filed") {
+            throw new AppError(
+              "CONFLICT",
+              `case is in status ${row.status} — markFiled is only legal from 'delivered' (call downloadPackage first)`,
+            );
+          }
+          const isFirstMark = row.filedAt === null;
+          if (isFirstMark) {
+            try {
+              await tx
+                .update(cases)
+                .set({
+                  filedAt: sql`now()`,
+                  ...(input.receiptNumber !== undefined
+                    ? { filedReceiptNumber: input.receiptNumber }
+                    : {}),
+                })
+                .where(eq(cases.id, input.caseId));
+            } catch (err) {
+              // PG SQLSTATE 23505 — partial unique index on
+              // `filed_receipt_number where … is not null`. Convert
+              // to an attorney-readable BAD_REQUEST so the form
+              // surfaces the message verbatim.
+              if (
+                err &&
+                typeof err === "object" &&
+                "cause" in err &&
+                err.cause &&
+                typeof err.cause === "object" &&
+                "code" in err.cause &&
+                (err.cause as { code: string }).code === "23505"
+              ) {
+                throw new AppError(
+                  "BAD_REQUEST",
+                  "USCIS receipt number is already on file for another case. Double-check the number — receipts are globally unique.",
+                );
+              }
+              throw err;
+            }
+          }
+          const t = await reconcileCaseStatus({
+            tx: tx as unknown as Db,
+            caseId: input.caseId,
+            trigger: "filed_marked",
+            actor: { type: "user", userId },
+          });
+          return { isFirstMark, transition: t };
+        });
+        alreadyFiled = !txResult.isFirstMark;
+        transition = txResult.transition;
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw new TRPCError({
+            code: appErrorToTrpcCode(err.code),
+            message: err.message,
+          });
+        }
+        throw err;
+      }
+
+      if (transition.changed) {
+        emitFromCtx(ctx, {
+          name: "case.lifecycle_transition",
+          properties: {
+            case_id: input.caseId,
+            from_status: transition.from,
+            to_status: transition.to,
+            trigger: "filed_marked",
+          },
+        });
+      }
+
+      return { ok: true as const, alreadyFiled };
     }),
 
   archive: protectedProcedure

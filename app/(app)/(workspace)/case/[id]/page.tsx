@@ -179,6 +179,10 @@ function primaryActionFor(
     case "needs_revision":
     case "approved":
       return { label: "Review drafts →", href: APP_ROUTES.caseOutputs(caseId) };
+    case "delivered":
+      return { label: "Mark as filed →", href: APP_ROUTES.casePackage(caseId) };
+    case "filed":
+      return { label: "View package", href: APP_ROUTES.casePackage(caseId) };
     default:
       return null;
   }
