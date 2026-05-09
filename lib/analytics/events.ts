@@ -35,11 +35,12 @@ export const EVENT_NAMES = [
   "attorney.activated",
   // Signatures (1)
   "signature.signed",
-  // Case lifecycle (4)
+  // Case lifecycle (5)
   "case.created",
   "case.intake_submitted",
   "case.build_requested",
   "case.archived",
+  "case.lifecycle_transition",
   // Documents (2)
   "document.uploaded",
   "document.deleted",
@@ -104,6 +105,29 @@ export type EventPayloads = {
     case_id: string;
     /** Status the case was in when archived — useful for funnel analysis. */
     prior_status: CaseStatus;
+  };
+  /**
+   * Single emit for every post-build status edge driven by the
+   * reconciler (ADR-006). Per-status events (`case.approved`,
+   * `case.delivered`, `case.filed`) are deliberately NOT emitted —
+   * funnel analytics reconstruct state from this one event.
+   *
+   * `from_status`/`to_status` mirrors the existing
+   * `admin.attorney_status_changed` payload convention so PostHog
+   * dashboards can use one column-naming pattern across status events.
+   */
+  "case.lifecycle_transition": {
+    case_id: string;
+    from_status: CaseStatus;
+    to_status: CaseStatus;
+    /** Mirrors the `ReconcileTrigger` union in
+     *  `server/services/cases/reconcile-status.ts`. */
+    trigger:
+      | "output_approval_changed"
+      | "output_edited"
+      | "package_delivered"
+      | "filed_marked"
+      | "unfiled";
   };
   "document.uploaded": {
     case_id: string;

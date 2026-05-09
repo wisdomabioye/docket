@@ -78,6 +78,15 @@ const SAMPLE_EVENT_PAYLOADS: Record<EventName, AnalyticsEvent> = {
     name: "case.archived",
     properties: { case_id: "case-uuid-1", prior_status: "draft_ready" },
   },
+  "case.lifecycle_transition": {
+    name: "case.lifecycle_transition",
+    properties: {
+      case_id: "case-uuid-1",
+      from_status: "approved",
+      to_status: "delivered",
+      trigger: "package_delivered",
+    },
+  },
   "document.uploaded": {
     name: "document.uploaded",
     properties: {

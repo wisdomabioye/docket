@@ -68,7 +68,16 @@ const TRANSITIONS: Readonly<Record<CaseStatus, readonly CaseStatus[]>> = {
   draft_ready: ["in_review", "archived"], // Stage 08
   in_review: ["needs_revision", "approved", "archived"], // Stage 08
   needs_revision: ["in_review", "archived"], // Stage 08
-  approved: ["package_ready", "archived"], // Stage 08
+  // ADR-006: `approved → in_review` is the backslide path when an
+  // attorney unapproves or regenerates an output that was part of a
+  // fully-approved set. Phase 1 routes through `in_review` rather than
+  // lighting up `needs_revision`.
+  // `approved → delivered` collapses the formal `package_ready` step
+  // (Phase 1 sub-decision 4) — `downloadPackage` does compile + URL
+  // hand-off atomically, so the intermediate state has no observable
+  // dwell. Phase 2 will add `package_ready` back when packaging moves
+  // to a background job.
+  approved: ["in_review", "delivered", "package_ready", "archived"],
   package_ready: ["delivered", "archived"], // Stage 08
   delivered: ["filed", "archived"], // Stage 08 / attorney
   // ADR-006: `filed → delivered` is the admin reverse path
