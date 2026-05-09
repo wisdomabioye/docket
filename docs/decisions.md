@@ -61,3 +61,35 @@ Append-only. Status: Accepted unless noted.
 **Decision:** `config/` holds: app identity (`app.config.ts`), page routes (`app.routes.ts`), API endpoints (`api.routes.ts`), validated env (`env.ts`, `public-env.ts`). Nothing else. Business limits live next to the service that owns them. UI copy co-locates with the component, or in `lib/messages.ts` if shared. Brand/CSS tokens live in `app/globals.css` `@theme`.
 
 **Consequences:** `config/` stays small and obviously-scoped. Adding a new constant requires asking "what service owns this?" instead of dumping into a shared bucket.
+
+---
+
+## ADR-006 — Phase 1 case lifecycle reconciler
+
+**Date:** 2026-05-09
+
+**Context:** `caseStatusEnum` declares 14 statuses and `lib/case-status.ts` defines the legal edges between them, but only the pre-build half is wired up. A case reaches `draft_ready` and stays there forever — `in_review`, `needs_revision`, `approved`, `package_ready`, `delivered`, and `filed` are reachable in the state machine yet have no production writer. There is no way to mark a case `filed`. Output approvals flip `caseOutputs.attorneyApproved` per row but never touch `cases.status`. `downloadPackage` compiles a PDF and returns a signed URL with no status side-effect.
+
+The naive fix — write status inline at each mutation — duplicates "is everything approved? has the package been compiled?" logic across `output.approve`, `output.unapprove`, `output.regenerate`, `output.downloadPackage`, and a future `case.markFiled`. That is the DRY violation the user explicitly asked to avoid.
+
+**Decision:** A single reconciler — `reconcileCaseStatus({tx, caseId, trigger})` in `server/services/cases/reconcile-status.ts` — owns every post-build transition. Mutations record their primary fact in their own tx, then call the reconciler. The reconciler reads current status + observable signals (approval tally, `packageCompiledAt`, `deliveredAt`, `filedAt`) and emits at most one transition through the existing `transitionCase()` helper. Same pattern `server/services/cases/readiness.ts` already uses for the pre-build half.
+
+Four sub-decisions, each tested separately:
+
+1. **`needs_revision` deferred to Phase 2.** When an attorney unapproves or edits an already-`approved` row, fall back to `in_review`, not `needs_revision`. Phase 1 has one actor on each case (the solo attorney), so the "case backslid" signal has no second consumer. The legal edges (`approved ↔ needs_revision`, `needs_revision ↔ in_review`) stay in `TRANSITIONS` so Phase 2 can light the status up by adding one branch to the reconciler. A unit test asserts no Phase 1 production code writes `needs_revision`.
+
+2. **`unmark_filed` is admin-only.** A `case.unmarkFiled` mutation lives on the admin router, not the attorney router. Reason: an unused mutation in the attorney router invites accidental UI wiring; admin-only makes the audience explicit and gets `admin_audit_log` writes for free via the admin procedure middleware. The reverse edge `filed → delivered` is added to `TRANSITIONS`.
+
+3. **`filedReceiptNumber` is captured at mark-filed time.** Stored on `cases` with a partial unique index (`where filed_receipt_number is not null`) so double-paste collisions surface at the DB level. Optional input on `case.markFiled`; nullable column; no backfill.
+
+4. **`package_ready` collapses into `delivered`.** Today `compileFullPackagePdf` does compile + signed URL atomically — splitting one wall-clock event into two transitions is audit noise, not signal. `approved → delivered` directly inside the `downloadPackage` tx. The `package_ready` enum value stays (PG enum value removal is destructive and pointless here), but a unit test asserts no Phase 1 production code writes it. When Phase 2 splits packaging from delivery, we add one branch to the reconciler.
+
+**Consequences:**
+- One file, one rule book. Adding a new lifecycle trigger means one more arm in the reconciler's switch and one more row in the unit test table.
+- Three new nullable columns on `cases` (`packageCompiledAt`, `deliveredAt`, `filedAt`) plus `filedReceiptNumber`. Additive migration, no backfill.
+- Phase 1 actively writes 11 of 14 statuses; `needs_revision` and `package_ready` stay reachable but unused. `build_failed` was already correctly handled.
+- A static-analysis-style unit test (`tests/unit/case-status-phase1-writers.test.ts`) greps `server/` and `app/` for `toStatus:` literals and asserts neither deferred status appears, so accidental drift gets caught at PR time.
+- Existing call sites for `output.approve`/`unapprove`/`regenerate` change shape, not count. `summarizeOutputApprovals` moves into the reconciler so the tally read happens in the same tx as the flip (closes the prior race window).
+- The state-machine edge `filed → delivered` is added; `filed` is no longer a near-terminal state, but `archived` remains the only true terminal state.
+
+Linked: `build_stages/08_output_review.md` Session Log entry "2026-05-09 — lifecycle reconciler kickoff".
