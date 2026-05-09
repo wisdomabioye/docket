@@ -1,7 +1,12 @@
 import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { z } from "zod";
-import { caseDocuments, caseOutputs, outputTypeEnum } from "@/server/db/schema";
+import {
+  caseDocuments,
+  caseOutputs,
+  cases,
+  outputTypeEnum,
+} from "@/server/db/schema";
 import type { OutputType } from "@/server/services/computer/types";
 import { db as ownerDb, type Db } from "@/server/db/client";
 import {
@@ -38,6 +43,16 @@ import {
 } from "@/server/services/email/notifications";
 import { AppError, appErrorToTrpcCode } from "@/lib/errors";
 import { emitFromCtx } from "@/server/services/analytics/emit";
+import {
+  assertOutputMutationAllowed,
+  type CaseStatus,
+  type LockableOutputMutation,
+} from "@/lib/case-status";
+import {
+  reconcileCaseStatus,
+  type ReconcileResult,
+  type ReconcileTrigger,
+} from "@/server/services/cases/reconcile-status";
 
 /**
  * Stage 08 output review router. Every mutation goes through
@@ -140,9 +155,12 @@ function rethrowAsTrpc(err: unknown): never {
 }
 
 /** RLS gate: confirms the caller can see the output via ctx.db.
- *  Returns the caseId (needed by mutations that pivot to ownerDb).
+ *  Returns the caseId (needed by mutations that pivot to ownerDb)
+ *  plus `caseStatus` for the post-package mutation lock check.
  *  NOT_FOUND covers both "doesn't exist" and "not your case" so
- *  there's no existence oracle. */
+ *  there's no existence oracle. RLS on `cases` and `case_outputs`
+ *  share the same `user_in_case` participant policy (`0005_rls.sql`),
+ *  so the JOIN is RLS-safe — same gate, no leakage. */
 async function gateOutputAccess(args: {
   ctxDb: Db;
   outputId: string;
@@ -150,14 +168,17 @@ async function gateOutputAccess(args: {
   caseId: string;
   outputType: OutputType;
   subgroupKey: string | null;
+  caseStatus: CaseStatus;
 }> {
   const [row] = await args.ctxDb
     .select({
       caseId: caseOutputs.caseId,
       outputType: caseOutputs.outputType,
       subgroupKey: caseOutputs.subgroupKey,
+      caseStatus: cases.status,
     })
     .from(caseOutputs)
+    .innerJoin(cases, eq(cases.id, caseOutputs.caseId))
     .where(
       and(eq(caseOutputs.id, args.outputId), isNull(caseOutputs.deletedAt)),
     )
@@ -166,6 +187,42 @@ async function gateOutputAccess(args: {
     throw new TRPCError({ code: "NOT_FOUND", message: "output not found" });
   }
   return row;
+}
+
+/** Run `assertOutputMutationAllowed` and convert any AppError it
+ *  throws into a TRPCError via the existing `rethrowAsTrpc` helper.
+ *  Single conversion path for AppError → TRPCError across the file. */
+function assertMutation(
+  status: CaseStatus,
+  mutation: LockableOutputMutation,
+): void {
+  try {
+    assertOutputMutationAllowed(status, mutation);
+  } catch (err) {
+    rethrowAsTrpc(err);
+  }
+}
+
+/** Post-tx analytics emit for a reconciler result. Fire-and-forget
+ *  — analytics latency must not surface to the caller. Only emits
+ *  on real transitions (`changed === true`); same-status no-ops are
+ *  silent. Mirrors the `emitFromCtx` convention. */
+function emitLifecycleTransition(
+  ctx: Parameters<typeof emitFromCtx>[0],
+  caseId: string,
+  trigger: ReconcileTrigger,
+  result: ReconcileResult,
+): void {
+  if (!result.changed) return;
+  emitFromCtx(ctx, {
+    name: "case.lifecycle_transition",
+    properties: {
+      case_id: caseId,
+      from_status: result.from,
+      to_status: result.to,
+      trigger,
+    },
+  });
 }
 
 export const outputRouter = router({
@@ -271,6 +328,11 @@ export const outputRouter = router({
         ctxDb: ctx.db,
         outputId: input.outputId,
       });
+      // saveDraft is conceptually a content edit — reuse the
+      // `output.update` lock target. Same blast radius (typing into
+      // a doomed buffer on a delivered case) and same error message
+      // shape ("Cannot update outputs on a delivered case…").
+      assertMutation(access.caseStatus, "output.update");
       // Defense in depth: structured-output types (exhibit_index)
       // store JSON in `content`. A markdown draft from a stale client
       // would silently corrupt the JSON contract that downstream
@@ -283,17 +345,29 @@ export const outputRouter = router({
         });
       }
       try {
-        const r = await ownerDb.transaction(async (tx) =>
-          saveOutputDraft({
+        const { saved, transition } = await ownerDb.transaction(async (tx) => {
+          const r = await saveOutputDraft({
             tx: tx as unknown as Db,
             outputId: input.outputId,
             content: input.content,
-          }),
-        );
+          });
+          // Trigger `output_edited`: first autosave on a `draft_ready`
+          // case advances it to `in_review`. Subsequent autosaves
+          // no-op in the reconciler (no rule for `in_review +
+          // output_edited`). The tally is unchanged — drafts don't
+          // touch `attorneyApproved`.
+          const t = await reconcileCaseStatus({
+            tx: tx as unknown as Db,
+            caseId: access.caseId,
+            trigger: "output_edited",
+            actor: { type: "user", userId },
+          });
+          return { saved: r.saved, transition: t };
+        });
         // Emit only when the service actually wrote — `saved=false`
         // means the draft was identical to the prior write (idempotent
         // no-op), so emitting it would inflate the autosave count.
-        if (r.saved) {
+        if (saved) {
           emitFromCtx(ctx, {
             name: "output.draft_saved",
             properties: {
@@ -303,7 +377,8 @@ export const outputRouter = router({
             },
           });
         }
-        return { ok: true as const, saved: r.saved };
+        emitLifecycleTransition(ctx, access.caseId, "output_edited", transition);
+        return { ok: true as const, saved };
       } catch (err) {
         rethrowAsTrpc(err);
       }
@@ -339,6 +414,7 @@ export const outputRouter = router({
         ctxDb: ctx.db,
         outputId: input.outputId,
       });
+      assertMutation(access.caseStatus, "output.update");
       // Reject markdown commits on structured types — they go through
       // `output.updateStructured` so the JSON contract that
       // `_context.ts` depends on is preserved.
@@ -351,8 +427,8 @@ export const outputRouter = router({
       }
 
       try {
-        const result = await ownerDb.transaction(async (tx) =>
-          updateOutputContent({
+        const { result, transition } = await ownerDb.transaction(async (tx) => {
+          const r = await updateOutputContent({
             tx: tx as unknown as Db,
             outputId: input.outputId,
             content: input.content,
@@ -362,8 +438,19 @@ export const outputRouter = router({
             // the editor's schema).
             contentHtml: mdToSafeHtml(input.content),
             attorneyId: userId,
-          }),
-        );
+          });
+          // Trigger `output_edited`: drives `draft_ready → in_review`
+          // on first save. `updateOutputContent` already rejects
+          // approved parents server-side (CONFLICT), so the tally is
+          // unchanged here — no other lifecycle edges fire.
+          const t = await reconcileCaseStatus({
+            tx: tx as unknown as Db,
+            caseId: access.caseId,
+            trigger: "output_edited",
+            actor: { type: "user", userId },
+          });
+          return { result: r, transition: t };
+        });
         emitFromCtx(ctx, {
           name: "output.version_saved",
           properties: {
@@ -372,6 +459,7 @@ export const outputRouter = router({
             version: result.outputVersion,
           },
         });
+        emitLifecycleTransition(ctx, access.caseId, "output_edited", transition);
         return {
           ok: true as const,
           outputId: result.outputId,
@@ -399,6 +487,7 @@ export const outputRouter = router({
         ctxDb: ctx.db,
         outputId: input.outputId,
       });
+      assertMutation(access.caseStatus, "output.update");
       // Defense in depth: cross-check that the input's discriminator
       // matches the row's actual `output_type`. Without this an
       // attacker who mints an `exhibit_index` payload but supplies the
@@ -443,8 +532,8 @@ export const outputRouter = router({
       }
       const serialized = JSON.stringify(input.payload);
       try {
-        const result = await ownerDb.transaction(async (tx) =>
-          updateOutputContent({
+        const { result, transition } = await ownerDb.transaction(async (tx) => {
+          const r = await updateOutputContent({
             tx: tx as unknown as Db,
             outputId: input.outputId,
             content: serialized,
@@ -454,8 +543,15 @@ export const outputRouter = router({
             // with "no pre-rendered HTML for this output".
             contentHtml: null,
             attorneyId: userId,
-          }),
-        );
+          });
+          const t = await reconcileCaseStatus({
+            tx: tx as unknown as Db,
+            caseId: access.caseId,
+            trigger: "output_edited",
+            actor: { type: "user", userId },
+          });
+          return { result: r, transition: t };
+        });
         emitFromCtx(ctx, {
           name: "output.version_saved",
           properties: {
@@ -464,6 +560,7 @@ export const outputRouter = router({
             version: result.outputVersion,
           },
         });
+        emitLifecycleTransition(ctx, access.caseId, "output_edited", transition);
         return {
           ok: true as const,
           outputId: result.outputId,
@@ -482,6 +579,10 @@ export const outputRouter = router({
         ctxDb: ctx.db,
         outputId: input.outputId,
       });
+      // Approve is the one mutation excluded from the {delivered, filed}
+      // lock — re-approving after a partial backslide is a normal
+      // review path. Only `archived` rejects.
+      assertMutation(access.caseStatus, "output.approve");
 
       try {
         // `approveOutput` flushes any pending draft into a new version
@@ -489,14 +590,27 @@ export const outputRouter = router({
         // always lands on what the user sees on screen — not on a
         // stale baseline that the autosave hadn't yet committed
         // (W3 + W4.3 contract).
-        const result = await ownerDb.transaction(async (tx) =>
-          approveOutput({
+        const { result, transition } = await ownerDb.transaction(async (tx) => {
+          const r = await approveOutput({
             tx: tx as unknown as Db,
             outputId: input.outputId,
             attorneyId: userId,
             ...(input.notes !== undefined ? { notes: input.notes } : {}),
-          }),
-        );
+          });
+          // Reconciler reads the post-flip tally inside the same tx
+          // (case-row FOR UPDATE serializes concurrent approves) so
+          // the `allApproved` answer can't go stale between flip and
+          // notification fan-out — closes the prior race window where
+          // two parallel approves could each read the post-flip state
+          // independently.
+          const t = await reconcileCaseStatus({
+            tx: tx as unknown as Db,
+            caseId: access.caseId,
+            trigger: "output_approval_changed",
+            actor: { type: "user", userId },
+          });
+          return { result: r, transition: t };
+        });
         emitFromCtx(ctx, {
           name: "output.approved",
           properties: {
@@ -507,28 +621,28 @@ export const outputRouter = router({
             draft_flushed: result.draftFlushed,
           },
         });
+        emitLifecycleTransition(
+          ctx,
+          access.caseId,
+          "output_approval_changed",
+          transition,
+        );
 
         // Notification fan-out. Two events may fire:
         //   1. `output.approved` — always, one per approve click.
-        //   2. `package.ready` — only when this approval flips the case
-        //      to "every current output approved". Re-firing on a
+        //   2. `package.ready` — only when the post-flip tally is
+        //      "every current output approved". Re-firing on a
         //      subsequent unapprove → re-approve is acceptable: each
-        //      event represents a fresh "package is whole again" state
-        //      and the email points at the live download URL.
-        const approvals = await summarizeOutputApprovals({
-          db: ctx.db,
-          caseIds: [access.caseId],
-        });
-        const tally = approvals.get(access.caseId);
-        const allApproved =
-          tally !== undefined && tally.total > 0 && tally.approved === tally.total;
+        //      event represents a fresh "package is whole again" state.
+        // `transition.allApproved` is the answer the reconciler read
+        // under the case-row lock — no need for a second tally query.
         const events: Parameters<typeof inngest.send>[0] = [
           {
             name: outputApprovedNotificationEvent.name,
             data: { caseId: access.caseId, outputId: result.approvedOutputId },
           },
         ];
-        if (allApproved) {
+        if (transition.allApproved) {
           events.push({
             name: packageReadyNotificationEvent.name,
             data: { caseId: access.caseId },
@@ -560,16 +674,36 @@ export const outputRouter = router({
     .input(UnapproveInput)
     .mutation(async ({ ctx, input }) => {
       const { userId } = ctx;
-      await gateOutputAccess({ ctxDb: ctx.db, outputId: input.outputId });
+      const access = await gateOutputAccess({
+        ctxDb: ctx.db,
+        outputId: input.outputId,
+      });
+      assertMutation(access.caseStatus, "output.unapprove");
 
       try {
-        await ownerDb.transaction(async (tx) =>
-          setOutputApproval({
+        const transition = await ownerDb.transaction(async (tx) => {
+          await setOutputApproval({
             tx: tx as unknown as Db,
             outputId: input.outputId,
             approved: false,
             attorneyId: userId,
-          }),
+          });
+          // Trigger `output_approval_changed`: drives the
+          // `approved → in_review` backslide via the reconciler's
+          // `!allApproved` predicate. From `in_review` the rule is
+          // a no-op (already in the right place).
+          return reconcileCaseStatus({
+            tx: tx as unknown as Db,
+            caseId: access.caseId,
+            trigger: "output_approval_changed",
+            actor: { type: "user", userId },
+          });
+        });
+        emitLifecycleTransition(
+          ctx,
+          access.caseId,
+          "output_approval_changed",
+          transition,
         );
         return { ok: true as const };
       } catch (err) {
@@ -594,22 +728,36 @@ export const outputRouter = router({
         ctxDb: ctx.db,
         outputId: input.outputId,
       });
+      assertMutation(access.caseStatus, "output.regenerate");
 
       // Auto-un-approve in the SAME tx as the event-emit-trigger so the
       // approval state can't go stale during the regen window. Idempotent
       // on already-unapproved rows (service returns `changed: false`).
+      let transition: ReconcileResult;
       try {
-        await ownerDb.transaction(async (tx) =>
-          setOutputApproval({
+        transition = await ownerDb.transaction(async (tx) => {
+          await setOutputApproval({
             tx: tx as unknown as Db,
             outputId: input.outputId,
             approved: false,
             attorneyId: userId,
-          }),
-        );
+          });
+          return reconcileCaseStatus({
+            tx: tx as unknown as Db,
+            caseId: access.caseId,
+            trigger: "output_approval_changed",
+            actor: { type: "user", userId },
+          });
+        });
       } catch (err) {
         rethrowAsTrpc(err);
       }
+      emitLifecycleTransition(
+        ctx,
+        access.caseId,
+        "output_approval_changed",
+        transition,
+      );
 
       // Emit AFTER the unapprove commits — order matters: if emit
       // failed before the unapprove, the case would have a stale-
@@ -632,18 +780,38 @@ export const outputRouter = router({
     .input(RestoreVersionInput)
     .mutation(async ({ ctx, input }) => {
       const { userId } = ctx;
-      await gateOutputAccess({
+      const access = await gateOutputAccess({
         ctxDb: ctx.db,
         outputId: input.fromVersionId,
       });
+      assertMutation(access.caseStatus, "output.restoreVersion");
 
       try {
-        const result = await ownerDb.transaction(async (tx) =>
-          restoreOutputVersion({
+        const { result, transition } = await ownerDb.transaction(async (tx) => {
+          const r = await restoreOutputVersion({
             tx: tx as unknown as Db,
             fromVersionId: input.fromVersionId,
             attorneyId: userId,
-          }),
+          });
+          // Trigger `output_approval_changed` (NOT `output_edited`):
+          // restoreVersion calls `saveOutputVersion` which inserts
+          // a new current row with `attorneyApproved=false` by
+          // default. Restoring from `approved` therefore drops the
+          // tally; only `output_approval_changed`'s rules catch the
+          // backslide. ADR-006 Step 4 amendment.
+          const t = await reconcileCaseStatus({
+            tx: tx as unknown as Db,
+            caseId: access.caseId,
+            trigger: "output_approval_changed",
+            actor: { type: "user", userId },
+          });
+          return { result: r, transition: t };
+        });
+        emitLifecycleTransition(
+          ctx,
+          access.caseId,
+          "output_approval_changed",
+          transition,
         );
         return {
           ok: true as const,

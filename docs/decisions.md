@@ -171,14 +171,18 @@ The unit test in Step 3 imports `LIFECYCLE_RULES` directly and asserts (a) every
 
 ```ts
 type ReconcileTrigger =
-  | "output_approval_changed"   // approve, unapprove, regenerate auto-unapprove
-  | "output_edited"             // updateOutputContent, restoreVersion
+  | "output_approval_changed"   // approve, unapprove, regenerate auto-unapprove, restoreVersion
+  | "output_edited"             // updateOutputContent (incl. updateStructured), saveDraft
   | "package_delivered"         // downloadPackage success
   | "filed_marked"              // case.markFiled
   | "unfiled";                  // admin.case.unmarkFiled
 ```
 
-`output_edited` covers both first-edit (driving `draft_ready → in_review`) and version restore. The trigger names are part of the public contract and appear in the unit test table — adding a new trigger is a deliberate, reviewed change.
+`output_edited` covers content writes that don't change the approval tally — `updateOutputContent` is gated server-side to require an unapproved parent, and `saveDraft` only writes ephemeral `draft_content` in place. Either way the tally is unchanged; the only effect is driving `draft_ready → in_review` on first interaction.
+
+**Step 4 amendment (2026-05-09):** `restoreVersion` was originally listed under `output_edited`; reading `restoreOutputVersion` showed it calls `saveOutputVersion` which inserts a new current row with `attorneyApproved` defaulting to `false`. Restoring from `approved` therefore drops the tally and silently desyncs the case status if `output_edited` is used (no rule matches `approved + output_edited`). `restoreVersion` now fires `output_approval_changed` so the tally-driven backslide rule (`approved + output_approval_changed where !allApproved → in_review`) catches it. Functionally equivalent on `draft_ready`/`in_review`, correct on `approved`.
+
+The trigger names are part of the public contract and appear in the unit test table — adding a new trigger is a deliberate, reviewed change.
 
 **Analytics emit point.** A single emit lives at the reconciler's tail: when `changed === true`, emit `case.lifecycle_transition` with `{from, to, trigger, case_id}`. Per-status events (`case.approved`, `case.delivered`, `case.filed`) are NOT emitted separately — the funnel is reconstructed from this one event in PostHog. Notification emails (`package.ready`, etc.) stay where they are: in the calling procedure, driven by the reconciler's return shape. One emit point, one source of truth.
 
