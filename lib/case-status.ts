@@ -6,18 +6,28 @@
  * (`server/services/cases/transition.ts`) enforces it on every status
  * write — Postgres can't.
  *
- * Stage 05 ships the `intake → documents_pending` transition. Other
- * stages (06 extraction, 07 build, 08 review/package, plus admin
- * archival) plug into the same map by adding edges below — there is no
- * other code path that may mutate `cases.status`.
+ * Two writers cover the full lifecycle:
+ *   - Pre-build edges: `server/services/cases/readiness.ts` reconciler
+ *     drives `documents_pending → extracting → ready_to_build`.
+ *   - Post-build edges: `server/services/cases/reconcile-status.ts`
+ *     reconciler (ADR-006) drives `draft_ready → in_review → approved
+ *     → delivered → filed` plus the admin reverse `filed → delivered`.
  *
- * Terminal states (no outgoing edges): `archived`. `filed` only goes to
- * `archived` (admin action).
+ * `case.requestBuild` and the build job own `building` / `build_failed`
+ * / `draft_ready` directly. `case.archive` writes `* → archived`
+ * directly — archive is a terminal flag, not lifecycle progress.
+ *
+ * Terminal states (no outgoing edges): `archived` only. `filed →
+ * delivered` is the admin reverse path (ADR-006); `filed → archived` is
+ * the soft-delete path.
  *
  * Illegal transitions throw `AppError("CONFLICT", ...)` from the
- * transition service.
+ * transition service. Status-gated mutations use `assertOutputMutationAllowed`
+ * (below) to reject with the same code at procedure entry, before any
+ * write commits.
  */
 
+import { AppError } from "@/lib/errors";
 import type { caseStatusEnum, documentTypeEnum } from "@/server/db/schema/enums";
 
 export type CaseStatus = (typeof caseStatusEnum.enumValues)[number];
@@ -61,7 +71,10 @@ const TRANSITIONS: Readonly<Record<CaseStatus, readonly CaseStatus[]>> = {
   approved: ["package_ready", "archived"], // Stage 08
   package_ready: ["delivered", "archived"], // Stage 08
   delivered: ["filed", "archived"], // Stage 08 / attorney
-  filed: ["archived"], // admin
+  // ADR-006: `filed → delivered` is the admin reverse path
+  // (`admin.case.unmarkFiled`). No attorney UI exposes it — the reverse
+  // is operational-only and audited via `admin_audit_log`.
+  filed: ["delivered", "archived"],
   archived: [], // terminal
 };
 
@@ -152,4 +165,78 @@ export function canEditIntake(s: CaseStatus): boolean {
 export function formatStatus(s: CaseStatus): string {
   const spaced = s.replace(/_/g, " ");
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * Statuses where the package PDF has been delivered (or beyond) and
+ * editing/regenerating an output would silently desync the bundle the
+ * attorney already downloaded. ADR-006 closes that gap server-side
+ * via {@link assertOutputMutationAllowed}; the lockset is the
+ * single source of truth so the gate doesn't get duplicated across
+ * five procedures.
+ */
+export const POST_PACKAGE_LOCKED_STATUSES = [
+  "delivered",
+  "filed",
+  "archived",
+] as const satisfies readonly CaseStatus[];
+
+/**
+ * Output-mutation procedures that participate in the post-package
+ * lockset. `output.approve` is the exception: re-approving after a
+ * partial backslide is a normal review path, so it's only blocked
+ * from `archived`.
+ */
+export type LockableOutputMutation =
+  | "output.update"
+  | "output.unapprove"
+  | "output.regenerate"
+  | "output.restoreVersion"
+  | "output.approve";
+
+/**
+ * Throws `AppError("CONFLICT", ...)` if the case status forbids the
+ * given output mutation. Mirrors the existing `canRequestBuild` /
+ * `canEditIntake` / `canUploadInStatus` helpers — call once at the top
+ * of each procedure body to centralize the gate.
+ *
+ * Lockset matrix:
+ *   - `output.update` / `output.unapprove` / `output.regenerate` /
+ *     `output.restoreVersion`: rejected from
+ *     {@link POST_PACKAGE_LOCKED_STATUSES} (`delivered`, `filed`,
+ *     `archived`).
+ *   - `output.approve`: rejected only from `archived`. Re-approval
+ *     after an unapprove or regenerate is a normal review path.
+ *
+ * The error message points the attorney at `admin.case.unmarkFiled`
+ * for the `delivered` / `filed` cases — the operational reverse that
+ * unlocks the case for further edits.
+ */
+export function assertOutputMutationAllowed(
+  status: CaseStatus,
+  mutation: LockableOutputMutation,
+): void {
+  if (mutation === "output.approve") {
+    if (status === "archived") {
+      throw new AppError(
+        "CONFLICT",
+        "Cannot approve outputs on an archived case.",
+      );
+    }
+    return;
+  }
+  if (
+    (POST_PACKAGE_LOCKED_STATUSES as readonly CaseStatus[]).includes(status)
+  ) {
+    if (status === "archived") {
+      throw new AppError(
+        "CONFLICT",
+        `Cannot ${mutation.replace("output.", "")} outputs on an archived case.`,
+      );
+    }
+    throw new AppError(
+      "CONFLICT",
+      `Case is ${status} — the package PDF has already been delivered. Ask an admin to unmark it (admin.case.unmarkFiled) before editing outputs.`,
+    );
+  }
 }

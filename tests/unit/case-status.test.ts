@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { AppError } from "@/lib/errors";
 import {
   CASE_STATUSES,
+  POST_PACKAGE_LOCKED_STATUSES,
+  assertOutputMutationAllowed,
   canTransition,
   canUploadInStatus,
   legalNextStatuses,
   type CaseStatus,
+  type LockableOutputMutation,
 } from "@/lib/case-status";
 
 /**
@@ -35,8 +39,16 @@ describe("case status state machine", () => {
     expect(canTransition("intake", "filed")).toBe(false);
   });
 
-  it("filed → archived is the only legal exit from filed", () => {
-    expect(legalNextStatuses("filed")).toEqual(["archived"]);
+  it("filed → delivered + archived are the legal exits from filed (ADR-006)", () => {
+    expect(legalNextStatuses("filed")).toEqual(["delivered", "archived"]);
+    expect(canTransition("filed", "delivered")).toBe(true);
+    expect(canTransition("filed", "archived")).toBe(true);
+  });
+
+  it("filed → in_review is still illegal (no shortcut around delivered)", () => {
+    expect(canTransition("filed", "in_review")).toBe(false);
+    expect(canTransition("filed", "approved")).toBe(false);
+    expect(canTransition("filed", "draft_ready")).toBe(false);
   });
 
   it("archived is terminal — no outgoing edges", () => {
@@ -113,5 +125,87 @@ describe("case status state machine", () => {
         expect(edges.length).toBeGreaterThan(0);
       }
     }
+  });
+
+  describe("assertOutputMutationAllowed (ADR-006 lockset)", () => {
+    const LOCKABLE: readonly LockableOutputMutation[] = [
+      "output.update",
+      "output.unapprove",
+      "output.regenerate",
+      "output.restoreVersion",
+    ] as const;
+
+    it("POST_PACKAGE_LOCKED_STATUSES is exactly delivered/filed/archived", () => {
+      expect([...POST_PACKAGE_LOCKED_STATUSES]).toEqual([
+        "delivered",
+        "filed",
+        "archived",
+      ]);
+    });
+
+    it("rejects edit/unapprove/regenerate/restore from delivered + filed + archived", () => {
+      for (const mutation of LOCKABLE) {
+        for (const status of POST_PACKAGE_LOCKED_STATUSES) {
+          expect(() =>
+            assertOutputMutationAllowed(status, mutation),
+          ).toThrow(AppError);
+        }
+      }
+    });
+
+    it("permits edit/unapprove/regenerate/restore from every other status", () => {
+      const allowed = CASE_STATUSES.filter(
+        (s) =>
+          !(POST_PACKAGE_LOCKED_STATUSES as readonly CaseStatus[]).includes(s),
+      );
+      for (const mutation of LOCKABLE) {
+        for (const status of allowed) {
+          expect(() =>
+            assertOutputMutationAllowed(status, mutation),
+          ).not.toThrow();
+        }
+      }
+    });
+
+    it("approve is rejected only from archived (re-approval is a normal review path)", () => {
+      expect(() =>
+        assertOutputMutationAllowed("archived", "output.approve"),
+      ).toThrow(AppError);
+      // Permitted everywhere else, including delivered + filed where edits
+      // would be rejected. Approving an already-approved row is idempotent
+      // upstream; we don't gate on it here.
+      const allowed = CASE_STATUSES.filter((s) => s !== "archived");
+      for (const status of allowed) {
+        expect(() =>
+          assertOutputMutationAllowed(status, "output.approve"),
+        ).not.toThrow();
+      }
+    });
+
+    it("error message points the attorney at admin.case.unmarkFiled when delivered/filed", () => {
+      for (const status of ["delivered", "filed"] as const) {
+        try {
+          assertOutputMutationAllowed(status, "output.update");
+          throw new Error("did not throw");
+        } catch (err) {
+          expect(err).toBeInstanceOf(AppError);
+          expect((err as AppError).code).toBe("CONFLICT");
+          expect((err as AppError).message).toMatch(
+            /admin\.case\.unmarkFiled/,
+          );
+        }
+      }
+    });
+
+    it("error message for archived does not advertise the unmark path", () => {
+      try {
+        assertOutputMutationAllowed("archived", "output.update");
+        throw new Error("did not throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(AppError);
+        expect((err as AppError).message).not.toMatch(/unmarkFiled/);
+        expect((err as AppError).message).toMatch(/archived/);
+      }
+    });
   });
 });
