@@ -326,10 +326,12 @@ function nextActionFor(status: string): string | undefined {
       return "Retry build";
     case "draft_ready":
       return "Review drafts";
+    case "in_review":
+      return "Continue review";
     case "needs_revision":
       return "Apply revisions";
     case "approved":
-      return "Generate package";
+      return "Download package";
     case "package_ready":
       return "Download package";
     case "delivered":

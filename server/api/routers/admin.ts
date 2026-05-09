@@ -22,9 +22,11 @@ import {
   CONTRACTOR_AGREEMENT_VERSION,
 } from "@/server/auth/contractor-agreement";
 import { adminProcedure, router } from "@/server/api/trpc";
-import { withAudit } from "@/server/services/audit";
+import { withAudit, insertAuditEntry } from "@/server/services/audit";
+import { reconcileCaseStatus } from "@/server/services/cases/reconcile-status";
+import { AppError, appErrorToTrpcCode } from "@/lib/errors";
 import { getRedis } from "@/server/services/redis";
-import type { Db as AdminDb } from "@/server/db/client";
+import { db as ownerDb, type Db, type Db as AdminDb } from "@/server/db/client";
 import type { AttorneyStatus } from "@/lib/constants";
 import { emitFromCtx } from "@/server/services/analytics/emit";
 import { inngest } from "@/server/jobs/client";
@@ -1038,6 +1040,122 @@ export const adminRouter = router({
           return { ok: true as const };
         },
       );
+    }),
+
+  /**
+   * ADR-006 Step 7 — operational reverse for `case.markFiled`.
+   *
+   * Admin-only: there is no attorney UI exposing this. Use cases:
+   *   - Receipt-number typo correction (`markFiled` is strictly
+   *     idempotent on `filedAt`; the only way to change a stored
+   *     receipt is to clear it via this mutation and re-mark).
+   *   - Wrong-case filings ("oops, not yet").
+   *
+   * Contract:
+   *   - Status gate: only legal from `filed`.
+   *   - Reason is REQUIRED (.min(10).max(500)) — operational reverses
+   *     should always have a written justification. Surfaces in the
+   *     audit-log UI alongside the row.
+   *   - All writes happen in ONE tx: clear `filedAt` +
+   *     `filedReceiptNumber`, run reconciler (`filed → delivered`),
+   *     insert `audit_log` row. A CONFLICT rolls back ALL of them —
+   *     we never produce a half-state where the case is unmarked but
+   *     the audit row is missing, or vice versa.
+   */
+  unmarkFiledCase: adminProcedure
+    .input(
+      z.object({
+        caseId: z.uuid(),
+        reason: z.string().min(10).max(500),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { userId: adminId } = ctx;
+      let transition: Awaited<ReturnType<typeof reconcileCaseStatus>>;
+      try {
+        transition = await ownerDb.transaction(async (tx) => {
+          const [row] = await tx
+            .select({
+              status: cases.status,
+              filedAt: cases.filedAt,
+              filedReceiptNumber: cases.filedReceiptNumber,
+            })
+            .from(cases)
+            .where(
+              and(eq(cases.id, input.caseId), isNull(cases.deletedAt)),
+            )
+            .limit(1)
+            .for("update");
+          if (!row) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: `case ${input.caseId} not found`,
+            });
+          }
+          if (row.status !== "filed") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `case is in status ${row.status} — unmarkFiled is only legal from 'filed'`,
+            });
+          }
+          await tx
+            .update(cases)
+            .set({ filedAt: null, filedReceiptNumber: null })
+            .where(eq(cases.id, input.caseId));
+          const t = await reconcileCaseStatus({
+            tx: tx as unknown as Db,
+            caseId: input.caseId,
+            trigger: "unfiled",
+            actor: { type: "user", userId: adminId },
+            reason: input.reason,
+          });
+          // Audit row inside the SAME tx, AFTER the reconciler. ADR-006:
+          // a CONFLICT here rolls back the column-clear AND the
+          // status flip; we never produce a half-state. The middleware
+          // does NOT pre-write the audit row.
+          await insertAuditEntry({
+            db: tx as unknown as Db,
+            actorUserId: adminId,
+            action: "case.unmarkFiled",
+            targetType: "case",
+            targetId: input.caseId,
+            details: {
+              reason: input.reason,
+              prior_filed_at: row.filedAt?.toISOString() ?? null,
+              prior_receipt_number: row.filedReceiptNumber,
+            },
+          });
+          return t;
+        });
+      } catch (err) {
+        // The gate inside the tx throws TRPCError directly; the
+        // reconciler throws AppError on illegal transitions (e.g.
+        // a concurrent archive races us between the FOR UPDATE
+        // and the transition). Convert AppError → TRPCError so the
+        // client sees a meaningful code instead of INTERNAL_SERVER_ERROR.
+        if (err instanceof TRPCError) throw err;
+        if (err instanceof AppError) {
+          throw new TRPCError({
+            code: appErrorToTrpcCode(err.code),
+            message: err.message,
+          });
+        }
+        throw err;
+      }
+
+      if (transition.changed) {
+        emitFromCtx(ctx, {
+          name: "case.lifecycle_transition",
+          properties: {
+            case_id: input.caseId,
+            from_status: transition.from,
+            to_status: transition.to,
+            trigger: "unfiled",
+          },
+        });
+      }
+
+      return { ok: true as const };
     }),
 
   /**

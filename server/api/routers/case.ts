@@ -639,7 +639,20 @@ export const caseRouter = router({
   markFiled: attorneyProcedure
     .input(MarkFiledInput)
     .mutation(async ({ ctx, input }) => {
-      const { userId } = ctx;
+      const { db, userId } = ctx;
+
+      // RLS authz gate. Read via the user-scoped tx so non-participants
+      // see no row → NOT_FOUND. Without this the bookkeeping tx below
+      // runs on `ownerDb` (RLS bypassed), which would let any active
+      // attorney mark any case as filed if they knew the caseId.
+      const [authzCheck] = await db
+        .select({ id: cases.id })
+        .from(cases)
+        .where(and(eq(cases.id, input.caseId), isNull(cases.deletedAt)))
+        .limit(1);
+      if (!authzCheck) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
 
       const rl = await rateLimit("case.markFiled", userId);
       if (!rl.success) {
