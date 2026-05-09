@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
   caseDocuments,
@@ -848,10 +848,47 @@ export const outputRouter = router({
       // RLS gate via a current-outputs read. If the caller can't see
       // the case, getCurrentOutputs returns an empty array — and
       // compile rejects with BAD_REQUEST. Defense in depth.
+      //
+      // Order: compile FIRST (slow — render + upload), then a SHORT
+      // bookkeeping tx (timestamp set + reconcile). Holding a tx
+      // around the PDF render would lock the case row for 5-30s.
+      // If compile fails (e.g. not all approved), no tx work, no
+      // transition. If compile succeeds but the bookkeeping tx fails,
+      // the PDF is orphaned in storage — acceptable cost for forward
+      // compatibility (re-download retries the bookkeeping).
       try {
         const result = await compileFullPackagePdf({
           db: ctx.db,
           caseId: input.caseId,
+        });
+        const transition = await ownerDb.transaction(async (tx) => {
+          // Idempotent timestamp set. The WHERE clause skips the
+          // UPDATE entirely on already-delivered cases so re-downloads
+          // don't churn `updated_at` / `row_revision`. `coalesce`
+          // preserves the earlier wall-clock when one column is set
+          // and the other isn't (a state we should never reach in
+          // practice, but cheap to handle).
+          await tx
+            .update(cases)
+            .set({
+              packageCompiledAt: sql`coalesce(${cases.packageCompiledAt}, now())`,
+              deliveredAt: sql`coalesce(${cases.deliveredAt}, now())`,
+            })
+            .where(
+              and(
+                eq(cases.id, input.caseId),
+                or(
+                  isNull(cases.packageCompiledAt),
+                  isNull(cases.deliveredAt),
+                ),
+              ),
+            );
+          return reconcileCaseStatus({
+            tx: tx as unknown as Db,
+            caseId: input.caseId,
+            trigger: "package_delivered",
+            actor: { type: "user", userId: ctx.userId },
+          });
         });
         emitFromCtx(ctx, {
           name: "package.exported",
@@ -864,6 +901,12 @@ export const outputRouter = router({
             size_bytes: result.bytes,
           },
         });
+        emitLifecycleTransition(
+          ctx,
+          input.caseId,
+          "package_delivered",
+          transition,
+        );
         return { url: result.url, bytes: result.bytes };
       } catch (err) {
         rethrowAsTrpc(err);
