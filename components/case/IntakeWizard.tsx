@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
+import { formatTrpcError } from "@/lib/trpc/format-error";
 import { APP_ROUTES } from "@/config";
 import { Card, DateInput, EmptyState } from "@/components/ui";
 import type { BeneficiaryData } from "@/server/db/schema/zod/beneficiary";
@@ -310,7 +311,8 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
     );
   }
 
-  const error = update.error?.message ?? complete.error?.message ?? null;
+  const error =
+    formatTrpcError(update.error) ?? formatTrpcError(complete.error);
   const busy = update.isPending || complete.isPending || isPending;
   const recommenderCount = recommenderListQuery.data?.length ?? 0;
   const sectionStatus = useMemo(
@@ -379,7 +381,7 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
         {error ? (
           <p
             role="alert"
-            className="rounded-md border p-3 text-sm"
+            className="whitespace-pre-line rounded-md border p-3 text-sm"
             style={{
               borderColor: "var(--danger, #b1330e)",
               color: "var(--danger, #b1330e)",

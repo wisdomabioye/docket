@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
+import { formatTrpcError } from "@/lib/trpc/format-error";
 import { APP_ROUTES } from "@/config";
 import {
   VISA_TYPES,
@@ -58,8 +59,8 @@ export function NewCaseForm(): React.ReactElement {
       </div>
 
       {create.error && (
-        <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          {create.error.message}
+        <p className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {formatTrpcError(create.error)}
         </p>
       )}
 

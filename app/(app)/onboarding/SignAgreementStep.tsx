@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
+import { formatTrpcError } from "@/lib/trpc/format-error";
 // Type-only import — the source module is `import "server-only"`.
 // `import type` is erased at compile time and never reaches the
 // client bundle. A bare `import` would survive `isolatedModules:
@@ -136,8 +137,8 @@ export function SignAgreementStep(props: Props): React.ReactElement {
       </label>
 
       {sign.error && (
-        <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          {sign.error.message}
+        <p className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {formatTrpcError(sign.error)}
         </p>
       )}
 

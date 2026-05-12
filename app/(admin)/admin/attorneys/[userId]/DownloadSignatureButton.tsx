@@ -1,6 +1,7 @@
 "use client";
 
 import { trpc } from "@/lib/trpc/react";
+import { formatTrpcError } from "@/lib/trpc/format-error";
 
 /**
  * Admin-only button that mints a fresh 5-minute signed URL for the
@@ -31,7 +32,9 @@ export function DownloadSignatureButton({
         {downloadUrl.isPending ? "Opening…" : "Download signed PDF"}
       </button>
       {downloadUrl.error && (
-        <p className="mt-1 text-xs text-red-700">{downloadUrl.error.message}</p>
+        <p className="mt-1 whitespace-pre-line text-xs text-red-700">
+          {formatTrpcError(downloadUrl.error)}
+        </p>
       )}
     </div>
   );

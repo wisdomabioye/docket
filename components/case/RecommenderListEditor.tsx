@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { trpc } from "@/lib/trpc/react";
+import { formatTrpcError } from "@/lib/trpc/format-error";
 import { Card, EmptyState } from "@/components/ui";
 import {
   RecommenderInputSchema,
@@ -73,7 +74,9 @@ export function RecommenderListEditor(
   const busy = create.isPending || update.isPending || remove.isPending;
 
   const submitError =
-    draftError ?? create.error?.message ?? update.error?.message ?? null;
+    draftError ??
+    formatTrpcError(create.error) ??
+    formatTrpcError(update.error);
 
   function startAdd() {
     setDraft(EMPTY_DRAFT);
@@ -193,7 +196,7 @@ export function RecommenderListEditor(
       {submitError ? (
         <p
           role="alert"
-          className="rounded-md border p-3 text-sm"
+          className="whitespace-pre-line rounded-md border p-3 text-sm"
           style={{
             borderColor: "var(--danger, #b1330e)",
             color: "var(--danger, #b1330e)",

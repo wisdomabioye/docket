@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { trpc } from "@/lib/trpc/react";
+import { formatTrpcError } from "@/lib/trpc/format-error";
 
 /**
  * Attorney partnership application. Shares the `marketing.joinWaitlist`
@@ -166,8 +167,8 @@ export function AttorneyApplyForm(): React.ReactElement {
       />
 
       {join.error && (
-        <p className="rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
-          {join.error.message}
+        <p className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+          {formatTrpcError(join.error)}
         </p>
       )}
 

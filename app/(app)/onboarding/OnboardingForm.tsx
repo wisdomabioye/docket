@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
+import { formatTrpcError } from "@/lib/trpc/format-error";
 import { APP_ROUTES } from "@/config";
 import { TERMS_VERSION, type TermsVersion } from "@/server/auth/terms";
 
@@ -121,7 +122,9 @@ export function OnboardingForm(props: Props): React.ReactElement {
           </button>
         </div>
         {downloadUrl.error && (
-          <p className="mt-2 text-xs text-red-700">{downloadUrl.error.message}</p>
+          <p className="mt-2 whitespace-pre-line text-xs text-red-700">
+            {formatTrpcError(downloadUrl.error)}
+          </p>
         )}
       </div>
 
@@ -143,8 +146,8 @@ export function OnboardingForm(props: Props): React.ReactElement {
       </label>
 
       {submit.error && (
-        <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-          {submit.error.message}
+        <p className="whitespace-pre-line rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {formatTrpcError(submit.error)}
         </p>
       )}
 
