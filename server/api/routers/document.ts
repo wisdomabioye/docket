@@ -19,6 +19,7 @@ import { appErrorToTrpcCode, isAppError } from "@/lib/errors";
 import { canUploadInStatus } from "@/lib/case-status";
 import { MAX_UPLOAD_BYTES } from "@/lib/constants";
 import { emitFromCtx } from "@/server/services/analytics/emit";
+import { isUserCaseParticipant } from "@/server/services/cases/visibility";
 
 /**
  * Document procedures. Per Stage 05 RLS pattern: read for authz via
@@ -54,7 +55,11 @@ export const documentRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { db, userId } = ctx;
 
-      // Authz: caller must be a participant on the case (RLS).
+      // Application-layer participant gate; RLS stays as safety net.
+      // See `services/cases/visibility.ts` for the admin-bypass context.
+      if (!(await isUserCaseParticipant(db, input.caseId, userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
       const [authz] = await db
         .select({ id: cases.id, status: cases.status })
         .from(cases)
@@ -105,7 +110,10 @@ export const documentRouter = router({
     }),
 
   list: protectedProcedure.input(ListInput).query(async ({ ctx, input }) => {
-    const { db } = ctx;
+    const { db, userId } = ctx;
+    if (!(await isUserCaseParticipant(db, input.caseId, userId))) {
+      return [];
+    }
     return db
       .select({
         id: caseDocuments.id,
@@ -131,9 +139,10 @@ export const documentRouter = router({
   getDownloadUrl: protectedProcedure
     .input(GetUrlInput)
     .query(async ({ ctx, input }) => {
-      const { db } = ctx;
+      const { db, userId } = ctx;
       const [doc] = await db
         .select({
+          caseId: caseDocuments.caseId,
           storagePath: caseDocuments.storagePath,
           originalFilename: caseDocuments.originalFilename,
         })
@@ -146,6 +155,12 @@ export const documentRouter = router({
         )
         .limit(1);
       if (!doc) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "document not found" });
+      }
+      // Application-layer participant gate. Without this an admin
+      // session (RLS bypass) could mint a short-lived signed URL for
+      // any attorney's document. Indistinguishable from "not found".
+      if (!(await isUserCaseParticipant(db, doc.caseId, userId))) {
         throw new TRPCError({ code: "NOT_FOUND", message: "document not found" });
       }
       const url = await storage.signedUrl(doc.storagePath, {
@@ -174,6 +189,11 @@ export const documentRouter = router({
         )
         .limit(1);
       if (!doc) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "document not found" });
+      }
+      // Application-layer participant gate. Admins not on the case
+      // must not be able to delete attorney documents.
+      if (!(await isUserCaseParticipant(db, doc.caseId, userId))) {
         throw new TRPCError({ code: "NOT_FOUND", message: "document not found" });
       }
 

@@ -41,6 +41,7 @@ import { db as ownerDb } from "@/server/db/client";
 
 const ALICE = "80000000-0000-4000-8000-aaaa00000001";
 const BOB = "80000000-0000-4000-8000-bbbb00000001";
+const CAROL_ADMIN = "80000000-0000-4000-8000-eeee00000001";
 const ORG_A = "80000000-0000-4000-8000-cccc00000001";
 const ORG_B = "80000000-0000-4000-8000-dddd00000001";
 
@@ -72,10 +73,12 @@ beforeAll(async () => {
   await db.insert(users).values([
     { id: ALICE, name: "Test Alice DOC", email: "doc-alice@docket.local" },
     { id: BOB, name: "Test Bob DOC", email: "doc-bob@docket.local" },
+    { id: CAROL_ADMIN, name: "Test Carol DOC", email: "doc-carol@docket.local" },
   ]);
   await db.insert(userRoles).values([
     { userId: ALICE, role: "attorney" },
     { userId: BOB, role: "attorney" },
+    { userId: CAROL_ADMIN, role: "admin" },
   ]);
   await db.insert(organizations).values([
     { id: ORG_A, name: "Doc Org A", slug: "doc-org-a" },
@@ -330,6 +333,70 @@ describe("document.getDownloadUrl", () => {
   });
 });
 
+// Regression net for open_issues #59 (case_documents). The
+// `case_documents_admin` RLS policy grants admins blanket access; an
+// admin who is not a case participant USED to mint signed URLs for
+// any attorney's documents and could upload/delete on their behalf.
+// The application-layer participant gate must hold even with admin
+// RLS bypass. Restore the gate if these fail — never trust RLS alone.
+describe("document — admin participant gate", () => {
+  it("list returns [] for an admin not on the case", async (ctx) => {
+    gate(ctx);
+    await callAs(ALICE).document.upload({
+      caseId: aliceCaseId,
+      filename: "g.pdf",
+      mimeType: "application/pdf",
+      documentType: "cv_resume",
+      contentBase64: makeMinimalPdf("g").toString("base64"),
+    });
+    const r = await callAs(CAROL_ADMIN).document.list({
+      caseId: aliceCaseId,
+    });
+    expect(r).toEqual([]);
+  });
+
+  it("upload NOT_FOUND for an admin not on the case", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(CAROL_ADMIN).document.upload({
+        caseId: aliceCaseId,
+        filename: "g2.pdf",
+        mimeType: "application/pdf",
+        documentType: "cv_resume",
+        contentBase64: makeMinimalPdf("g2").toString("base64"),
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("getDownloadUrl NOT_FOUND for an admin not on the case", async (ctx) => {
+    gate(ctx);
+    const { documentId } = await callAs(ALICE).document.upload({
+      caseId: aliceCaseId,
+      filename: "g3.pdf",
+      mimeType: "application/pdf",
+      documentType: "cv_resume",
+      contentBase64: makeMinimalPdf("g3").toString("base64"),
+    });
+    await expect(
+      callAs(CAROL_ADMIN).document.getDownloadUrl({ documentId }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("delete NOT_FOUND for an admin not on the case", async (ctx) => {
+    gate(ctx);
+    const { documentId } = await callAs(ALICE).document.upload({
+      caseId: aliceCaseId,
+      filename: "g4.pdf",
+      mimeType: "application/pdf",
+      documentType: "cv_resume",
+      contentBase64: makeMinimalPdf("g4").toString("base64"),
+    });
+    await expect(
+      callAs(CAROL_ADMIN).document.delete({ documentId }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
 // ── helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -354,6 +421,10 @@ async function teardown(db: TestDb): Promise<void> {
   await db.execute(sql`delete from cases where organization_id in (${ORG_A}, ${ORG_B})`);
   await db.execute(sql`delete from organization_members where organization_id in (${ORG_A}, ${ORG_B})`);
   await db.execute(sql`delete from organizations where id in (${ORG_A}, ${ORG_B})`);
-  await db.execute(sql`delete from user_roles where user_id in (${ALICE}, ${BOB})`);
-  await db.execute(sql`delete from users where id in (${ALICE}, ${BOB})`);
+  await db.execute(
+    sql`delete from user_roles where user_id in (${ALICE}, ${BOB}, ${CAROL_ADMIN})`,
+  );
+  await db.execute(
+    sql`delete from users where id in (${ALICE}, ${BOB}, ${CAROL_ADMIN})`,
+  );
 }
