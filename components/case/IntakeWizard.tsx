@@ -12,8 +12,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
 import { formatTrpcError } from "@/lib/trpc/format-error";
 import { APP_ROUTES } from "@/config";
+import { z } from "zod";
 import { Card, DateInput, EmptyState } from "@/components/ui";
-import type { BeneficiaryData } from "@/server/db/schema/zod/beneficiary";
+import {
+  BeneficiaryDataSchema,
+  type BeneficiaryData,
+} from "@/server/db/schema/zod/beneficiary";
 import { RecommenderListEditor } from "./RecommenderListEditor";
 
 /**
@@ -154,6 +158,40 @@ const DEFAULT_SECTION_KEY = SECTIONS[0]!.key;
 
 const DEBOUNCE_MS = 800;
 
+/**
+ * Per-section validation schemas, derived from `BeneficiaryDataSchema`
+ * by picking each section's fields and promoting them from optional
+ * to required. `BeneficiaryDataSchema` is the storage shape (every
+ * field optional so partial saves work); these slices are the
+ * "section complete" contract — they decide whether Next is allowed.
+ *
+ * Built once at module load — Zod object schemas are immutable, so
+ * there is no per-render cost.
+ *
+ * Recommenders section is excluded by design: it writes to a separate
+ * table and has its own gate (visa-config `minRecommenders` count),
+ * which `case.completeIntake` enforces server-side. Today we let the
+ * user move past it without blocking; #60 will surface the count
+ * client-side.
+ */
+const SECTION_SCHEMAS: Record<string, ReturnType<
+  ReturnType<typeof BeneficiaryDataSchema.pick>["required"]
+>> = (() => {
+  const out: Record<string, ReturnType<
+    ReturnType<typeof BeneficiaryDataSchema.pick>["required"]
+  >> = {};
+  for (const s of SECTIONS) {
+    if (s.kind !== "fields") continue;
+    const pick = Object.fromEntries(
+      s.fields.map((f) => [f.key, true as const]),
+    ) as Parameters<typeof BeneficiaryDataSchema.pick>[0];
+    out[s.key] = BeneficiaryDataSchema.pick(pick).required();
+  }
+  return out;
+})();
+
+type FieldErrors = Partial<Record<FieldKey, string>>;
+
 // ─────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────
@@ -202,6 +240,11 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
   const [isPending, startTransition] = useTransition();
   const [values, setValues] = useState<BeneficiaryData>(props.initial);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  // Per-section validation errors. Populated when Next is clicked on
+  // an incomplete section; cleared per-field as the user edits.
+  // Section-scoped, not whole-form, so navigating away doesn't carry
+  // stale errors into another section's view.
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
   // Track the row revision so we always pass the latest expected
   // version to the mutation (the procedure bumps it on each save).
@@ -277,6 +320,83 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
       scheduleSave(next);
       return next;
     });
+    // Clear this field's error as soon as the user edits — the
+    // validation rerun on next click will repopulate if still invalid.
+    setFieldErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
+
+  /** Validate the active section's fields against `SECTION_SCHEMAS`.
+   *  Returns `true` if the section passes (or has no schema, e.g. the
+   *  recommenders section). On failure, populates `fieldErrors` with
+   *  one message per offending field. Bypassed entirely in locked
+   *  mode — locked sections can't be edited so re-validation is noise. */
+  /** Validate one fields-section against its `SECTION_SCHEMAS` entry.
+   *  Returns the per-field error map for that slice (empty on pass).
+   *  `BeneficiaryDataSchema` is `.strict()`; `.pick(...).required()`
+   *  preserves that, so we hand the schema only the section's fields.
+   *  Passing the full `values` would fail with "unrecognized key" on
+   *  every other section's field. */
+  function validateSection(section: SectionDef): FieldErrors {
+    if (section.kind !== "fields") return {};
+    const schema = SECTION_SCHEMAS[section.key];
+    if (!schema) return {};
+    const slice: Partial<BeneficiaryData> = {};
+    for (const f of section.fields) {
+      const v = values[f.key];
+      if (v !== undefined) (slice as Record<string, unknown>)[f.key] = v;
+    }
+    const result = schema.safeParse(slice);
+    if (result.success) return {};
+    const flat = z.flattenError(result.error).fieldErrors;
+    const errs: FieldErrors = {};
+    for (const [k, msgs] of Object.entries(flat)) {
+      if (msgs && msgs.length > 0) errs[k as FieldKey] = msgs[0]!;
+    }
+    return errs;
+  }
+
+  /** Next-button gate: validate the active section only. Direct rail
+   *  clicks bypass this (see `navigateToSection`). Updates only the
+   *  active section's keys in `fieldErrors` so a prior Submit-side
+   *  cross-section run's badges on other sections aren't wiped. */
+  function validateActiveSection(): boolean {
+    if (props.locked) return true;
+    if (activeSection.kind !== "fields") return true;
+    const errs = validateSection(activeSection);
+    setFieldErrors((prev) => {
+      const next: FieldErrors = { ...prev };
+      for (const f of activeSection.fields) delete next[f.key];
+      Object.assign(next, errs);
+      return next;
+    });
+    return Object.keys(errs).length === 0;
+  }
+
+  /** Submit gate: validate EVERY fields-section so a user can't
+   *  bypass profile/practice/filing by filling only `notes` and
+   *  hitting Submit. Returns the key of the first failing section
+   *  (so the caller can route the user there) or `null` on pass.
+   *  Recommenders count is enforced server-side in
+   *  `case.completeIntake` (visa-config `minRecommenders`). */
+  function validateAllSections(): string | null {
+    if (props.locked) return null;
+    const allErrors: FieldErrors = {};
+    let firstFailing: string | null = null;
+    for (const s of SECTIONS) {
+      if (s.kind !== "fields") continue;
+      const errs = validateSection(s);
+      if (Object.keys(errs).length > 0) {
+        Object.assign(allErrors, errs);
+        if (firstFailing === null) firstFailing = s.key;
+      }
+    }
+    setFieldErrors(allErrors);
+    return firstFailing;
   }
 
   function navigateToSection(key: string) {
@@ -287,12 +407,39 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
       debounceRef.current = null;
     }
     flushSave(values);
+    // Field errors are NOT cleared here — after a cross-section
+    // Submit fail, badges on every failing section need to persist so
+    // the user can see the full punch list. Errors clear naturally
+    // per-field on edit (see `setField`) and per-section on a
+    // successful `validateActiveSection`.
     const url = `${APP_ROUTES.caseIntake(props.caseId)}?section=${key}`;
     router.push(url, { scroll: false });
   }
 
+  /** Forward navigation: validate first, only advance if the section
+   *  passes. Direct rail clicks still use `navigateToSection`
+   *  (no gate) so users can jump back to fix something elsewhere. */
+  function onNextSection(nextKey: string) {
+    if (!validateActiveSection()) return;
+    navigateToSection(nextKey);
+  }
+
   function onSubmit() {
     if (props.currentStatus !== "intake") return;
+    // Cross-section gate. Filling only the narrative section and
+    // clicking Submit must not bypass profile/practice/filing — the
+    // server's `case.completeIntake` doesn't re-validate beneficiary
+    // data completeness, only the status transition and recommender
+    // minimum. If any fields-section fails, surface every section's
+    // errors at once and route to the first failing one.
+    const firstFailing = validateAllSections();
+    if (firstFailing !== null) {
+      if (firstFailing !== activeSection.key) {
+        const url = `${APP_ROUTES.caseIntake(props.caseId)}?section=${firstFailing}`;
+        router.push(url, { scroll: false });
+      }
+      return;
+    }
     // Make sure pending edits land before completing.
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
@@ -315,15 +462,23 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
     formatTrpcError(update.error) ?? formatTrpcError(complete.error);
   const busy = update.isPending || complete.isPending || isPending;
   const recommenderCount = recommenderListQuery.data?.length ?? 0;
+  // Per-section error count — attributed by field ownership so the
+  // Submit-side cross-section validator can light up the rail badges
+  // for every section that failed at once, not just the active one.
   const sectionStatus = useMemo(
     () =>
       SECTIONS.map((s) => {
+        const errorCount =
+          s.kind === "fields"
+            ? s.fields.filter((f) => fieldErrors[f.key]).length
+            : 0;
         if (s.kind === "fields") {
           return {
             key: s.key,
             label: s.label,
             filled: countFilled(s, values),
             total: s.fields.length,
+            errorCount,
           };
         }
         // Recommenders has no fixed target — show the live count as
@@ -334,9 +489,10 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
           label: s.label,
           filled: recommenderCount,
           total: null as number | null,
+          errorCount,
         };
       }),
-    [values, recommenderCount],
+    [values, recommenderCount, fieldErrors],
   );
 
   return (
@@ -360,15 +516,21 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
           </p>
           {activeSection.kind === "fields" ? (
             <div className="space-y-4">
-              {activeSection.fields.map((field) => (
-                <FieldRow
-                  key={field.key}
-                  field={field}
-                  value={values[field.key]}
-                  disabled={props.locked}
-                  onChange={(v) => setField(field.key, v)}
-                />
-              ))}
+              {activeSection.fields.map((field) => {
+                const fieldError = fieldErrors[field.key];
+                return (
+                  <FieldRow
+                    key={field.key}
+                    field={field}
+                    value={values[field.key]}
+                    disabled={props.locked}
+                    onChange={(v) => setField(field.key, v)}
+                    {...(fieldError !== undefined
+                      ? { error: fieldError }
+                      : {})}
+                  />
+                );
+              })}
             </div>
           ) : (
             <RecommenderListEditor
@@ -400,7 +562,7 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
           submitPending={complete.isPending}
           canComplete={props.currentStatus === "intake"}
           nextSection={nextSectionAfter(activeSection.key)}
-          onNext={(key) => navigateToSection(key)}
+          onNext={(key) => onNextSection(key)}
           onSubmit={onSubmit}
         />
 
@@ -427,6 +589,9 @@ function SectionNav(props: {
     /** `null` for sections with no fixed target (recommenders).
      *  Renders as `N/—`. */
     total: number | null;
+    /** Active-section validation errors. Renders a small chip beside
+     *  the section name when > 0. */
+    errorCount: number;
   }>;
   activeKey: string;
   onSelect: (key: string) => void;
@@ -457,6 +622,18 @@ function SectionNav(props: {
                   {String(idx + 1).padStart(2, "0")}
                 </span>
                 <span className="flex-1">{s.label}</span>
+                {s.errorCount > 0 ? (
+                  <span
+                    aria-label={`${s.errorCount} validation ${s.errorCount === 1 ? "error" : "errors"}`}
+                    className="mono rounded-sm px-1.5 py-0.5 text-[10px] font-medium"
+                    style={{
+                      background: "var(--danger, #b1330e)",
+                      color: "var(--cream, white)",
+                    }}
+                  >
+                    {s.errorCount}
+                  </span>
+                ) : null}
                 <span
                   className="mono text-[10px]"
                   style={{ color: "var(--ink-muted)" }}
@@ -476,16 +653,23 @@ function FieldRow(props: {
   field: FieldDef;
   value: unknown;
   disabled: boolean;
+  error?: string;
   onChange: (v: string | number | undefined) => void;
 }): React.ReactElement {
   const id = `intk-${props.field.key}`;
+  const errId = props.error ? `${id}-err` : undefined;
   const inputClass =
     "w-full rounded-md border px-3 py-2 text-sm disabled:opacity-60";
   const inputStyle = {
-    borderColor: "var(--border, rgba(0,0,0,0.15))",
+    borderColor: props.error
+      ? "var(--danger, #b1330e)"
+      : "var(--border, rgba(0,0,0,0.15))",
     background: "var(--surface, white)",
     color: "var(--ink)",
   } as const;
+  const ariaProps = props.error
+    ? { "aria-invalid": true as const, "aria-describedby": errId }
+    : {};
   return (
     <div className="space-y-1.5">
       <label
@@ -504,6 +688,7 @@ function FieldRow(props: {
           onChange={(e) => props.onChange(e.target.value)}
           className={inputClass}
           style={inputStyle}
+          {...ariaProps}
         />
       ) : props.field.control === "date" ? (
         <DateInput
@@ -538,9 +723,18 @@ function FieldRow(props: {
           }}
           className={inputClass}
           style={inputStyle}
+          {...ariaProps}
         />
       )}
-      {props.field.hint ? (
+      {props.error ? (
+        <p
+          id={errId}
+          className="text-[11px]"
+          style={{ color: "var(--danger, #b1330e)" }}
+        >
+          {props.error}
+        </p>
+      ) : props.field.hint ? (
         <p className="text-[11px]" style={{ color: "var(--ink-muted)" }}>
           {props.field.hint}
         </p>

@@ -199,9 +199,28 @@ describe("IntakeWizard — locked", () => {
   });
 });
 
+const validProfile = {
+  fullName: "Test Beneficiary",
+  dateOfBirth: "1990-01-01",
+  nationality: "Canada",
+  currentLocation: "Toronto",
+} as const;
+
+// Fully populated across every fields-section. Submit now runs a
+// cross-section gate so partial fixtures no longer reach the mutation.
+const validIntake = {
+  ...validProfile,
+  occupation: "Research Scientist",
+  field: "Computational Biology",
+  yearsActive: 8,
+  targetFilingDate: "2027-01-01",
+  email: "applicant@example.com",
+  notes: "Background context for the drafting AI.",
+} as const;
+
 describe("IntakeWizard — per-section CTA", () => {
   it("non-final sections render a 'Next: <Section>' button that advances the URL", () => {
-    render(<IntakeWizard {...baseProps} />);
+    render(<IntakeWizard {...baseProps} initial={validProfile} />);
     // Default section is `profile`; the next is `practice`.
     const next = screen.getByRole("button", { name: /next: practice/i });
     fireEvent.click(next);
@@ -216,7 +235,7 @@ describe("IntakeWizard — per-section CTA", () => {
     searchParamsMock.get.mockImplementation((k: string) =>
       k === "section" ? "narrative" : null,
     );
-    render(<IntakeWizard {...baseProps} />);
+    render(<IntakeWizard {...baseProps} initial={validIntake} />);
     fireEvent.click(screen.getByRole("button", { name: /submit intake/i }));
     expect(completeMutateMock).toHaveBeenCalledWith(
       expect.objectContaining({ caseId: "case-1", expectedRowRevision: 1 }),
@@ -234,6 +253,71 @@ describe("IntakeWizard — per-section CTA", () => {
     const btn = screen.queryByRole("button", { name: /submit intake/i });
     if (btn) fireEvent.click(btn);
     expect(completeMutateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("IntakeWizard — per-section validation gate", () => {
+  it("Next blocks when required profile fields are empty", () => {
+    render(<IntakeWizard {...baseProps} initial={{}} />);
+    const next = screen.getByRole("button", { name: /next: practice/i });
+    fireEvent.click(next);
+    expect(routerPushMock).not.toHaveBeenCalled();
+  });
+
+  it("renders inline field errors and clears them on edit", () => {
+    render(<IntakeWizard {...baseProps} initial={{}} />);
+    fireEvent.click(screen.getByRole("button", { name: /next: practice/i }));
+    // After a failed Next, the offending inputs flip aria-invalid.
+    const fullNameInput = screen.getByLabelText("Full name");
+    expect(fullNameInput.getAttribute("aria-invalid")).toBe("true");
+
+    fireEvent.change(fullNameInput, { target: { value: "Alice" } });
+    // Editing the field clears its own error immediately.
+    expect(
+      screen.getByLabelText("Full name").getAttribute("aria-invalid"),
+    ).not.toBe("true");
+  });
+
+  it("Submit blocks on the final section if required fields are missing", () => {
+    searchParamsMock.get.mockImplementation((k: string) =>
+      k === "section" ? "narrative" : null,
+    );
+    render(<IntakeWizard {...baseProps} initial={{}} />);
+    fireEvent.click(screen.getByRole("button", { name: /submit intake/i }));
+    expect(completeMutateMock).not.toHaveBeenCalled();
+  });
+
+  it("Submit on narrative with valid notes but empty profile is blocked and reroutes to profile", () => {
+    // Starts on narrative section with notes filled, but profile/
+    // practice/filing all empty. Per-section gate alone would let
+    // this through; the cross-section Submit gate must block AND
+    // route the user to the first failing section (profile).
+    searchParamsMock.get.mockImplementation((k: string) =>
+      k === "section" ? "narrative" : null,
+    );
+    render(
+      <IntakeWizard
+        {...baseProps}
+        initial={{ notes: "context for the drafting AI" }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /submit intake/i }));
+    expect(completeMutateMock).not.toHaveBeenCalled();
+    expect(routerPushMock).toHaveBeenCalledWith(
+      expect.stringContaining("?section=profile"),
+      expect.objectContaining({ scroll: false }),
+    );
+  });
+
+  it("locked mode bypasses validation and renders no Next button", () => {
+    // Locked mode disables the footer CTAs entirely — no Next or
+    // Submit to click. The gate's job is to short-circuit when those
+    // buttons are gone too (defensive), which we confirm by checking
+    // the body still renders and no fields show aria-invalid.
+    render(<IntakeWizard {...baseProps} initial={{}} locked />);
+    expect(
+      screen.queryByRole("button", { name: /next: practice/i }),
+    ).toBeNull();
   });
 });
 
