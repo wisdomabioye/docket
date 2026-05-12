@@ -321,6 +321,52 @@ describe("IntakeWizard — per-section validation gate", () => {
   });
 });
 
+describe("IntakeWizard — Previous button", () => {
+  it("first section renders no Back button", () => {
+    // Default section is `profile` (first).
+    render(<IntakeWizard {...baseProps} initial={{}} />);
+    expect(screen.queryByRole("button", { name: /back:/i })).toBeNull();
+  });
+
+  it("second section renders a 'Back: <prev label>' button that navigates", () => {
+    searchParamsMock.get.mockImplementation((k: string) =>
+      k === "section" ? "practice" : null,
+    );
+    render(<IntakeWizard {...baseProps} initial={{}} />);
+    const back = screen.getByRole("button", { name: /back: profile/i });
+    fireEvent.click(back);
+    expect(routerPushMock).toHaveBeenCalledWith(
+      expect.stringContaining("?section=profile"),
+      expect.objectContaining({ scroll: false }),
+    );
+  });
+
+  it("Back navigation does NOT gate on validation", () => {
+    // On a section with required fields empty, Back must still work
+    // so the user can return to an earlier section to investigate.
+    searchParamsMock.get.mockImplementation((k: string) =>
+      k === "section" ? "practice" : null,
+    );
+    render(<IntakeWizard {...baseProps} initial={{}} />);
+    fireEvent.click(screen.getByRole("button", { name: /back: profile/i }));
+    // Navigation fired even though required practice fields are empty.
+    expect(routerPushMock).toHaveBeenCalledWith(
+      expect.stringContaining("?section=profile"),
+      expect.objectContaining({ scroll: false }),
+    );
+    // No validation errors written.
+    expect(completeMutateMock).not.toHaveBeenCalled();
+  });
+
+  it("locked mode hides the Back button", () => {
+    searchParamsMock.get.mockImplementation((k: string) =>
+      k === "section" ? "practice" : null,
+    );
+    render(<IntakeWizard {...baseProps} initial={{}} locked />);
+    expect(screen.queryByRole("button", { name: /back:/i })).toBeNull();
+  });
+});
+
 describe("IntakeWizard — URL section param", () => {
   it("opens the section the URL points to", () => {
     searchParamsMock.get.mockImplementation((k: string) =>

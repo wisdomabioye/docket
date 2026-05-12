@@ -561,7 +561,9 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
           updatePending={update.isPending}
           submitPending={complete.isPending}
           canComplete={props.currentStatus === "intake"}
+          prevSection={prevSectionBefore(activeSection.key)}
           nextSection={nextSectionAfter(activeSection.key)}
+          onPrev={(key) => navigateToSection(key)}
           onNext={(key) => onNextSection(key)}
           onSubmit={onSubmit}
         />
@@ -750,26 +752,51 @@ function FooterBar(props: {
   updatePending: boolean;
   submitPending: boolean;
   canComplete: boolean;
+  /** Previous section, or `null` on the first section. When non-null,
+   *  a secondary Back button is rendered in the footer's left slot.
+   *  Backward navigation does NOT gate on validation — the user may
+   *  need to jump back specifically to fix a flagged section. */
+  prevSection: SectionDef | null;
   /** Next section after the current one, or `null` on the last section.
    *  When non-null, the primary CTA advances the wizard instead of
    *  firing `completeIntake`. Auto-save means data persists either way;
    *  the CTA's only job is page navigation up to section 4. */
   nextSection: SectionDef | null;
+  onPrev: (key: string) => void;
   onNext: (key: string) => void;
   onSubmit: () => void;
 }): React.ReactElement {
   const onLastSection = props.nextSection === null;
+  const onFirstSection = props.prevSection === null;
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <p className="text-xs" style={{ color: "var(--ink-muted)" }}>
-        {props.locked
-          ? "Editing disabled."
-          : props.updatePending
-            ? "Saving…"
-            : props.savedAt
-              ? `Saved at ${props.savedAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
-              : "Auto-saves as you type."}
-      </p>
+      <div className="flex items-center gap-3">
+        {!props.locked && !onFirstSection ? (
+          <button
+            type="button"
+            onClick={() => props.onPrev(props.prevSection!.key)}
+            disabled={props.busy}
+            className="rounded-md border px-4 py-2 text-sm font-medium disabled:opacity-50"
+            style={{
+              borderColor: "var(--ink)",
+              background: "transparent",
+              color: "var(--ink)",
+            }}
+            title={`Back to ${props.prevSection!.label}`}
+          >
+            ← Back: {props.prevSection!.label}
+          </button>
+        ) : null}
+        <p className="text-xs" style={{ color: "var(--ink-muted)" }}>
+          {props.locked
+            ? "Editing disabled."
+            : props.updatePending
+              ? "Saving…"
+              : props.savedAt
+                ? `Saved at ${props.savedAt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
+                : "Auto-saves as you type."}
+        </p>
+      </div>
       {!props.locked ? (
         onLastSection ? (
           <button
@@ -823,6 +850,12 @@ function nextSectionAfter(activeKey: string): SectionDef | null {
   const idx = SECTIONS.findIndex((s) => s.key === activeKey);
   if (idx === -1 || idx >= SECTIONS.length - 1) return null;
   return SECTIONS[idx + 1] ?? null;
+}
+
+function prevSectionBefore(activeKey: string): SectionDef | null {
+  const idx = SECTIONS.findIndex((s) => s.key === activeKey);
+  if (idx <= 0) return null;
+  return SECTIONS[idx - 1] ?? null;
 }
 
 function countFilled(
