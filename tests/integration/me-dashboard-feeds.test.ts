@@ -45,6 +45,7 @@ import { truncateAllAppTables } from "../helpers/truncate";
 
 const ALICE = "70000040-0000-4000-8000-aaaa00000001";
 const BOB = "70000040-0000-4000-8000-bbbb00000001";
+const CAROL_ADMIN = "70000040-0000-4000-8000-aaaa00000002";
 const ALICE_ORG = "70000040-0000-4000-8000-cccc00000001";
 const BOB_ORG = "70000040-0000-4000-8000-dddd00000001";
 const ALICE_PROFILE = "70000040-0000-4000-8000-eeee00000001";
@@ -222,6 +223,65 @@ describe("me.activityFeed", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+// open_issues #59 confirmation audit
+//
+// The four `me.*` procedures already filter explicitly via
+// `innerJoin(case_participants, userId = ctx.userId AND is_primary AND
+// removed_at IS NULL)` — not RLS alone. These tests anchor that
+// invariant: a global-admin caller who is NOT a primary participant on
+// any case must see zeros / empty arrays. If these fail, someone
+// "simplified" the explicit join away in favor of RLS; restore it.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("me.* — admin participant gate (regression net for #59)", () => {
+  it("pipelineCounts returns zeros for an admin not on any case", async (ctx) => {
+    const d = gate(ctx);
+    await seedAliceCase(d, "intake");
+    await seedBobCase(d, "intake");
+    const out = await callAs(CAROL_ADMIN).me.pipelineCounts();
+    expect(out).toEqual({
+      intake: 0,
+      documents: 0,
+      drafting: 0,
+      review: 0,
+      filed: 0,
+    });
+  });
+
+  it("dashboardKpis returns zeros for an admin not on any case", async (ctx) => {
+    const d = gate(ctx);
+    await seedAliceCase(d, "draft_ready");
+    await seedBobCase(d, "filed");
+    const out = await callAs(CAROL_ADMIN).me.dashboardKpis();
+    expect(out.activeCases).toBe(0);
+    expect(out.draftsAwaitingReview).toBe(0);
+    expect(out.filedThisQuarter).toBe(0);
+    expect(out.revenueMtdCents).toBe(0n);
+  });
+
+  it("todayTasks returns [] for an admin not on any case", async (ctx) => {
+    const d = gate(ctx);
+    await seedAliceCase(d, "draft_ready");
+    await seedBobCase(d, "needs_revision");
+    const out = await callAs(CAROL_ADMIN).me.todayTasks();
+    expect(out).toEqual([]);
+  });
+
+  it("activityFeed returns [] for an admin not on any case", async (ctx) => {
+    const d = gate(ctx);
+    const aliceCaseId = await seedAliceCase(d, "intake");
+    await d.insert(caseEvents).values({
+      caseId: aliceCaseId,
+      actorType: "user",
+      actorUserId: ALICE,
+      eventType: "case.created",
+    });
+    const out = await callAs(CAROL_ADMIN).me.activityFeed();
+    expect(out).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
@@ -229,10 +289,12 @@ async function seedFixtures(d: TestDb): Promise<void> {
   await d.insert(users).values([
     { id: ALICE, name: "Dash Alice", email: "dash-alice@docket.local" },
     { id: BOB, name: "Dash Bob", email: "dash-bob@docket.local" },
+    { id: CAROL_ADMIN, name: "Dash Carol", email: "dash-carol@docket.local" },
   ]);
   await d.insert(userRoles).values([
     { userId: ALICE, role: "attorney" },
     { userId: BOB, role: "attorney" },
+    { userId: CAROL_ADMIN, role: "admin" },
   ]);
   await d.insert(organizations).values([
     { id: ALICE_ORG, name: "Alice Dash Org", slug: "dash-alice-org" },
