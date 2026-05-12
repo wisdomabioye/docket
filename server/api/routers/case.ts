@@ -31,6 +31,7 @@ import {
 import { computeCriteriaCoverage } from "@/server/services/cases/criteria-coverage";
 import { computePreflight } from "@/server/services/cases/preflight";
 import { computeRecommenderLetterCoverage } from "@/server/services/cases/recommender-coverage";
+import { isUserCaseParticipant } from "@/server/services/cases/visibility";
 import { canRequestBuild } from "@/lib/case-status";
 import {
   PER_CASE_STORAGE_BYTES,
@@ -187,9 +188,19 @@ export const caseRouter = router({
     }),
 
   list: protectedProcedure.input(ListInput).query(async ({ ctx, input }) => {
-    const { db } = ctx;
+    const { db, userId } = ctx;
 
-    const filters = [isNull(cases.deletedAt)];
+    const filters = [
+      isNull(cases.deletedAt),
+      // Application-layer participant gate. RLS already enforces this
+      // for non-admin sessions, but the `cases_admin` policy in
+      // `0005_rls.sql:138-139` grants admins blanket access; without
+      // an explicit join an admin opening the attorney dashboard sees
+      // every case. Role-agnostic — Phase 2 applicants are also
+      // participants. See `services/cases/visibility.ts`.
+      eq(caseParticipants.userId, userId),
+      isNull(caseParticipants.removedAt),
+    ];
     if (input.status?.length) filters.push(inArray(cases.status, input.status));
     if (input.visaType?.length)
       filters.push(inArray(cases.visaType, input.visaType));
@@ -210,6 +221,7 @@ export const caseRouter = router({
         updatedAt: cases.updatedAt,
       })
       .from(cases)
+      .innerJoin(caseParticipants, eq(caseParticipants.caseId, cases.id))
       .where(and(...filters))
       .orderBy(desc(cases.createdAt), desc(cases.id))
       .limit(ListPageSize + 1);
@@ -228,7 +240,16 @@ export const caseRouter = router({
   }),
 
   get: protectedProcedure.input(GetInput).query(async ({ ctx, input }) => {
-    const { db } = ctx;
+    const { db, userId } = ctx;
+
+    // Application-layer participant gate. Indistinguishable from
+    // "case does not exist" to keep existence oracles out of admin
+    // sessions that aren't on the case. See `case.list` for the
+    // matching join-form gate.
+    if (!(await isUserCaseParticipant(db, input.caseId, userId))) {
+      return null;
+    }
+
     const [row] = await db
       .select()
       .from(cases)

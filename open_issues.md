@@ -13,7 +13,49 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
-### #65 — Intake schema accepts arbitrary special characters in name-class fields
+### #67 — No application-level 500 error page
+
+Status: Active. Surfaced 2026-05-12.
+
+Next.js App Router defaults to a generic browser error page on
+uncaught server errors. Docket has `app/global-error.tsx` (the
+top-level error boundary) but no scoped 500-style fallback for the
+authenticated app shell. Today an attorney who hits an unhandled
+exception during a tRPC query sees either the default Next error
+chrome or a blank screen, depending on which boundary catches it.
+
+Recommended fix: add `app/(app)/error.tsx` (and verify
+`app/global-error.tsx` is wired correctly) using the editorial
+Card/EmptyState components so the failure mode matches brand chrome.
+Surface the Sentry event id for support correlation; no stack trace
+to end-user. Mirror to `app/(admin)/error.tsx` and
+`app/(marketing)/error.tsx` so every segment has its own boundary.
+Add reset() button hooked to Next's error-boundary contract.
+
+Out of scope: structured error reporting beyond what Sentry already
+captures; that's #63's domain.
+
+### #66 — Attorney onboarding form lacks validation; accepts invalid data
+
+Status: Active. Surfaced 2026-05-12.
+
+`app/(app)/onboarding/OnboardingForm.tsx` accepts the attorney's bar
+number, bar states, and other profile fields without input
+sanitization equivalent to #65's intake validators. Invalid characters
+in bar number, free-form symbols in name fields, or impossible bar
+state codes pass to the server. Schema at
+`server/db/schema/zod/attorney-onboarding.ts` (verify path) likely
+mirrors `BeneficiaryDataSchema`'s loose contract.
+
+Recommended fix: apply the same `safeName`/`safeText` validators from
+#65 to the onboarding schema. Bar number gets a dedicated validator
+(`^[A-Z0-9-]{3,20}$` typical shape — confirm format with founder /
+legal). Bar states must come from a closed enum (US state codes plus
+territories), not free text. Route mutation errors through
+`formatTrpcError` (#63) so server validation messages render cleanly.
+
+Coordinate with #65: both should land in the same commit OR #65 first,
+because the validator helpers are shared.
 
 Status: Active. Surfaced 2026-05-12 (attorney UX audit).
 

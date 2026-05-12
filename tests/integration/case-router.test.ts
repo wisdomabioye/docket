@@ -33,6 +33,7 @@ import {
 
 const ALICE = "70000000-0000-4000-8000-aaaa00000001";
 const BOB = "70000000-0000-4000-8000-bbbb00000001";
+const CAROL_ADMIN = "70000000-0000-4000-8000-eeee00000001";
 const ALICE_ORG = "70000000-0000-4000-8000-cccc00000001";
 const BOB_ORG = "70000000-0000-4000-8000-dddd00000001";
 
@@ -63,10 +64,12 @@ beforeAll(async () => {
   await db.insert(users).values([
     { id: ALICE, name: "Test Alice CR", email: "case-alice@docket.local" },
     { id: BOB, name: "Test Bob CR", email: "case-bob@docket.local" },
+    { id: CAROL_ADMIN, name: "Test Carol CR", email: "case-carol@docket.local" },
   ]);
   await db.insert(userRoles).values([
     { userId: ALICE, role: "attorney" },
     { userId: BOB, role: "attorney" },
+    { userId: CAROL_ADMIN, role: "admin" },
   ]);
   await db.insert(organizations).values([
     { id: ALICE_ORG, name: "Alice Org CR", slug: "case-alice-org" },
@@ -216,6 +219,51 @@ describe("case.get", () => {
     const { id } = await callAs(ALICE).case.create({ visaType: "O-1A" });
     const got = await callAs(BOB).case.get({ caseId: id });
     expect(got).toBeNull();
+  });
+});
+
+// Regression net for open_issues #59. The `cases_admin` RLS policy
+// (0005_rls.sql:138-139) grants admins blanket access via `is_admin()`,
+// so an admin who is not a case participant USED to see every attorney's
+// case on the attorney dashboard. The application-layer participant
+// gate in case.list / case.get must hold even when RLS would let
+// the read through. If these assertions ever start failing, somebody
+// dropped the explicit participant filter; do not "fix" by trusting
+// RLS — restore the filter.
+describe("case.list / case.get — admin participant gate", () => {
+  it("an admin who is not a participant sees no cases via case.list", async (ctx) => {
+    gate(ctx);
+    await callAs(ALICE).case.create({ visaType: "O-1A" });
+    await callAs(BOB).case.create({ visaType: "O-1A" });
+
+    const list = await callAs(CAROL_ADMIN).case.list({});
+    expect(list.items).toEqual([]);
+    expect(list.nextCursor).toBeNull();
+  });
+
+  it("an admin who is not a participant gets null from case.get", async (ctx) => {
+    gate(ctx);
+    const { id } = await callAs(ALICE).case.create({ visaType: "O-1A" });
+
+    const got = await callAs(CAROL_ADMIN).case.get({ caseId: id });
+    expect(got).toBeNull();
+  });
+
+  it("an admin who IS added as a participant sees the case", async (ctx) => {
+    const db = gate(ctx);
+    const { id } = await callAs(ALICE).case.create({ visaType: "O-1A" });
+    await db.insert(caseParticipants).values({
+      caseId: id,
+      userId: CAROL_ADMIN,
+      role: "observer",
+      isPrimary: false,
+    });
+
+    const list = await callAs(CAROL_ADMIN).case.list({});
+    expect(list.items.map((c) => c.id)).toEqual([id]);
+
+    const got = await callAs(CAROL_ADMIN).case.get({ caseId: id });
+    expect(got?.id).toBe(id);
   });
 });
 
@@ -448,6 +496,10 @@ async function teardown(db: TestDb): Promise<void> {
   await db.execute(
     sql`delete from organizations where id in (${ALICE_ORG}, ${BOB_ORG})`,
   );
-  await db.execute(sql`delete from user_roles where user_id in (${ALICE}, ${BOB})`);
-  await db.execute(sql`delete from users where id in (${ALICE}, ${BOB})`);
+  await db.execute(
+    sql`delete from user_roles where user_id in (${ALICE}, ${BOB}, ${CAROL_ADMIN})`,
+  );
+  await db.execute(
+    sql`delete from users where id in (${ALICE}, ${BOB}, ${CAROL_ADMIN})`,
+  );
 }
