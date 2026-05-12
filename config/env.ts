@@ -150,6 +150,28 @@ const schema = z
       });
     }
 
+    // Inngest invariant — in production both keys are required. Without
+    // `INNGEST_SIGNING_KEY` the SDK silently runs in dev mode in prod:
+    // events enqueue, cloud invocations are rejected, no runs ever fire.
+    // We hit this once already (signing key absent → 18 functions sat
+    // idle for hours with events backed up in the cloud dashboard).
+    // Hard-fail at boot so the symptom is unmistakable next time.
+    if (v.NODE_ENV === "production") {
+      const REQUIRED: Array<keyof typeof v> = [
+        "INNGEST_EVENT_KEY",
+        "INNGEST_SIGNING_KEY",
+      ];
+      for (const key of REQUIRED) {
+        if (!v[key]) {
+          ctx.addIssue({
+            code: "custom",
+            message: `${key} is required in production (without it the Inngest SDK falls back to dev mode and cloud runs never execute)`,
+            path: [key],
+          });
+        }
+      }
+    }
+
     // S3/R2 invariants — if `STORAGE_BACKEND=s3`, every credential and
     // the bucket name must be present. Without these the SDK would
     // silently fall back to ambient AWS profile credentials (in a

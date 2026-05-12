@@ -13,6 +13,198 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #65 — Intake schema accepts arbitrary special characters in name-class fields
+
+Status: Active. Surfaced 2026-05-12 (attorney UX audit).
+
+`server/db/schema/zod/beneficiary.ts:21-47` validates `fullName`,
+`occupation`, `field`, `nationality`, and `currentLocation` with only
+`.string().min(1).max(N)`. Angle brackets, backticks, braces, and
+control characters all pass — bad for downstream prompt safety and
+PDF rendering, and noise for clerks reviewing intake.
+
+Recommended fix: add `lib/validators.ts` exporting two reusable Zod
+helpers — `safeName(max)` (Unicode letters + space, hyphen, apostrophe,
+period; rejects digits and symbols) and `safeText(max)` (broader: also
+allows digits and common punctuation; rejects `<>{}` and control
+chars). Apply `safeName` to name/nationality, `safeText` to
+occupation/location. Narrative fields (notes, guidance) stay
+unrestricted. Schema is the source of truth — RHF resolver gets the
+same rules on the client.
+
+Out of scope: deciding Unicode policy for non-Latin scripts. Default
+to permissive (`\p{L}` class) unless legal says otherwise.
+
+### #64 — DateInput silently reverts invalid input; year bounds hardcoded to 1900
+
+Status: Active. Surfaced 2026-05-12.
+
+`components/ui/DateInput.tsx` already does the hard work (masked input,
+calendar popover via react-day-picker, impossible-date rejection via
+JS `Date` round-trip at ~lines 82-88). Two gaps:
+
+1. Invalid blur silently reverts to the last valid value (~line 145).
+   No `aria-invalid`, no error surfaced to the parent form.
+2. Calendar minYear hardcoded to 1900 (~line 226) regardless of
+   semantic. DOB should top out at today; filing dates should floor at
+   today.
+
+Recommended fix: (a) expose an `onInvalid?: () => void` callback OR
+(preferred) make the component "uncontrolled valid-only" and let RHF's
+`fieldState.error` surface the message via the parent — no internal
+toast. (b) derive `minYear`/`maxYear` from existing `min`/`max` props
+when present; expose explicit props as overrides.
+
+### #63 — tRPC validation errors render as raw JSON to the user
+
+Status: Active. Surfaced 2026-05-12.
+
+`server/api/trpc.ts:41-50` correctly attaches
+`zodError: error.cause.flatten()` to the error shape. The bug is on
+the client: `NewCaseForm.tsx:60-62` and `IntakeWizard.tsx` render
+`mutation.error.message` directly, which for Zod issues is a
+JSON-stringified array of issues — users see
+`[{"code":"too_small",...}]`.
+
+Recommended fix: add `lib/trpc/format-error.ts` exporting
+`formatTrpcError(err)` that prefers `err.data?.zodError?.fieldErrors`
+(joins the first message per field as `"Field: message"`), falls back
+to `err.message`. Replace every direct `error.message` render with a
+call to this helper. Do not change the server formatter — it's
+correct; only client rendering is wrong.
+
+Acceptance: submit intake with invalid DOB → banner reads
+"Date of birth: Must be a valid date" not raw JSON.
+
+### #62 — IntakeWizard does not gate Next on per-section validation
+
+Status: Active. Surfaced 2026-05-12.
+
+`components/case/IntakeWizard.tsx:550-606` — the Next button calls
+`navigateToSection(nextSectionAfter(active))` unconditionally. The
+full `BeneficiaryDataSchema` runs only at submit (~line 238). A user
+can fill section 1 with junk, click Next, never see an error until
+the final submit several steps later.
+
+Recommended fix: define `SECTION_FIELDS: Record<SectionKey,
+(keyof BeneficiaryData)[]>` colocated with the section list. In the
+Next handler, run `BeneficiaryDataSchema.pick(SECTION_FIELDS[active])
+.safeParse(currentValues)`; if it fails, set field errors on the form
+state and block navigation. Same map drives the per-section error
+badge in the rail (today none).
+
+Pre-req: the wizard currently does manual `useState` field tracking;
+this work is cleanest after moving to react-hook-form + zodResolver.
+Track that as the parent refactor.
+
+### #61 — IntakeWizard has no Previous button
+
+Status: Active. Surfaced 2026-05-12.
+
+`components/case/IntakeWizard.tsx:550-606` footer renders only the
+forward primary button ("Next: …" or "Submit intake →"). There is a
+`nextSectionAfter(...)` helper at ~line 626 but no symmetric prev.
+Users can click the rail items to jump backward, but the muscle memory
+expectation for wizards is forward/back buttons.
+
+Recommended fix: add `prevSectionBefore(key)`. Render a secondary
+"← Back: {label}" button on sections 2..N in the footer bar's left
+slot. Reuse the existing auto-save-on-navigation pathway. No new
+state.
+
+### #60 — RecommenderListEditor hardcodes "three" instead of reading visa config
+
+Status: Active. Surfaced 2026-05-12. Closely related to #50.
+
+`lib/visa-criteria.ts:73` defines optional `minRecommenders`;
+`:160` sets O-1A → 3. EB-1A currently omits the field (per
+`Adding_New_Visa_Type_Guide.md`). `components/case/RecommenderListEditor.tsx:138`
+hardcodes the empty-state subtitle "Add at least three letter-writers
+(O-1A minimum)". If/when EB-1A gets `minRecommenders: 5`, this stays
+wrong without code changes — exactly the drift #50 also warns about.
+
+Recommended fix: pass `visaType` as a prop into
+`RecommenderListEditor`; resolve `minRecommenders` via
+`visaCriteriaConfig(visaType)?.minRecommenders`. Drive the empty-state
+copy, an "X of Y added" counter, and a "below recommended" chip on
+the case overview from this single value. Undefined → neutral copy
+("Add letter-writers") and no counter.
+
+Two follow-ups: (a) product decision on EB-1A's `minRecommenders`
+(log in `docs/decisions.md`); (b) #50 already calls for un-hardcoding
+the `case.completeIntake` server-side message — fold both fixes into
+the same commit so message and UI agree.
+
+### #59b — First-run attorneys can't tell what step comes next in a case
+
+Status: Active. Surfaced 2026-05-12 (attorney UX feedback —
+"create case, upload documents, all by guessing").
+
+The case lifecycle is deterministic — intake → documents → build →
+review → approve → package → file — but the UI today exposes the
+sub-pages as a flat sidebar (`AttorneySidebar`) with no explicit
+"you are here / do this next" cue. New attorneys create a case and
+then bounce between Documents and Build with no signal that intake
+is incomplete, that build is blocked on missing required docs, or
+that the package can be generated.
+
+Recommended fix (preferred — scales, no copy-decay risk):
+- Add a server-derived `caseStage` (and `nextAction`) computed from
+  existing state: intake completeness %, required-doc coverage from
+  `lib/visa-criteria.ts`, output approval count, package generation,
+  `filed_at`. Pure function over the case row + related counts; no
+  new persisted column.
+- Render a horizontal `CaseStageRail` at the top of every
+  `case/[id]/*` page showing the current stage and a primary
+  next-action CTA ("Generate package", "Approve 2 remaining outputs",
+  etc.). Same value drives the case-card subtitle on the dashboard
+  and the empty state for first-time users.
+- Don't add a tour library (Driver.js, Shepherd). They become
+  maintenance debt as flows change. The stage rail is computed from
+  state, so it can't drift.
+
+Bonus: this is also the natural home for the per-section progress
+chips that #62 needs in the intake wizard.
+
+Out of scope: re-architecting the sidebar. The stage rail is
+additive; the sidebar stays.
+
+### #59 — `cases_admin` RLS policy leaks all cases into attorney-side `case.list`
+
+Status: Active. Surfaced 2026-05-12 (reproduced as admin user on
+the attorney dashboard).
+
+`server/db/migrations/0005_rls.sql:138-139` —
+`create policy cases_admin on cases for all using (is_admin()) with
+check (is_admin())`. Every request sets `app.current_user_id` via
+`server/api/trpc.ts:72`. When the session user has `role='admin'` in
+`user_roles`, `is_admin()` evaluates true inside ANY RLS check — so
+`case.list` (an attorney-scoped procedure) returns every row instead
+of only the rows where the session user is a case participant.
+
+This is mechanical bypass, not by-design product behavior. The CLAUDE.md
+§6.9 rule is "RLS is the safety net, not the gate" — i.e., the
+attorney `case.list` should filter explicitly by the session user in
+SQL, and let RLS catch missed cases. Today the procedure trusts RLS,
+which collapses for admins.
+
+Recommended fix:
+1. `case.list` (and any other attorney-scoped read on `cases`) must
+   filter explicitly: `where case_id in (select case_id from
+   case_participants where user_id = :ctx.session.user.id and
+   removed_at is null)`. RLS stays as belt-and-suspenders.
+2. Audit every `is_admin()`-backed `for all` policy in 0005_rls.sql
+   and downstream migrations (`organizations`, `case_participants`,
+   `case_outputs`, `case_documents`, `invoices`, etc.) for the same
+   pattern. Each attorney-scoped procedure on those tables should
+   filter explicitly.
+3. Admin reads continue to flow through `/admin/*` procedures which
+   intentionally do not filter — `admin.listAllCases` etc.
+
+Acceptance: as an admin user, the attorney dashboard shows only cases
+where the admin is a participant. The admin console still shows all
+cases.
+
 ### #58 — Migration pipeline cannot run `CREATE INDEX CONCURRENTLY`
 
 Status: Deferred to Phase 2 traffic. `drizzle-kit migrate` wraps each
