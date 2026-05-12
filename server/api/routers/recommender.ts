@@ -15,6 +15,7 @@ import { db as ownerDb, type Db } from "@/server/db/client";
 import { protectedProcedure, router } from "@/server/api/trpc";
 import { canEditIntake } from "@/lib/case-status";
 import { emitFromCtx } from "@/server/services/analytics/emit";
+import { isUserCaseParticipant } from "@/server/services/cases/visibility";
 
 /**
  * Per-case recommender CRUD. Same RLS pattern as `documentRouter`:
@@ -47,13 +48,21 @@ const ReorderInput = z.object({
   orderedIds: z.array(z.uuid()).min(1).max(50),
 });
 
-/** Look up a case row through `ctx.db` (RLS gate) AND return its
- *  status so mutations can enforce `canEditIntake`. NOT_FOUND covers
- *  both "doesn't exist" and "not your case" — no existence oracle. */
+/** Look up a case row through `ctx.db` AND verify the caller is an
+ *  active participant before returning its status. Application-layer
+ *  membership gate is required because the `cases_admin` RLS policy
+ *  (0005_rls.sql:138-139) lets admins bypass per-user scoping; without
+ *  this check an admin could mutate recommenders on any attorney's
+ *  case. See `services/cases/visibility.ts`. NOT_FOUND covers both
+ *  "doesn't exist" and "not your case" — no existence oracle. */
 async function gateCaseEdit(args: {
   ctxDb: Db;
   caseId: string;
+  userId: string;
 }): Promise<{ status: CaseStatus }> {
+  if (!(await isUserCaseParticipant(args.ctxDb, args.caseId, args.userId))) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+  }
   const [row] = await args.ctxDb
     .select({ status: cases.status })
     .from(cases)
@@ -115,10 +124,13 @@ async function runWithUniqueRetry<T>(
 }
 
 /** Same as `gateCaseEdit` but resolves through a recommender id —
- *  used by update/remove which take only the recommender's pk. */
+ *  used by update/remove which take only the recommender's pk. Also
+ *  enforces participant membership before the status check; see
+ *  `gateCaseEdit` for context. */
 async function gateRecommenderEdit(args: {
   ctxDb: Db;
   recommenderId: string;
+  userId: string;
 }): Promise<{ caseId: string; status: CaseStatus }> {
   const [row] = await args.ctxDb
     .select({
@@ -141,6 +153,12 @@ async function gateRecommenderEdit(args: {
       message: "recommender not found",
     });
   }
+  if (!(await isUserCaseParticipant(args.ctxDb, row.caseId, args.userId))) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "recommender not found",
+    });
+  }
   if (!canEditIntake(row.status as CaseStatus)) {
     throw new TRPCError({
       code: "CONFLICT",
@@ -153,6 +171,9 @@ async function gateRecommenderEdit(args: {
 export const recommenderRouter = router({
   /** Active recommenders for a case, ordered by `displayOrder`. */
   list: protectedProcedure.input(ListInput).query(async ({ ctx, input }) => {
+    if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+      return [];
+    }
     return await ctx.db
       .select({
         id: caseRecommenders.id,
@@ -179,7 +200,11 @@ export const recommenderRouter = router({
     .input(CreateInput)
     .mutation(async ({ ctx, input }) => {
       const { userId } = ctx;
-      await gateCaseEdit({ ctxDb: ctx.db, caseId: input.caseId });
+      await gateCaseEdit({
+        ctxDb: ctx.db,
+        caseId: input.caseId,
+        userId,
+      });
 
       // The partial unique index on `(case_id, display_order) WHERE
       // deleted_at IS NULL` makes `nextOrder = max + 1` unsafe under
@@ -250,6 +275,7 @@ export const recommenderRouter = router({
       const { caseId } = await gateRecommenderEdit({
         ctxDb: ctx.db,
         recommenderId: input.recommenderId,
+        userId,
       });
 
       const patchKeys = Object.keys(input.patch);
@@ -287,6 +313,7 @@ export const recommenderRouter = router({
       const { caseId } = await gateRecommenderEdit({
         ctxDb: ctx.db,
         recommenderId: input.recommenderId,
+        userId,
       });
 
       await ownerDb.transaction(async (tx) => {
@@ -326,7 +353,11 @@ export const recommenderRouter = router({
     .input(ReorderInput)
     .mutation(async ({ ctx, input }) => {
       const { userId } = ctx;
-      await gateCaseEdit({ ctxDb: ctx.db, caseId: input.caseId });
+      await gateCaseEdit({
+        ctxDb: ctx.db,
+        caseId: input.caseId,
+        userId,
+      });
 
       // Resolve the case's active recommender ids through ctx.db (RLS)
       // so a forged id from another case is rejected.
