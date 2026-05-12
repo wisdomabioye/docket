@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { safeName, safeText } from "@/lib/validators";
 
 /**
  * Schema for `cases.beneficiary_data` (jsonb).
@@ -20,16 +21,21 @@ import { z } from "zod";
 // `components/case/IntakeWizard.tsx`.
 export const BeneficiaryDataSchema = z
   .object({
-    // Profile section
-    fullName: z.string().min(1).max(200),
-    dateOfBirth: z.iso.date(), // ISO 8601 YYYY-MM-DD
-    nationality: z.string().min(2).max(100),
-    currentLocation: z.string().min(1).max(200),
+    // Profile section. Name-class fields use `safeName` (Unicode
+    // letters + space/hyphen/apostrophe/period); descriptive fields
+    // use `safeText` (also digits + comma/&/parens/slash). See
+    // `lib/validators.ts` for the threat model — these reject
+    // angle-bracket / brace / control-char payloads that would
+    // otherwise round-trip into AI prompts and rendered PDFs.
+    fullName: safeName(200),
+    dateOfBirth: z.iso.date().optional(), // ISO 8601 YYYY-MM-DD
+    nationality: safeName(100),
+    currentLocation: safeText(200),
 
     // Practice / field section
-    occupation: z.string().min(1).max(200),
-    field: z.string().min(1).max(200),
-    yearsActive: z.number().int().min(0).max(80),
+    occupation: safeText(200),
+    field: safeText(200),
+    yearsActive: z.number().int().min(0).max(80).optional(),
 
     // Filing target section. Recommenders moved out of beneficiary_data:
     // they now live in `case_recommenders` (one row per letter-writer)
@@ -37,13 +43,15 @@ export const BeneficiaryDataSchema = z
     // `IntakeWizard`'s Recommenders section. `.strict()` would reject
     // a legacy `recommendersCount` field on read; the rollout plan is a
     // full DB wipe before re-test, so no migration is needed.
-    targetFilingDate: z.iso.date(),
+    targetFilingDate: z.iso.date().optional(),
 
-    // Contact + narrative
-    email: z.email(),
-    notes: z.string().min(1).max(5000),
+    // Contact + narrative. `notes` stays free-form by design — it's
+    // the attorney's working memo, not a structured field, and over-
+    // sanitizing here would harm legitimate content (paragraph breaks,
+    // bullet markers, quotes). Length cap is the only guard.
+    email: z.email().optional(),
+    notes: z.string().min(1).max(5000).optional(),
   })
-  .partial()
   .strict();
 
 export type BeneficiaryData = z.infer<typeof BeneficiaryDataSchema>;

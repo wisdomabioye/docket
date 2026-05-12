@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { barNumberSchema, requiredSafeText } from "@/lib/validators";
 
 /**
  * Schema for `waitlist_entries.details` (jsonb). Shape varies by
@@ -11,14 +12,24 @@ import { z } from "zod";
  *
  * `passthrough()` lets older rows survive future field additions without
  * a backfill — same convention as `audit-details.ts`.
+ *
+ * Free-text fields use the safe-text validator from
+ * `lib/validators.ts` — admins read these in the dashboard and they
+ * land in support email threads, so HTML/control-char payloads should
+ * never reach this column.
  */
 export const AttorneyApplicationDetailsSchema = z
   .object({
-    firmName: z.string().min(1).max(200),
-    stateOfAdmission: z.string().min(2).max(80),
-    barNumber: z.string().min(1).max(80),
+    firmName: requiredSafeText(200),
+    // State of admission accepts either a state code ("CA") or full
+    // name ("California") — safeText covers both. Not a closed enum
+    // here because the waitlist is consumer-facing and we'd rather
+    // collect free-form than reject a typo at the funnel top.
+    stateOfAdmission: requiredSafeText(80),
+    barNumber: barNumberSchema,
     ailaMember: z.boolean(),
     yearsPracticing: z.number().int().min(0).max(80).optional(),
+    // `notes` is open prose — keep length cap only.
     notes: z.string().min(1).max(2000).optional(),
   })
   .passthrough();

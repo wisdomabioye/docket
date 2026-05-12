@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { requiredSafeName, requiredSafeText } from "@/lib/validators";
 
 /**
  * Single source of truth for recommender form + API input. Consumed by:
@@ -7,12 +8,31 @@ import { z } from "zod";
  *
  * The shape mirrors `caseRecommenders` columns. Fields that the table
  * stores nullable accept either a non-empty trimmed string OR `null` —
- * the empty-string-is-not-input rule from the user's memory rule
- * (`feedback_no_empty_string_optional.md`) is enforced by `.min(1)`
+ * the empty-string-is-not-input rule from
+ * `feedback_no_empty_string_optional.md` is enforced by `.min(1)`
  * before `.optional().nullable()`.
+ *
+ * Name + role-class fields use the safe-* helpers from
+ * `lib/validators.ts` so prompt-injection payloads don't reach the
+ * petition-letter generator (recommender names land verbatim in the
+ * letter templates and rendered PDFs). `guidance` stays free-form —
+ * it's the attorney's instructions to themselves, not source for AI.
  */
 
-const NonEmpty = (max: number) => z.string().trim().min(1).max(max);
+const NullableSafeText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .regex(
+      /^[\p{L}\p{N} '\-.,()&/+]+$/u,
+      "Use letters, numbers, spaces, and basic punctuation only.",
+    )
+    .nullable()
+    .optional()
+    .transform((v) => (v === undefined ? null : v));
+
 const NullableNonEmpty = (max: number) =>
   z
     .string()
@@ -24,9 +44,9 @@ const NullableNonEmpty = (max: number) =>
     .transform((v) => (v === undefined ? null : v));
 
 export const RecommenderInputSchema = z.object({
-  fullName: NonEmpty(200),
-  relationship: NonEmpty(500),
-  titleOrg: NullableNonEmpty(200),
+  fullName: requiredSafeName(200),
+  relationship: requiredSafeText(500),
+  titleOrg: NullableSafeText(200),
   email: z.email().max(200).nullable().optional().transform((v) => v ?? null),
   guidance: NullableNonEmpty(5000),
 });

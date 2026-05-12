@@ -8,6 +8,7 @@ import {
 import { db } from "@/server/db/client";
 import { publicProcedure, router } from "@/server/api/trpc";
 import { readIp } from "@/server/api/headers";
+import { requiredSafeName } from "@/lib/validators";
 
 /**
  * Public marketing surface — waitlist signup. Runs as a public procedure
@@ -35,7 +36,7 @@ const JoinWaitlistInput = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("general"),
     email: z.email().max(320),
-    name: z.string().min(1).max(120).optional(),
+    name: requiredSafeName(120).optional(),
     source: z.string().min(1).max(80).optional(),
     utmSource: z.string().min(1).max(80).optional(),
     utmMedium: z.string().min(1).max(80).optional(),
@@ -52,7 +53,7 @@ const JoinWaitlistInput = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("attorney"),
     email: z.email().max(320),
-    name: z.string().min(1).max(120),
+    name: requiredSafeName(120),
     details: AttorneyApplicationDetailsSchema,
     source: z.string().min(1).max(80).optional(),
     utmSource: z.string().min(1).max(80).optional(),

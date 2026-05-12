@@ -18,7 +18,7 @@ import {
 describe("BeneficiaryDataSchema", () => {
   it("accepts a partial valid object", () => {
     const r = BeneficiaryDataSchema.safeParse({
-      fullName: "Test Beneficiary 001",
+      fullName: "Test Beneficiary",
       nationality: "Canada",
     });
     expect(r.success).toBe(true);
@@ -35,6 +35,27 @@ describe("BeneficiaryDataSchema", () => {
   it("rejects an oversize notes field", () => {
     const r = BeneficiaryDataSchema.safeParse({ notes: "x".repeat(5001) });
     expect(r.success).toBe(false);
+  });
+
+  it("rejects digits in fullName (safeName contract)", () => {
+    const r = BeneficiaryDataSchema.safeParse({
+      fullName: "Test Beneficiary 001",
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects angle-bracket payloads in occupation (safeText contract)", () => {
+    const r = BeneficiaryDataSchema.safeParse({
+      occupation: "<script>alert(1)</script>",
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts Unicode names (O'Brien-Smith, José García, 中村)", () => {
+    for (const fullName of ["O'Brien-Smith", "José García", "中村"]) {
+      const r = BeneficiaryDataSchema.safeParse({ fullName });
+      expect(r.success, `expected accept: ${fullName}`).toBe(true);
+    }
   });
 });
 

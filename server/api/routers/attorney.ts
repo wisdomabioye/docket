@@ -9,6 +9,7 @@ import {
   CONTRACTOR_AGREEMENT_VERSION,
 } from "@/server/auth/contractor-agreement";
 import { emitFromCtx } from "@/server/services/analytics/emit";
+import { barNumberSchema, usStateCodeSchema } from "@/lib/validators";
 
 /**
  * Attorney-side procedures: onboarding form submission. Status flips
@@ -23,10 +24,14 @@ import { emitFromCtx } from "@/server/services/analytics/emit";
  */
 
 const SubmitOnboardingInput = z.object({
-  barNumber: z.string().min(2).max(60),
-  // 2-letter ISO/USPS state codes. Server-side normalization to uppercase
-  // so callers outside the form (tests, future API) can't store mixed-case.
-  barStates: z.array(z.string().length(2)).min(1).max(50),
+  // Bar-number contract is enforced by `barNumberSchema` (uppercase
+  // alphanumeric + hyphen, 2-30 chars). Caller doesn't need to
+  // pre-normalize — the schema does both transform and validation.
+  barNumber: barNumberSchema,
+  // USPS state codes — closed enum from `lib/validators.ts` (50
+  // states + DC + 5 inhabited territories). The schema pre-uppercases
+  // so the form can submit mixed case without an extra trim step.
+  barStates: z.array(usStateCodeSchema).min(1).max(50),
   // Must equal the current TERMS_VERSION. Rejects stale or fake versions.
   termsAcceptedVersion: z.literal(TERMS_VERSION),
   signatureId: z.string().uuid(),
@@ -110,14 +115,15 @@ export const attorneyRouter = router({
         });
       }
 
-      const normalizedBarStates = input.barStates.map((s) => s.toUpperCase());
       const now = new Date();
 
       await db
         .update(attorneyProfiles)
         .set({
+          // `barNumber` and `barStates` are already trimmed +
+          // uppercased by the input schema in `lib/validators.ts`.
           barNumber: input.barNumber,
-          barStates: normalizedBarStates,
+          barStates: input.barStates,
           acceptedTermsVersion: input.termsAcceptedVersion,
           // Denormalized convenience flag — legal record is the
           // signed_documents row referenced by `input.signatureId`.
