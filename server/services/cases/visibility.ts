@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { caseParticipants } from "@/server/db/schema";
 import type { Db } from "@/server/db/client";
 
@@ -41,4 +41,29 @@ export async function isUserCaseParticipant(
     )
     .limit(1);
   return Boolean(row);
+}
+
+/**
+ * Filter a candidate set of case ids down to those the user actively
+ * participates on. Same predicate as {@link isUserCaseParticipant} but
+ * for batch queries (e.g. `output.summarize` over a page of cases).
+ * Returns an empty array when `caseIds` is empty — no DB call.
+ */
+export async function visibleCaseIds(
+  db: Db,
+  caseIds: ReadonlyArray<string>,
+  userId: string,
+): Promise<string[]> {
+  if (caseIds.length === 0) return [];
+  const rows = await db
+    .select({ caseId: caseParticipants.caseId })
+    .from(caseParticipants)
+    .where(
+      and(
+        inArray(caseParticipants.caseId, [...caseIds]),
+        eq(caseParticipants.userId, userId),
+        isNull(caseParticipants.removedAt),
+      ),
+    );
+  return rows.map((r) => r.caseId);
 }

@@ -53,6 +53,10 @@ import {
   type ReconcileResult,
   type ReconcileTrigger,
 } from "@/server/services/cases/reconcile-status";
+import {
+  isUserCaseParticipant,
+  visibleCaseIds,
+} from "@/server/services/cases/visibility";
 
 /**
  * Stage 08 output review router. Every mutation goes through
@@ -227,9 +231,10 @@ function emitLifecycleTransition(
 
 export const outputRouter = router({
   /**
-   * Per-case approval tally for the dashboard. RLS on `case_outputs`
-   * filters out cases the caller can't see, so unauthorized ids
-   * silently return an empty entry (no existence oracle).
+   * Per-case approval tally for the dashboard. Filters the caller's
+   * input down to cases they actively participate on before tallying
+   * — admin RLS bypass (see `services/cases/visibility.ts`) would
+   * otherwise let an admin see counts for every attorney's cases.
    *
    * Returns a plain object map so superjson serializes cleanly across
    * the wire — `Map` values are serializable but the Record shape is
@@ -238,19 +243,23 @@ export const outputRouter = router({
   summarize: protectedProcedure
     .input(SummarizeInput)
     .query(async ({ ctx, input }) => {
+      const visible = await visibleCaseIds(ctx.db, input.caseIds, ctx.userId);
+      const out: Record<string, { approved: number; total: number }> = {};
+      if (visible.length === 0) return out;
       const tally = await summarizeOutputApprovals({
         db: ctx.db,
-        caseIds: input.caseIds,
+        caseIds: visible,
       });
-      const out: Record<string, { approved: number; total: number }> = {};
       for (const [caseId, counts] of tally) out[caseId] = counts;
       return out;
     }),
 
   list: protectedProcedure.input(ListInput).query(async ({ ctx, input }) => {
     // Slim projection — the grid card view doesn't need full prose.
-    // RLS hides outputs the caller can't see; result is the slim
-    // metadata set, alphabetically + subgroup-stable ordered.
+    // Application-layer participant gate; RLS stays as safety net.
+    if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+      return [];
+    }
     return await getCurrentOutputsForList({
       db: ctx.db,
       caseId: input.caseId,
@@ -266,6 +275,12 @@ export const outputRouter = router({
       )
       .limit(1);
     if (!row) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "output not found" });
+    }
+    // Application-layer participant gate. Indistinguishable from
+    // "output not found" so admin sessions not on the case can't
+    // infer existence.
+    if (!(await isUserCaseParticipant(ctx.db, row.caseId, ctx.userId))) {
       throw new TRPCError({ code: "NOT_FOUND", message: "output not found" });
     }
     // Internal scaffolding types (e.g. evidence_plan) feed prompt
@@ -287,10 +302,11 @@ export const outputRouter = router({
       if (isInternalOutputType(input.outputType)) {
         throw new TRPCError({ code: "NOT_FOUND", message: "output not found" });
       }
-      // Confirm the case is visible (RLS gate). The history query
-      // itself doesn't enforce RLS because `getOutputVersionHistory`
-      // accepts any Db; use ctx.db here so the check + read share one
-      // RLS-engaged session.
+      // Application-layer participant gate. RLS remains as a safety
+      // net, but admin sessions bypass it on case_outputs.
+      if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+        return [];
+      }
       return await getOutputVersionHistory({
         db: ctx.db,
         caseId: input.caseId,

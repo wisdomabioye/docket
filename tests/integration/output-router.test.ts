@@ -75,6 +75,7 @@ import {
 
 const ATTORNEY = "f1000000-0000-4000-8000-aaaa00000001";
 const STRANGER = "f1000000-0000-4000-8000-aaaa00000002";
+const ADMIN_OFF_CASE = "f1000000-0000-4000-8000-aaaa00000003";
 const ORG = "f1000000-0000-4000-8000-bbbb00000001";
 const CASE_ID = "f1000000-0000-4000-8000-cccc00000001";
 
@@ -336,6 +337,48 @@ describe("output.list / get / listVersions", () => {
         outputType: "evidence_plan",
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+// Regression net for open_issues #59 (case_outputs). The
+// `case_outputs_admin` RLS policy grants admins blanket access, so an
+// admin who is NOT a case participant USED to see outputs for every
+// attorney's case. The application-layer participant gate must hold
+// even when RLS would let the read through. If these break, somebody
+// dropped the gate — restore it; don't trust RLS.
+describe("output reads — admin participant gate", () => {
+  it("list returns [] for an admin not on the case", async (ctx) => {
+    const d = gate(ctx);
+    await insertOutput(d);
+    const r = await callAs(ADMIN_OFF_CASE).output.list({ caseId: CASE_ID });
+    expect(r).toEqual([]);
+  });
+
+  it("get NOT_FOUND for an admin not on the case", async (ctx) => {
+    const d = gate(ctx);
+    const id = await insertOutput(d);
+    await expect(
+      callAs(ADMIN_OFF_CASE).output.get({ outputId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("listVersions returns [] for an admin not on the case", async (ctx) => {
+    const d = gate(ctx);
+    await insertOutput(d, { outputType: "personal_statement" });
+    const r = await callAs(ADMIN_OFF_CASE).output.listVersions({
+      caseId: CASE_ID,
+      outputType: "personal_statement",
+    });
+    expect(r).toEqual([]);
+  });
+
+  it("summarize drops case ids the admin is not a participant on", async (ctx) => {
+    const d = gate(ctx);
+    await insertOutput(d);
+    const r = await callAs(ADMIN_OFF_CASE).output.summarize({
+      caseIds: [CASE_ID],
+    });
+    expect(r).toEqual({});
   });
 });
 
@@ -1078,10 +1121,12 @@ async function seed(d: TestDb): Promise<void> {
   await d.insert(users).values([
     { id: ATTORNEY, name: "Test Attorney", email: "out-att@docket.local" },
     { id: STRANGER, name: "Stranger", email: "out-str@docket.local" },
+    { id: ADMIN_OFF_CASE, name: "Off-case Admin", email: "out-adm@docket.local" },
   ]);
   await d.insert(userRoles).values([
     { userId: ATTORNEY, role: "attorney" },
     { userId: STRANGER, role: "attorney" },
+    { userId: ADMIN_OFF_CASE, role: "admin" },
   ]);
   await d.insert(organizations).values({
     id: ORG,
@@ -1131,9 +1176,9 @@ async function teardown(d: TestDb): Promise<void> {
     /* sql */ `delete from organizations where id = '${ORG}'` as never,
   );
   await d.execute(
-    /* sql */ `delete from user_roles where user_id in ('${ATTORNEY}', '${STRANGER}')` as never,
+    /* sql */ `delete from user_roles where user_id in ('${ATTORNEY}', '${STRANGER}', '${ADMIN_OFF_CASE}')` as never,
   );
   await d.execute(
-    /* sql */ `delete from users where id in ('${ATTORNEY}', '${STRANGER}')` as never,
+    /* sql */ `delete from users where id in ('${ATTORNEY}', '${STRANGER}', '${ADMIN_OFF_CASE}')` as never,
   );
 }
