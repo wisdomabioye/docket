@@ -9,6 +9,7 @@ import {
   parsePipelineKey,
   type PipelineKey,
 } from "@/lib/pipeline";
+import { deriveCaseStage } from "@/lib/case-stage";
 import { PendingApprovalCard } from "@/components/onboarding";
 import { RevenueCard } from "@/components/revenue/RevenueCard";
 import {
@@ -240,64 +241,23 @@ function buildCaseline(
 ): CaselineProps {
   const beneficiary =
     (c.beneficiaryData as { fullName?: string } | null) ?? {};
-  const stage = stageFor(c.status, approvals[c.id]);
-  const nextAction = nextActionFor(c.status);
+  const tally = approvals[c.id];
+  const stage = deriveCaseStage({
+    status: c.status,
+    ...(tally ? { approvals: tally } : {}),
+  });
   return {
     caseId: c.id,
     beneficiaryName: beneficiary.fullName ?? "Unnamed beneficiary",
     visaType: c.visaType,
     stageLabel: stage.label,
-    stagePercent: stage.percent,
+    stagePercent: stage.progressPct,
     updatedLabel: new Date(c.updatedAt).toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
     }),
-    ...(nextAction !== undefined ? { nextAction } : {}),
+    ...(stage.nextAction !== undefined ? { nextAction: stage.nextAction } : {}),
   };
-}
-
-function stageFor(
-  status: string,
-  approvals?: { approved: number; total: number },
-): { label: string; percent: number } {
-  switch (status) {
-    case "intake":
-      return { label: "Intake", percent: 8 };
-    case "documents_pending":
-      return { label: "Documents pending", percent: 22 };
-    case "extracting":
-      return { label: "Extracting documents", percent: 32 };
-    case "ready_to_build":
-      return { label: "Ready to build", percent: 42 };
-    case "building":
-      return { label: "Building drafts", percent: 55 };
-    case "build_failed":
-      return { label: "Build failed", percent: 50 };
-    case "draft_ready":
-      return { label: "Drafts ready", percent: 65 };
-    case "in_review":
-      return {
-        label:
-          approvals && approvals.total > 0
-            ? `In review · ${approvals.approved}/${approvals.total}`
-            : "In review",
-        percent: 75,
-      };
-    case "needs_revision":
-      return { label: "Needs revision", percent: 70 };
-    case "approved":
-      return { label: "Approved", percent: 88 };
-    case "package_ready":
-      return { label: "Package ready", percent: 92 };
-    case "delivered":
-      return { label: "Delivered", percent: 96 };
-    case "filed":
-      return { label: "Filed with USCIS", percent: 100 };
-    case "archived":
-      return { label: "Archived", percent: 100 };
-    default:
-      return { label: status, percent: 0 };
-  }
 }
 
 /** Human label for the active pipeline filter chip. Matches the
@@ -314,29 +274,3 @@ function pipelineLabel(key: PipelineKey): string {
   return labels[key];
 }
 
-function nextActionFor(status: string): string | undefined {
-  switch (status) {
-    case "intake":
-      return "Complete intake form";
-    case "documents_pending":
-      return "Upload evidence";
-    case "ready_to_build":
-      return "Click Build";
-    case "build_failed":
-      return "Retry build";
-    case "draft_ready":
-      return "Review drafts";
-    case "in_review":
-      return "Continue review";
-    case "needs_revision":
-      return "Apply revisions";
-    case "approved":
-      return "Download package";
-    case "package_ready":
-      return "Download package";
-    case "delivered":
-      return "Mark filed";
-    default:
-      return undefined;
-  }
-}

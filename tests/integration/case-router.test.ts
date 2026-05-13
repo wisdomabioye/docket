@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import {
+  attorneyProfiles,
   caseEvents,
   caseParticipants,
   caseRecommenders,
@@ -34,6 +35,7 @@ import {
 const ALICE = "70000000-0000-4000-8000-aaaa00000001";
 const BOB = "70000000-0000-4000-8000-bbbb00000001";
 const CAROL_ADMIN = "70000000-0000-4000-8000-eeee00000001";
+const CAROL_PROFILE = "70000000-0000-4000-8000-eeee00000002";
 const ALICE_ORG = "70000000-0000-4000-8000-cccc00000001";
 const BOB_ORG = "70000000-0000-4000-8000-dddd00000001";
 
@@ -69,8 +71,18 @@ beforeAll(async () => {
   await db.insert(userRoles).values([
     { userId: ALICE, role: "attorney" },
     { userId: BOB, role: "attorney" },
+    // Carol carries both roles: admin (so `is_admin()` RLS bypass fires
+    // on her sessions, the exact condition the gate tests defend
+    // against) and attorney (so `attorneyProcedure` middleware lets her
+    // through to the participant gate rather than 403-ing first).
     { userId: CAROL_ADMIN, role: "admin" },
+    { userId: CAROL_ADMIN, role: "attorney" },
   ]);
+  await db.insert(attorneyProfiles).values({
+    id: CAROL_PROFILE,
+    userId: CAROL_ADMIN,
+    status: "active",
+  });
   await db.insert(organizations).values([
     { id: ALICE_ORG, name: "Alice Org CR", slug: "case-alice-org" },
     { id: BOB_ORG, name: "Bob Org CR", slug: "case-bob-org" },
@@ -264,6 +276,130 @@ describe("case.list / case.get — admin participant gate", () => {
 
     const got = await callAs(CAROL_ADMIN).case.get({ caseId: id });
     expect(got?.id).toBe(id);
+  });
+});
+
+// Regression net for open_issues #59f. Every case.ts procedure that
+// reads / writes a single case must application-gate on
+// `caseParticipants` membership; RLS alone is bypassed for admins. If
+// any of these tests start passing without raising NOT_FOUND, somebody
+// removed the `isUserCaseParticipant` gate from that procedure —
+// restore it. One test per procedure so the describe block tracks the
+// router's procedure list 1:1.
+describe("case.* — admin participant gate (regression net for #59f)", () => {
+  async function aliceCase(d: TestDb): Promise<{ id: string; rev: number }> {
+    const { id } = await callAs(ALICE).case.create({ visaType: "O-1A" });
+    const [row] = await d
+      .select({ rev: cases.rowRevision })
+      .from(cases)
+      .where(eq(cases.id, id));
+    return { id, rev: row!.rev };
+  }
+
+  it("updateBeneficiary → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id, rev } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.updateBeneficiary({
+        caseId: id,
+        patch: { occupation: "Engineer" },
+        expectedRowRevision: rev,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("completeIntake → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id, rev } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.completeIntake({
+        caseId: id,
+        expectedRowRevision: rev,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("readiness → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.readiness({ caseId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("requestBuild → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.requestBuild({ caseId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("markFiled → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.markFiled({ caseId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("archive → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.archive({ caseId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("criteriaCoverage → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.criteriaCoverage({ caseId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("requiredDocsCoverage → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.requiredDocsCoverage({ caseId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("storageUsage → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.storageUsage({ caseId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("recommenderLetterCoverage → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.recommenderLetterCoverage({ caseId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("preflight → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.preflight({ caseId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("setPackageOrder → NOT_FOUND for off-case admin", async (ctx) => {
+    const d = gate(ctx);
+    const { id } = await aliceCase(d);
+    await expect(
+      callAs(CAROL_ADMIN).case.setPackageOrder({
+        caseId: id,
+        orderedKeys: ["personal_statement"],
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
 
@@ -495,6 +631,9 @@ async function teardown(db: TestDb): Promise<void> {
   );
   await db.execute(
     sql`delete from organizations where id in (${ALICE_ORG}, ${BOB_ORG})`,
+  );
+  await db.execute(
+    sql`delete from attorney_profiles where user_id in (${ALICE}, ${BOB}, ${CAROL_ADMIN})`,
   );
   await db.execute(
     sql`delete from user_roles where user_id in (${ALICE}, ${BOB}, ${CAROL_ADMIN})`,

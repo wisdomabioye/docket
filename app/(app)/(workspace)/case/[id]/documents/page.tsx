@@ -8,6 +8,7 @@ import {
   StorageCard,
 } from "@/components/case";
 import { DocumentsPanel } from "./DocumentsPanel";
+import { deriveCaseStage } from "@/lib/case-stage";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -55,6 +56,7 @@ export default async function DocumentsPage({
         visaType={caseRow.visaType}
         {...(meta ? { meta } : {})}
         status={caseRow.status}
+        stage={deriveCaseStage({ status: caseRow.status })}
         current="documents"
       />
 

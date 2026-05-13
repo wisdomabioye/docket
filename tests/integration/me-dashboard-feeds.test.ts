@@ -180,7 +180,9 @@ describe("me.todayTasks", () => {
     const d = gate(ctx);
     await seedAliceCase(d, "documents_pending");
     const out = await callAs(ALICE).me.todayTasks();
-    expect(out[0]!.label).toMatch(/upload documents/i);
+    // Label is the stage's nextAction CTA + beneficiary; sub mirrors
+    // the stage's sub copy. Source-of-truth is `lib/case-stage.ts`.
+    expect(out[0]!.label).toMatch(/upload evidence/i);
     expect(out[0]!.sub).toMatch(/uploads/i);
   });
 });

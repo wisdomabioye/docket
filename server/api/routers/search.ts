@@ -7,11 +7,14 @@ import { rateLimit } from "@/server/services/ratelimit";
 /**
  * Stage 11 W5 — global search backing the topbar's `Cmd+K` bar.
  *
- * Queries are RLS-engaged via `ctx.db`: an attorney sees only cases
- * they participate in (or own at the org level), and only documents on
- * those cases. Admins see everything per their RLS policy. The router
- * itself does not gate by role beyond `protectedProcedure` — RLS is
- * the source of truth for visibility.
+ * Queries are gated by application-layer participant membership: both
+ * the cases query and the documents query filter on a subquery against
+ * `case_participants` keyed by the session user. RLS stays as a safety
+ * net but is NOT the gate — the `cases_admin` / `case_documents_admin`
+ * policies bypass RLS for admin sessions, so a topbar search by an
+ * admin who isn't on the case would otherwise return every attorney's
+ * data. Closes the search surface of open_issues #59. Admin-side
+ * search lives behind `/admin/*` procedures (intentionally unscoped).
  *
  * Indexes (see migration `0019_search_trigram_indexes.sql`):
  *   - cases (lower(beneficiary_data->>'fullName'))
@@ -122,6 +125,10 @@ export const searchRouter = router({
           where deleted_at is null
             and beneficiary_data ->> 'fullName' is not null
             and lower(beneficiary_data ->> 'fullName') % ${needle}
+            and id in (
+              select case_id from case_participants
+              where user_id = ${userId} and removed_at is null
+            )
           order by sim desc, beneficiary_data ->> 'fullName' asc
           limit ${input.limit}
         `),
@@ -157,6 +164,10 @@ export const searchRouter = router({
                 extracted_text is not null
                 and lower(left(extracted_text, 4000)) like ${ilikePattern}
               )
+            )
+            and case_id in (
+              select case_id from case_participants
+              where user_id = ${userId} and removed_at is null
             )
           order by sim desc, original_filename asc
           limit ${input.limit}

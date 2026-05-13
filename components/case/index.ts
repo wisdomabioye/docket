@@ -2,6 +2,7 @@
  *  Used only inside `app/(app)/(workspace)/case/*`. */
 
 export { CaseHeader, type CaseHeaderProps, type CaseTab } from "./CaseHeader";
+export { CaseStageRail, type CaseStageRailProps } from "./CaseStageRail";
 export {
   CriteriaCoverageCard,
   type CriteriaCoverageCardProps,

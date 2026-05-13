@@ -7,6 +7,7 @@ import {
   BeneficiaryDataSchema,
   type BeneficiaryData,
 } from "@/server/db/schema/zod/beneficiary";
+import { deriveCaseStage } from "@/lib/case-stage";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -50,6 +51,7 @@ export default async function IntakePage({
   const initial: BeneficiaryData = parsed.success ? parsed.data : {};
   const beneficiary = initial;
   const meta = beneficiary.nationality ? beneficiary.nationality : undefined;
+  const stage = deriveCaseStage({ status: data.status });
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -59,6 +61,7 @@ export default async function IntakePage({
         visaType={data.visaType}
         {...(meta ? { meta } : {})}
         status={data.status}
+        stage={stage}
         current="intake"
       />
 

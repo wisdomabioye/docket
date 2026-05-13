@@ -9,6 +9,7 @@ import {
 import { CaseHeader } from "@/components/case";
 import { formatExhibitIndexAsMarkdown } from "@/server/services/output/format-structured";
 import { OutputDetailPanel } from "./OutputDetailPanel";
+import { deriveCaseStage } from "@/lib/case-stage";
 
 type Props = {
   params: Promise<{ id: string; outputId: string }>;
@@ -67,6 +68,7 @@ export default async function OutputDetailPage({
           visaType={caseRow.visaType}
           {...(meta ? { meta } : {})}
           status={caseRow.status}
+          stage={deriveCaseStage({ status: caseRow.status })}
           current="outputs"
         />
       </div>

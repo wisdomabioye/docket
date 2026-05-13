@@ -294,6 +294,13 @@ export const caseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { db, userId } = ctx;
 
+      // Participant gate (app-layer authz). Admins bypass RLS via the
+      // `cases_admin` policy, so a non-participant admin could otherwise
+      // mutate cases through this path. See `services/cases/visibility.ts`.
+      if (!(await isUserCaseParticipant(db, input.caseId, userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
+
       const [row] = await db
         .select({
           id: cases.id,
@@ -365,6 +372,13 @@ export const caseRouter = router({
     .input(CompleteIntakeInput)
     .mutation(async ({ ctx, input }) => {
       const { db, userId } = ctx;
+
+      // Participant gate (app-layer authz). Admins bypass RLS via the
+      // `cases_admin` policy, so the join-form gate guards this mutation
+      // against non-participant admins.
+      if (!(await isUserCaseParticipant(db, input.caseId, userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
 
       // Authz: ensure the caller can see the case (RLS). Pulls
       // `visaType` + `beneficiaryData` so we can shape the analytics
@@ -459,6 +473,11 @@ export const caseRouter = router({
   readiness: protectedProcedure
     .input(ReadinessInput)
     .query(async ({ ctx, input }) => {
+      // Participant gate — admin RLS bypass would otherwise expose
+      // readiness state for cases the admin is not on.
+      if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
       try {
         const r = await meetsBuildRequirements({
           db: ctx.db,
@@ -504,6 +523,12 @@ export const caseRouter = router({
     .input(RequestBuildInput)
     .mutation(async ({ ctx, input }) => {
       const { db, userId } = ctx;
+
+      // Participant gate — admins bypass RLS, so without this an
+      // attorney-admin could trigger a build on someone else's case.
+      if (!(await isUserCaseParticipant(db, input.caseId, userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
 
       // 1. Rate limit. User-id identifier (never IP — attorneys can
       // share a NAT). Bypassed in dev when Upstash isn't configured.
@@ -662,6 +687,13 @@ export const caseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { db, userId } = ctx;
 
+      // Participant gate — RLS alone isn't enough because admins bypass
+      // it. Without this any active attorney-admin could mark any case
+      // as filed if they knew the caseId.
+      if (!(await isUserCaseParticipant(db, input.caseId, userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
+
       // RLS authz gate. Read via the user-scoped tx so non-participants
       // see no row → NOT_FOUND. Without this the bookkeeping tx below
       // runs on `ownerDb` (RLS bypassed), which would let any active
@@ -789,6 +821,12 @@ export const caseRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { db, userId } = ctx;
 
+      // Participant gate — admins bypass RLS; without this a
+      // non-participant admin could archive any case.
+      if (!(await isUserCaseParticipant(db, input.caseId, userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
+
       // Authorize via the user-scoped tx (RLS engaged). If the caller
       // can't see the case, RLS returns no row → NOT_FOUND. We pull
       // `status` here too so the analytics emit can report the
@@ -866,6 +904,9 @@ export const caseRouter = router({
   criteriaCoverage: protectedProcedure
     .input(GetInput)
     .query(async ({ ctx, input }) => {
+      if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
       const [row] = await ctx.db
         .select({ visaType: cases.visaType })
         .from(cases)
@@ -890,6 +931,9 @@ export const caseRouter = router({
   requiredDocsCoverage: protectedProcedure
     .input(GetInput)
     .query(async ({ ctx, input }) => {
+      if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
       const [row] = await ctx.db
         .select({ visaType: cases.visaType })
         .from(cases)
@@ -944,6 +988,9 @@ export const caseRouter = router({
   storageUsage: protectedProcedure
     .input(GetInput)
     .query(async ({ ctx, input }) => {
+      if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
       const [authz] = await ctx.db
         .select({ id: cases.id })
         .from(cases)
@@ -981,6 +1028,9 @@ export const caseRouter = router({
   recommenderLetterCoverage: protectedProcedure
     .input(GetInput)
     .query(async ({ ctx, input }) => {
+      if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
       const [authz] = await ctx.db
         .select({ id: cases.id })
         .from(cases)
@@ -1003,6 +1053,9 @@ export const caseRouter = router({
   preflight: protectedProcedure
     .input(GetInput)
     .query(async ({ ctx, input }) => {
+      if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
       try {
         return await computePreflight({ db: ctx.db, caseId: input.caseId });
       } catch (err) {
@@ -1032,6 +1085,9 @@ export const caseRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
       const [authz] = await ctx.db
         .select({ id: cases.id })
         .from(cases)

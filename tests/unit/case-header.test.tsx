@@ -4,8 +4,11 @@ import { cleanup, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 import { CaseHeader } from "@/components/case/CaseHeader";
+import { deriveCaseStage } from "@/lib/case-stage";
 
 afterEach(cleanup);
+
+const filedStage = deriveCaseStage({ status: "filed" });
 
 describe("CaseHeader — tabs", () => {
   it("renders exactly the 5 mockup tabs (Overview / Intake / Documents / Outputs / Package)", () => {
@@ -15,6 +18,7 @@ describe("CaseHeader — tabs", () => {
         beneficiaryName="Maria Gonzalez"
         visaType="O-1A"
         status="filed"
+        stage={filedStage}
         current="overview"
       />,
     );
@@ -38,6 +42,7 @@ describe("CaseHeader — tabs", () => {
         beneficiaryName="Maria Gonzalez"
         visaType="O-1A"
         status="filed"
+        stage={filedStage}
         current="overview"
       />,
     );
@@ -51,6 +56,7 @@ describe("CaseHeader — tabs", () => {
         beneficiaryName="Maria Gonzalez"
         visaType="O-1A"
         status="filed"
+        stage={filedStage}
         current="documents"
       />,
     );
@@ -67,6 +73,7 @@ describe("CaseHeader — tabs", () => {
         beneficiaryName="Maria Gonzalez"
         visaType="O-1A"
         status="ready_to_build"
+        stage={filedStage}
         current="overview"
         actions={
           <button type="button" data-testid="build-cta">
@@ -85,6 +92,7 @@ describe("CaseHeader — tabs", () => {
         beneficiaryName="Maria Gonzalez"
         visaType="O-1A"
         status="filed"
+        stage={filedStage}
         current="overview"
       />,
     );

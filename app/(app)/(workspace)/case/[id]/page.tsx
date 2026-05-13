@@ -8,6 +8,7 @@ import { CaseHeader, CriteriaCoverageCard } from "@/components/case";
 import { RevenuePanel } from "@/components/revenue/RevenuePanel";
 import { formatRelative } from "@/lib/utils";
 import { visaCriteriaConfig } from "@/lib/visa-criteria";
+import { deriveCaseStage } from "@/lib/case-stage";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -32,11 +33,19 @@ export default async function CaseDetailPage({
   if (!session?.user) redirect(APP_ROUTES.login);
 
   const { id } = await params;
-  const [data, coverage] = await Promise.all([
+  const [data, coverage, approvalsMap] = await Promise.all([
     api.case.get({ caseId: id }),
     api.case.criteriaCoverage({ caseId: id }),
+    // Per-case approval tally — feeds the stage rail's "in review · X/Y"
+    // label without an extra round-trip. Empty object if no outputs yet.
+    api.output.summarize({ caseIds: [id] }),
   ]);
   if (!data) notFound();
+  const approvals = approvalsMap[id];
+  const stage = deriveCaseStage({
+    status: data.status,
+    ...(approvals ? { approvals } : {}),
+  });
 
   const beneficiary =
     (data.beneficiaryData as {
@@ -55,6 +64,7 @@ export default async function CaseDetailPage({
         visaType={data.visaType}
         {...(meta ? { meta } : {})}
         status={data.status}
+        stage={stage}
         current="overview"
         actions={<CaseHeaderActions caseId={data.id} status={data.status} />}
       />

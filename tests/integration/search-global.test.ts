@@ -49,6 +49,7 @@ import { truncateAllAppTables } from "../helpers/truncate";
 
 const ATTORNEY = "f5000000-0000-4000-8000-aaaa00000001";
 const STRANGER = "f5000000-0000-4000-8000-aaaa00000002";
+const ADMIN_OFF_CASE = "f5000000-0000-4000-8000-aaaa00000003";
 const ORG_ATTORNEY = "f5000000-0000-4000-8000-bbbb00000001";
 const ORG_STRANGER = "f5000000-0000-4000-8000-bbbb00000002";
 const CASE_VISIBLE = "f5000000-0000-4000-8000-cccc00000001";
@@ -265,6 +266,66 @@ describe("search.global — document matches", () => {
   });
 });
 
+// Regression net for open_issues #59 (search surface). The
+// `cases_admin` + `case_documents_admin` RLS policies grant admins
+// blanket access; without the application-layer participant subquery
+// in `search.global`, the topbar Cmd+K would leak every attorney's
+// cases + document snippets to admin sessions. If these start
+// returning rows, somebody removed the participant gate — restore it.
+describe("search.global — admin participant gate (#59 search surface)", () => {
+  it("returns no case hits for an admin who is not on any case", async (ctx) => {
+    const d = gate(ctx);
+    // Seed a doc on Attorney's case so we have a non-empty surface to
+    // search against. The admin must still see nothing.
+    await d.insert(caseDocuments).values({
+      caseId: CASE_VISIBLE,
+      uploadedBy: ATTORNEY,
+      documentType: "other",
+      originalFilename: "extraordinary_evidence.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1024n,
+      sha256: "a".repeat(64),
+      storagePath: "/test/extraordinary.pdf",
+      extractionStatus: "completed",
+      extractedText: "Demonstrates extraordinary ability across criteria.",
+    });
+    const r = await callAs(ADMIN_OFF_CASE).search.global({ q: "maria" });
+    expect(r.cases).toEqual([]);
+  });
+
+  it("returns no document hits for an admin who is not on any case", async (ctx) => {
+    const d = gate(ctx);
+    await d.insert(caseDocuments).values({
+      caseId: CASE_VISIBLE,
+      uploadedBy: ATTORNEY,
+      documentType: "other",
+      originalFilename: "extraordinary_evidence.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1024n,
+      sha256: "b".repeat(64),
+      storagePath: "/test/extraordinary2.pdf",
+      extractionStatus: "completed",
+      extractedText: "Demonstrates extraordinary ability across criteria.",
+    });
+    const r = await callAs(ADMIN_OFF_CASE).search.global({
+      q: "extraordinary",
+    });
+    expect(r.documents).toEqual([]);
+  });
+
+  it("an admin who IS added as a participant sees the case", async (ctx) => {
+    const d = gate(ctx);
+    await d.insert(caseParticipants).values({
+      caseId: CASE_VISIBLE,
+      userId: ADMIN_OFF_CASE,
+      role: "observer",
+      isPrimary: false,
+    });
+    const r = await callAs(ADMIN_OFF_CASE).search.global({ q: "maria" });
+    expect(r.cases.map((c) => c.id)).toContain(CASE_VISIBLE);
+  });
+});
+
 describe("search.global — rate limiting", () => {
   it("throws TOO_MANY_REQUESTS when the limiter rejects", async (ctx) => {
     gate(ctx);
@@ -305,10 +366,23 @@ async function seed(d: TestDb): Promise<void> {
   await d.insert(users).values([
     { id: ATTORNEY, name: "Search Attorney", email: "search-att@docket.local" },
     { id: STRANGER, name: "Search Stranger", email: "search-str@docket.local" },
+    {
+      id: ADMIN_OFF_CASE,
+      name: "Search Admin",
+      email: "search-admin@docket.local",
+    },
   ]);
+  // Admin-off-case carries both roles: `admin` (so `is_admin()` RLS
+  // bypass fires — the exact condition the participant-gate test
+  // defends against) and `attorney` (so `attorneyProcedure`-style
+  // checks wouldn't short-circuit; not strictly required for
+  // `search.global` since it's protectedProcedure, but mirrors the
+  // case-router gate fixtures so the threat model stays consistent).
   await d.insert(userRoles).values([
     { userId: ATTORNEY, role: "attorney" },
     { userId: STRANGER, role: "attorney" },
+    { userId: ADMIN_OFF_CASE, role: "admin" },
+    { userId: ADMIN_OFF_CASE, role: "attorney" },
   ]);
   await d.insert(organizations).values([
     { id: ORG_ATTORNEY, name: "Attorney Org", slug: "search-attorney-org" },
@@ -333,6 +407,7 @@ async function seed(d: TestDb): Promise<void> {
   await d.insert(attorneyProfiles).values([
     { userId: ATTORNEY, status: "active" },
     { userId: STRANGER, status: "active" },
+    { userId: ADMIN_OFF_CASE, status: "active" },
   ]);
   await d.insert(cases).values([
     {

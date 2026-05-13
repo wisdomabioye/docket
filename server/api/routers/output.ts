@@ -158,16 +158,21 @@ function rethrowAsTrpc(err: unknown): never {
   throw err;
 }
 
-/** RLS gate: confirms the caller can see the output via ctx.db.
- *  Returns the caseId (needed by mutations that pivot to ownerDb)
- *  plus `caseStatus` for the post-package mutation lock check.
- *  NOT_FOUND covers both "doesn't exist" and "not your case" so
- *  there's no existence oracle. RLS on `cases` and `case_outputs`
- *  share the same `user_in_case` participant policy (`0005_rls.sql`),
- *  so the JOIN is RLS-safe — same gate, no leakage. */
+/** Resolve an output to its parent case + status, gated on the caller
+ *  being an active case participant. Returns the caseId (needed by
+ *  mutations that pivot to `ownerDb`) plus `caseStatus` for the
+ *  post-package mutation lock check.
+ *
+ *  Application-layer participant gate; RLS stays as the safety net.
+ *  Without this an admin session (RLS bypass via the `cases_admin`
+ *  policy in `0005_rls.sql`) could call any output mutation on any
+ *  attorney's case — including high-impact paths like `downloadPackage`,
+ *  `approve`, and `regenerate`. NOT_FOUND covers both "doesn't exist"
+ *  and "not your case" so there's no existence oracle. */
 async function gateOutputAccess(args: {
   ctxDb: Db;
   outputId: string;
+  userId: string;
 }): Promise<{
   caseId: string;
   outputType: OutputType;
@@ -188,6 +193,9 @@ async function gateOutputAccess(args: {
     )
     .limit(1);
   if (!row) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "output not found" });
+  }
+  if (!(await isUserCaseParticipant(args.ctxDb, row.caseId, args.userId))) {
     throw new TRPCError({ code: "NOT_FOUND", message: "output not found" });
   }
   return row;
@@ -343,6 +351,7 @@ export const outputRouter = router({
       const access = await gateOutputAccess({
         ctxDb: ctx.db,
         outputId: input.outputId,
+        userId: ctx.userId,
       });
       // saveDraft is conceptually a content edit — reuse the
       // `output.update` lock target. Same blast radius (typing into
@@ -407,7 +416,11 @@ export const outputRouter = router({
   clearDraft: attorneyProcedure
     .input(ClearDraftInput)
     .mutation(async ({ ctx, input }) => {
-      await gateOutputAccess({ ctxDb: ctx.db, outputId: input.outputId });
+      await gateOutputAccess({
+        ctxDb: ctx.db,
+        outputId: input.outputId,
+        userId: ctx.userId,
+      });
       try {
         const r = await ownerDb.transaction(async (tx) =>
           clearOutputDraft({
@@ -429,6 +442,7 @@ export const outputRouter = router({
       const access = await gateOutputAccess({
         ctxDb: ctx.db,
         outputId: input.outputId,
+        userId: ctx.userId,
       });
       assertMutation(access.caseStatus, "output.update");
       // Reject markdown commits on structured types — they go through
@@ -502,6 +516,7 @@ export const outputRouter = router({
       const access = await gateOutputAccess({
         ctxDb: ctx.db,
         outputId: input.outputId,
+        userId: ctx.userId,
       });
       assertMutation(access.caseStatus, "output.update");
       // Defense in depth: cross-check that the input's discriminator
@@ -594,6 +609,7 @@ export const outputRouter = router({
       const access = await gateOutputAccess({
         ctxDb: ctx.db,
         outputId: input.outputId,
+        userId: ctx.userId,
       });
       // Approve is the one mutation excluded from the {delivered, filed}
       // lock — re-approving after a partial backslide is a normal
@@ -693,6 +709,7 @@ export const outputRouter = router({
       const access = await gateOutputAccess({
         ctxDb: ctx.db,
         outputId: input.outputId,
+        userId: ctx.userId,
       });
       assertMutation(access.caseStatus, "output.unapprove");
 
@@ -743,6 +760,7 @@ export const outputRouter = router({
       const access = await gateOutputAccess({
         ctxDb: ctx.db,
         outputId: input.outputId,
+        userId: ctx.userId,
       });
       assertMutation(access.caseStatus, "output.regenerate");
 
@@ -799,6 +817,7 @@ export const outputRouter = router({
       const access = await gateOutputAccess({
         ctxDb: ctx.db,
         outputId: input.fromVersionId,
+        userId: ctx.userId,
       });
       assertMutation(access.caseStatus, "output.restoreVersion");
 
@@ -845,6 +864,7 @@ export const outputRouter = router({
       const access = await gateOutputAccess({
         ctxDb: ctx.db,
         outputId: input.outputId,
+        userId: ctx.userId,
       });
       try {
         const result = await renderPerOutputPdf({
@@ -861,10 +881,15 @@ export const outputRouter = router({
   downloadPackage: attorneyProcedure
     .input(DownloadPackageInput)
     .mutation(async ({ ctx, input }) => {
-      // RLS gate via a current-outputs read. If the caller can't see
-      // the case, getCurrentOutputs returns an empty array — and
-      // compile rejects with BAD_REQUEST. Defense in depth.
-      //
+      // Application-layer participant gate. `gateOutputAccess` doesn't
+      // apply here (no outputId in scope) and the previous RLS-only
+      // gate leaked to admins via the `cases_admin` policy. Closes
+      // open_issues #59 for the package-download path.
+      if (
+        !(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))
+      ) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
       // Order: compile FIRST (slow — render + upload), then a SHORT
       // bookkeeping tx (timestamp set + reconcile). Holding a tx
       // around the PDF render would lock the case row for 5-30s.

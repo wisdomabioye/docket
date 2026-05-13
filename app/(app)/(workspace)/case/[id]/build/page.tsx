@@ -5,6 +5,7 @@ import { APP_ROUTES, pageTitle } from "@/config";
 import { Card, EmptyState } from "@/components/ui";
 import { CaseHeader } from "@/components/case";
 import { RequestBuildButton } from "./RequestBuildButton";
+import { deriveCaseStage } from "@/lib/case-stage";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -55,6 +56,7 @@ export default async function CaseBuildPage({
         visaType={caseRow.visaType}
         {...(meta ? { meta } : {})}
         status={caseRow.status}
+        stage={deriveCaseStage({ status: caseRow.status })}
         // No active tab — `Build` isn't in the tab list. The header
         // still renders the row so the user can navigate sideways.
         current="overview"

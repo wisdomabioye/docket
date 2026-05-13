@@ -380,6 +380,58 @@ describe("output reads — admin participant gate", () => {
     });
     expect(r).toEqual({});
   });
+
+  // The 9 output mutations route through `gateOutputAccess`, which
+  // now enforces the same participant membership check as the four
+  // reads. Without these assertions, an admin (RLS bypass via
+  // `cases_admin`) could mint a signed package URL or approve outputs
+  // on any attorney's case. ADMIN_OFF_CASE has role='admin' but is
+  // not on CASE_ID's participant list.
+  it("update NOT_FOUND for an admin not on the case", async (ctx) => {
+    const d = gate(ctx);
+    const id = await insertOutput(d);
+    await expect(
+      callAs(ADMIN_OFF_CASE).output.update({
+        outputId: id,
+        content: "forged content",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("approve NOT_FOUND for an admin not on the case", async (ctx) => {
+    const d = gate(ctx);
+    const id = await insertOutput(d);
+    await expect(
+      callAs(ADMIN_OFF_CASE).output.approve({ outputId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("regenerate NOT_FOUND for an admin not on the case", async (ctx) => {
+    const d = gate(ctx);
+    const id = await insertOutput(d);
+    await expect(
+      callAs(ADMIN_OFF_CASE).output.regenerate({ outputId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("downloadPdf NOT_FOUND for an admin not on the case", async (ctx) => {
+    const d = gate(ctx);
+    const id = await insertOutput(d, { attorneyApproved: true });
+    await expect(
+      callAs(ADMIN_OFF_CASE).output.downloadPdf({ outputId: id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("downloadPackage NOT_FOUND for an admin not on the case", async (ctx) => {
+    const d = gate(ctx);
+    await insertOutput(d, { attorneyApproved: true });
+    // downloadPackage takes `caseId`, not `outputId` — it doesn't
+    // route through `gateOutputAccess`; it has its own participant
+    // gate. The test verifies that gate independently.
+    await expect(
+      callAs(ADMIN_OFF_CASE).output.downloadPackage({ caseId: CASE_ID }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
 });
 
 describe("output.update", () => {
@@ -1143,6 +1195,12 @@ async function seed(d: TestDb): Promise<void> {
   await d.insert(attorneyProfiles).values([
     { userId: ATTORNEY, status: "active" },
     { userId: STRANGER, status: "active" },
+    // ADMIN_OFF_CASE needs both global admin role AND an active
+    // attorney profile to reach the mutation handlers — the bootstrap
+    // admin in production has both. Without the profile, the
+    // `attorneyProcedure` middleware rejects with FORBIDDEN before
+    // `gateOutputAccess` even runs, masking the participant-gate test.
+    { userId: ADMIN_OFF_CASE, status: "active" },
   ]);
   await d.insert(cases).values({
     id: CASE_ID,
@@ -1167,7 +1225,7 @@ async function teardown(d: TestDb): Promise<void> {
     /* sql */ `delete from cases where id = '${CASE_ID}'` as never,
   );
   await d.execute(
-    /* sql */ `delete from attorney_profiles where user_id in ('${ATTORNEY}', '${STRANGER}')` as never,
+    /* sql */ `delete from attorney_profiles where user_id in ('${ATTORNEY}', '${STRANGER}', '${ADMIN_OFF_CASE}')` as never,
   );
   await d.execute(
     /* sql */ `delete from organization_members where organization_id = '${ORG}'` as never,

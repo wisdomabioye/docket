@@ -13,6 +13,56 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #68 — Sweep status-equality checks + relocate route-scoped status arrays
+
+Status: Active. Surfaced 2026-05-13 (raised during #59b review of case-stage centralization).
+
+Three layers of case-status logic exist in the codebase. After
+#59b two of them are already well-centralized; the third is the
+remaining drift surface.
+
+**Centralized (no action):**
+- Status → derived UX state (label, sub, nextAction, progress %)
+  → `lib/case-stage.ts::deriveCaseStage` (new this sprint).
+- Status → legal transitions → `lib/case-status.ts::TRANSITIONS`.
+- Status → buckets → `lib/pipeline.ts::PIPELINE_STATUSES`.
+- Status → gate functions (`canEditIntake`, `canUploadInStatus`,
+  `canRequestBuild`) → `lib/case-status.ts`.
+
+**Still drifting (the work for this issue):**
+
+1. **Two route-scoped status arrays in `server/api/routers/me.ts`:**
+   - `TODAY_ACTIONABLE_STATUSES` (line ~37)
+   - `NON_ACTIVE_STATUSES` (line ~34)
+   Both are queried by multiple `me.*` procedures. Move to
+   `lib/case-status.ts` as named exports so future status additions
+   land in one file. No behavior change.
+
+2. **Raw `status === "X"` checks scattered across app/components/
+   server.** Run `grep -rn 'status === "' app/ components/ server/`
+   and triage each match:
+   - If it duplicates an existing gate (`canEditIntake`, etc.), swap
+     to the gate.
+   - If it's genuinely "status is exactly X, do Y" (e.g. transition
+     guards in the router), leave inline.
+   - If the same comparison appears in 3+ places without a gate,
+     promote it to a new gate in `lib/case-status.ts`.
+
+3. **(Optional)** Audit `data.status === "intake" && status !==
+   "documents_pending"` style compound expressions; many are
+   reinventing buckets that already exist in `PIPELINE_STATUSES` or
+   `BUILDABLE_STATUSES`.
+
+**Out of scope:** a unified "case status registry" with one record
+per status carrying every consumer's metadata. That centralization
+felt tidy in design but invites bloat — every consumer has different
+needs (buckets, transitions, copy, gates, badges). Splitting by
+responsibility (current state) is correct; only the route-scoped
+arrays + raw-string-equality checks need relocation.
+
+Recommended order: (1) move the two arrays first (mechanical,
+low-risk), (2) run the grep sweep, (3) decide per-match.
+
 ### #67 — No application-level 500 error page
 
 Status: Active. Surfaced 2026-05-12.
@@ -213,7 +263,25 @@ additive; the sidebar stays.
 
 ### #59 — `cases_admin` RLS policy leaks all cases into attorney-side `case.list`
 
-Status: Active. Surfaced 2026-05-12 (reproduced as admin user on
+Status: Resolved 2026-05-13. Every attorney-scoped read on a single
+case now application-gates on `caseParticipants` membership via
+`server/services/cases/visibility.ts::isUserCaseParticipant` —
+covering case.ts (14 procedures), output.ts (9 mutations +
+downloadPackage + 3 reads), document.ts (4), recommender.ts (5), and
+the join-form gate on case.list. The Cmd+K topbar (`search.global`)
+also filters cases + documents by a `case_participants` subquery so
+admin sessions don't see other attorneys' surfaces through search.
+Regression nets:
+`tests/integration/case-router.test.ts` (admin participant gate
+describe block + 12-procedure regression net), `output-router.test.ts`
+(5 admin-gate tests across mutation + download paths),
+`document-router.test.ts`, `recommender-router.test.ts`,
+`me-dashboard-feeds.test.ts` (admin-not-on-case audit), and
+`search-global.test.ts` (3 admin-gate tests for the search surface).
+
+Original report retained below.
+
+Surfaced 2026-05-12 (reproduced as admin user on
 the attorney dashboard).
 
 `server/db/migrations/0005_rls.sql:138-139` —

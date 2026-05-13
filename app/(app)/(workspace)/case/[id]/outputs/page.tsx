@@ -7,6 +7,7 @@ import { CaseHeader } from "@/components/case";
 import { OutputCard } from "@/components/output";
 import { EmptyState } from "@/components/ui";
 import { Filters, type Chip } from "@/components/table";
+import { deriveCaseStage } from "@/lib/case-stage";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -106,6 +107,12 @@ export default async function OutputsPage({
         visaType={caseRow.visaType}
         {...(meta ? { meta } : {})}
         status={caseRow.status}
+        stage={deriveCaseStage({
+          status: caseRow.status,
+          // Reuse the counts already computed for the chip strip —
+          // no extra round-trip.
+          approvals: { approved: approvedCount, total: totalCount },
+        })}
         current="outputs"
       />
 

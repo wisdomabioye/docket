@@ -17,6 +17,7 @@ import {
   packageOrderRank,
 } from "@/server/services/pdf/package";
 import { PackageDownloadButton } from "./PackageDownloadButton";
+import { deriveCaseStage } from "@/lib/case-stage";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -102,6 +103,12 @@ export default async function PackagePage({
         visaType={caseRow.visaType}
         {...(meta ? { meta } : {})}
         status={caseRow.status}
+        stage={deriveCaseStage({
+          status: caseRow.status,
+          // Reuse the `approved` count already computed for the
+          // assembly list — no extra round-trip.
+          approvals: { approved: approved.length, total: outputs.length },
+        })}
         current="package"
       />
 

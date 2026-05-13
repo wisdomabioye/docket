@@ -2,6 +2,8 @@ import Link from "next/link";
 import { Badge, type BadgeVariant } from "@/components/ui";
 import { APP_ROUTES } from "@/config";
 import { shortCaseId } from "@/lib/case-id";
+import type { CaseStage } from "@/lib/case-stage";
+import { CaseStageRail } from "./CaseStageRail";
 
 /**
  * Stage 11 case-detail header. Mirrors `case-overview.html .case-hdr`:
@@ -34,6 +36,12 @@ export type CaseHeaderProps = {
   current: CaseTab;
   /** Right-aligned action slot (e.g. Build button). */
   actions?: React.ReactNode;
+  /** Server-derived case stage from `lib/case-stage.ts`. Required —
+   *  every case page renders the stage rail so new attorneys see
+   *  "what comes next" without guessing. Pages compute this once at
+   *  the server boundary (it's already keyed off `case.get` data they
+   *  fetch anyway) and pass it down. */
+  stage: CaseStage;
 };
 
 export function CaseHeader(props: CaseHeaderProps): React.ReactElement {
@@ -70,6 +78,7 @@ export function CaseHeader(props: CaseHeaderProps): React.ReactElement {
           {props.actions}
         </div>
       </div>
+      <CaseStageRail stage={props.stage} />
       <CaseTabs caseId={props.caseId} current={props.current} />
     </header>
   );
