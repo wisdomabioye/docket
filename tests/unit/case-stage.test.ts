@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { deriveCaseStage } from "@/lib/case-stage";
-import { CASE_STATUSES } from "@/lib/case-status";
+import {
+  CASE_STATUSES,
+  TODAY_ACTIONABLE_STATUSES,
+} from "@/lib/case-status";
 
 describe("deriveCaseStage", () => {
   it("covers every status in the schema enum", () => {
@@ -98,6 +101,22 @@ describe("deriveCaseStage", () => {
     expect(deriveCaseStage({ status: "delivered" }).nextAction).toBe(
       "Mark filed",
     );
+  });
+
+  it("every TODAY_ACTIONABLE_STATUSES entry has a non-null nextAction", () => {
+    // Invariant: the `me.todayTasks` rail composes its label as
+    // `${stage.nextAction ?? stage.label} · ${who}`. The fallback
+    // exists for type safety, but in practice every actionable status
+    // MUST resolve to a real CTA — otherwise the rail reads as a
+    // labeled state ("Building drafts · Alice") instead of an action
+    // ("Apply revisions · Alice"). If this test fails, either the
+    // status was added to TODAY_ACTIONABLE_STATUSES by mistake or its
+    // stage entry in `case-stage.ts` is missing a `nextAction`.
+    for (const status of TODAY_ACTIONABLE_STATUSES) {
+      const stage = deriveCaseStage({ status });
+      expect(stage.nextAction, `${status} should have a nextAction CTA`)
+        .toBeDefined();
+    }
   });
 
   it("archived buckets into 'filed' so the rail still renders cleanly", () => {

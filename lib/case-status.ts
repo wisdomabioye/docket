@@ -170,6 +170,38 @@ export function canEditIntake(s: CaseStatus): boolean {
   return (INTAKE_EDITABLE_STATUSES as readonly CaseStatus[]).includes(s);
 }
 
+/**
+ * "Inactive" cases — excluded from headline KPIs and active-case lists.
+ * Today this is `archived` only. `filed` is still considered active
+ * until the attorney explicitly archives the case. Source-of-truth for
+ * `me.dashboardKpis::activeCases` and any future "active case" filter.
+ */
+export const INACTIVE_STATUSES = ["archived"] as const satisfies readonly CaseStatus[];
+
+/**
+ * Statuses surfaced in the right-rail "Today" task list — cases that
+ * need the attorney to do something. Curated so each entry has a
+ * non-null `deriveCaseStage(...).nextAction` (so the rail's CTA is
+ * always defined). Source-of-truth for `me.todayTasks`.
+ */
+export const TODAY_ACTIONABLE_STATUSES = [
+  "documents_pending",
+  "build_failed",
+  "draft_ready",
+  "needs_revision",
+] as const satisfies readonly CaseStatus[];
+
+/**
+ * Statuses where generated drafts exist and are waiting for attorney
+ * action — either an initial review (`draft_ready`) or a follow-up
+ * after the attorney flagged changes (`needs_revision`). Source-of-truth
+ * for `me.dashboardKpis::draftsAwaitingReview`.
+ */
+export const DRAFTS_AWAITING_REVIEW_STATUSES = [
+  "draft_ready",
+  "needs_revision",
+] as const satisfies readonly CaseStatus[];
+
 /** Human-friendly status label (`needs_revision` → `Needs revision`). */
 export function formatStatus(s: CaseStatus): string {
   const spaced = s.replace(/_/g, " ");

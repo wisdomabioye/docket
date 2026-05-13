@@ -15,7 +15,28 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ### #68 — Sweep status-equality checks + relocate route-scoped status arrays
 
-Status: Active. Surfaced 2026-05-13 (raised during #59b review of case-stage centralization).
+Status: Resolved 2026-05-13.
+- Relocated `NON_ACTIVE_STATUSES` → `INACTIVE_STATUSES` and
+  `TODAY_ACTIONABLE_STATUSES` from `server/api/routers/me.ts` →
+  `lib/case-status.ts`.
+- Promoted the inline SQL tuple `('draft_ready','needs_revision')`
+  in `me.dashboardKpis` to `DRAFTS_AWAITING_REVIEW_STATUSES` in
+  `lib/case-status.ts`; collapsed the redundant `notInactiveFilter()`
+  helper into the generalized `statusTupleSql(...)`.
+- Swapped two raw `status !== "intake" && status !== "documents_pending"`
+  checks (in `case.updateBeneficiary` and `app/case/[id]/intake/page.tsx`)
+  to the existing `canEditIntake(status)` gate.
+- Left inline (single-status transition guards, not bucket checks):
+  `case.completeIntake` (`status === "intake"` precondition for the
+  recommender-count check), `case.markFiled` (`delivered | filed`
+  legal-status gate), `case-build.ts` watchdog (`status !== "building"`),
+  `admin.unmarkFiledCase` (`status !== "filed"`), `readiness.ts`
+  reconciler edges, and `outputs/page.tsx`'s UI "building" predicate
+  (two occurrences, same file — not promotable yet).
+
+Original report retained below.
+
+Surfaced 2026-05-13 (raised during #59b review of case-stage centralization).
 
 Three layers of case-status logic exist in the codebase. After
 #59b two of them are already well-centralized; the third is the

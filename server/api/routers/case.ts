@@ -32,7 +32,7 @@ import { computeCriteriaCoverage } from "@/server/services/cases/criteria-covera
 import { computePreflight } from "@/server/services/cases/preflight";
 import { computeRecommenderLetterCoverage } from "@/server/services/cases/recommender-coverage";
 import { isUserCaseParticipant } from "@/server/services/cases/visibility";
-import { canRequestBuild } from "@/lib/case-status";
+import { canEditIntake, canRequestBuild } from "@/lib/case-status";
 import {
   PER_CASE_STORAGE_BYTES,
   requiredDocsFor,
@@ -322,8 +322,9 @@ export const caseRouter = router({
         });
       }
       // Beneficiary edits are only meaningful before the build pipeline
-      // commits to a draft. Lock once we've gone past intake.
-      if (row.status !== "intake" && row.status !== "documents_pending") {
+      // commits to a draft. Lock once we've gone past intake — the
+      // INTAKE_EDITABLE_STATUSES gate is the single source of truth.
+      if (!canEditIntake(row.status)) {
         throw new TRPCError({
           code: "CONFLICT",
           message: `beneficiary data is locked once status is ${row.status}`,

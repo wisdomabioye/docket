@@ -8,6 +8,7 @@ import {
   type BeneficiaryData,
 } from "@/server/db/schema/zod/beneficiary";
 import { deriveCaseStage } from "@/lib/case-stage";
+import { canEditIntake } from "@/lib/case-status";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -41,8 +42,7 @@ export default async function IntakePage({
   const data = await api.case.get({ caseId: id });
   if (!data) notFound();
 
-  const locked =
-    data.status !== "intake" && data.status !== "documents_pending";
+  const locked = !canEditIntake(data.status);
   // Parse the persisted blob through the schema so the wizard receives
   // a typed `BeneficiaryData`. Unknown / extra keys are stripped by
   // `.strict()`; an unparseable blob falls back to empty (the wizard

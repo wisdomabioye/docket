@@ -13,6 +13,12 @@ import { protectedProcedure, router } from "@/server/api/trpc";
 import { bn, extractBeneficiaryFullName } from "@/server/db/helpers";
 import { PIPELINE_STATUSES } from "@/lib/pipeline";
 import { deriveCaseStage } from "@/lib/case-stage";
+import {
+  DRAFTS_AWAITING_REVIEW_STATUSES,
+  INACTIVE_STATUSES,
+  TODAY_ACTIONABLE_STATUSES,
+  type CaseStatus,
+} from "@/lib/case-status";
 
 /**
  * `me.*` — first protected router. Smoke-tests the entire stack:
@@ -27,20 +33,10 @@ import { deriveCaseStage } from "@/lib/case-stage";
 
 // Pipeline buckets imported from `lib/pipeline.ts` so the sidebar
 // labels, the `?stage=...` URL filter, and these aggregate counts all
-// agree on which case statuses belong together.
-
-// "Active case" = anything not archived. `archived` is the only status
-// we exclude from the headline KPI; `filed` is still "active" until the
-// attorney explicitly archives.
-const NON_ACTIVE_STATUSES = ["archived"] as const;
-
-// Today-tasks status filter: things that need the attorney to act on them.
-const TODAY_ACTIONABLE_STATUSES = [
-  "documents_pending",
-  "build_failed",
-  "draft_ready",
-  "needs_revision",
-] as const;
+// agree on which case statuses belong together. Status arrays
+// (`INACTIVE_STATUSES`, `TODAY_ACTIONABLE_STATUSES`,
+// `DRAFTS_AWAITING_REVIEW_STATUSES`) live in `lib/case-status.ts` so
+// future status additions land in one file.
 
 const TODAY_TASK_LIMIT = 6;
 const ACTIVITY_FEED_LIMIT = 8;
@@ -129,11 +125,11 @@ export const meRouter = router({
 
     const [row] = await db
       .select({
-        intake: sql<number>`count(*) filter (where ${cases.status} in ${primaryAttorneyStatusFilter(PIPELINE_STATUSES.intake)})::int`,
-        documents: sql<number>`count(*) filter (where ${cases.status} in ${primaryAttorneyStatusFilter(PIPELINE_STATUSES.documents)})::int`,
-        drafting: sql<number>`count(*) filter (where ${cases.status} in ${primaryAttorneyStatusFilter(PIPELINE_STATUSES.drafting)})::int`,
-        review: sql<number>`count(*) filter (where ${cases.status} in ${primaryAttorneyStatusFilter(PIPELINE_STATUSES.review)})::int`,
-        filed: sql<number>`count(*) filter (where ${cases.status} in ${primaryAttorneyStatusFilter(PIPELINE_STATUSES.filed)})::int`,
+        intake: sql<number>`count(*) filter (where ${cases.status} in ${statusTupleSql(PIPELINE_STATUSES.intake)})::int`,
+        documents: sql<number>`count(*) filter (where ${cases.status} in ${statusTupleSql(PIPELINE_STATUSES.documents)})::int`,
+        drafting: sql<number>`count(*) filter (where ${cases.status} in ${statusTupleSql(PIPELINE_STATUSES.drafting)})::int`,
+        review: sql<number>`count(*) filter (where ${cases.status} in ${statusTupleSql(PIPELINE_STATUSES.review)})::int`,
+        filed: sql<number>`count(*) filter (where ${cases.status} in ${statusTupleSql(PIPELINE_STATUSES.filed)})::int`,
       })
       .from(cases)
       .innerJoin(
@@ -183,8 +179,8 @@ export const meRouter = router({
 
     const [row] = await db
       .select({
-        activeCases: sql<number>`count(*) filter (where ${cases.status} not in ${notInactiveFilter()})::int`,
-        draftsAwaitingReview: sql<number>`count(*) filter (where ${cases.status} in ('draft_ready','needs_revision'))::int`,
+        activeCases: sql<number>`count(*) filter (where ${cases.status} not in ${statusTupleSql(INACTIVE_STATUSES)})::int`,
+        draftsAwaitingReview: sql<number>`count(*) filter (where ${cases.status} in ${statusTupleSql(DRAFTS_AWAITING_REVIEW_STATUSES)})::int`,
         filedThisQuarter: sql<number>`count(*) filter (where ${cases.filedAt} >= ${startOfQuarterLit})::int`,
         revenueMtdCents: sql<bigint>`coalesce(sum(${cases.docketShareCents}) filter (where ${cases.filedAt} >= ${startOfMonthLit}), 0)::bigint`,
       })
@@ -323,18 +319,17 @@ export const meRouter = router({
   }),
 });
 
-/** Inline filter expression for the pipeline-count `IN (...)` clauses.
- *  Returns a `sql` fragment that interpolates the array as a tuple
- *  literal — Drizzle's `inArray` doesn't compose inside the
- *  `count(*) FILTER` helper. */
-function primaryAttorneyStatusFilter(
-  statuses: ReadonlyArray<string>,
+/** Inline `IN (...)` tuple literal for the count-filter clauses.
+ *  Drizzle's `inArray` doesn't compose inside `count(*) FILTER`, so
+ *  we render the tuple ourselves. Input type is constrained to
+ *  `CaseStatus[]` — the only legal interpolations are enum values from
+ *  `caseStatusEnum`, sourced via `lib/case-status.ts` or
+ *  `lib/pipeline.ts`. That keeps user data out by construction; the
+ *  `sql.raw` interpolation is safe under this contract. */
+function statusTupleSql(
+  statuses: ReadonlyArray<CaseStatus>,
 ): ReturnType<typeof sql> {
   return sql.raw(`(${statuses.map((s) => `'${s}'`).join(",")})`);
-}
-
-function notInactiveFilter(): ReturnType<typeof sql> {
-  return sql.raw(`(${NON_ACTIVE_STATUSES.map((s) => `'${s}'`).join(",")})`);
 }
 
 function quarterStartUtc(now: Date): Date {
