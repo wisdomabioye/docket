@@ -65,7 +65,21 @@ low-risk), (2) run the grep sweep, (3) decide per-match.
 
 ### #67 — No application-level 500 error page
 
-Status: Active. Surfaced 2026-05-12.
+Status: Resolved 2026-05-13. Segment-scoped error boundaries added at
+`app/(app)/error.tsx` and `app/(marketing)/error.tsx` (mirroring the
+pre-existing `app/(admin)/error.tsx`). All three render branded
+chrome, surface the Next-generated `digest` for support correlation,
+and offer a `reset()` retry plus a segment-appropriate exit (dashboard
+for app, home for marketing, dashboard for admin). `app/global-error.tsx`
+rewritten to use brand tokens via a direct `globals.css` import so the
+last-resort fallback (when a segment boundary itself throws) is
+visually consistent. Sentry capture remains intact via
+`instrumentation.ts::onRequestError` plus an in-boundary
+`Sentry.captureException` at the global scope.
+
+Original report retained below.
+
+Surfaced 2026-05-12.
 
 Next.js App Router defaults to a generic browser error page on
 uncaught server errors. Docket has `app/global-error.tsx` (the
