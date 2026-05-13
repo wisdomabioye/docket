@@ -14,6 +14,7 @@ import { formatTrpcError } from "@/lib/trpc/format-error";
 import { APP_ROUTES } from "@/config";
 import { z } from "zod";
 import { Card, DateInput, EmptyState } from "@/components/ui";
+import { isoOffsetYears } from "@/lib/utils";
 import {
   BeneficiaryDataSchema,
   type BeneficiaryData,
@@ -52,6 +53,12 @@ type FieldDef = {
   label: string;
   control: "text" | "date" | "number" | "textarea" | "email";
   hint?: string;
+  /** Date-bound offsets in years from `today`. Resolved at render
+   *  into ISO `yyyy-mm-dd` strings on the DateInput. Negative for past
+   *  (DOB), positive for future (filing date). `undefined` leaves the
+   *  bound open. Only meaningful when `control === "date"`. */
+  dateMinOffsetYears?: number;
+  dateMaxOffsetYears?: number;
 };
 
 /** A wizard section is either a `fields` group (data merged into
@@ -85,7 +92,15 @@ const SECTIONS: ReadonlyArray<SectionDef> = [
       "Beneficiary's identity. Used in every prompt's lead and on the package cover sheet.",
     fields: [
       { key: "fullName", label: "Full name", control: "text" },
-      { key: "dateOfBirth", label: "Date of birth", control: "date" },
+      {
+        key: "dateOfBirth",
+        label: "Date of birth",
+        control: "date",
+        // DOB can't be in the future. No lower bound — beneficiaries
+        // can be any age in theory; the DateInput's calendar floors at
+        // 1900 by default which is plenty.
+        dateMaxOffsetYears: 0,
+      },
       { key: "nationality", label: "Nationality", control: "text" },
       {
         key: "currentLocation",
@@ -128,6 +143,11 @@ const SECTIONS: ReadonlyArray<SectionDef> = [
         label: "Target filing date",
         control: "date",
         hint: "When you plan to send the package to USCIS.",
+        // Filing dates can't be in the past; cap at +2y so the
+        // calendar's year-picker stays usable. Any further out is a
+        // typo, not a plan.
+        dateMinOffsetYears: 0,
+        dateMaxOffsetYears: 2,
       },
       { key: "email", label: "Beneficiary email", control: "email" },
     ],
@@ -527,6 +547,12 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
                     value={values[field.key]}
                     disabled={props.locked}
                     onChange={(v) => setField(field.key, v)}
+                    onDateInvalid={(reason) =>
+                      setFieldErrors((prev) => ({
+                        ...prev,
+                        [field.key]: dateInvalidMessage(reason),
+                      }))
+                    }
                     {...(fieldError !== undefined
                       ? { error: fieldError }
                       : {})}
@@ -660,6 +686,11 @@ function FieldRow(props: {
   disabled: boolean;
   error?: string;
   onChange: (v: string | number | undefined) => void;
+  /** Fired by date fields when the typed value can't be parsed or
+   *  falls outside the field's min/max. Parent can populate
+   *  `fieldErrors[key]` so the inline error appears on blur, not only
+   *  after a Next-click validation pass. */
+  onDateInvalid?: (reason: "invalid_date" | "out_of_range") => void;
 }): React.ReactElement {
   const id = `intk-${props.field.key}`;
   const errId = props.error ? `${id}-err` : undefined;
@@ -702,6 +733,15 @@ function FieldRow(props: {
           disabled={props.disabled}
           onChange={(v) => props.onChange(v)}
           className={inputClass}
+          {...(props.field.dateMinOffsetYears !== undefined
+            ? { min: isoOffsetYears(props.field.dateMinOffsetYears) }
+            : {})}
+          {...(props.field.dateMaxOffsetYears !== undefined
+            ? { max: isoOffsetYears(props.field.dateMaxOffsetYears) }
+            : {})}
+          {...(props.error ? { invalid: true as const } : {})}
+          {...(errId ? { "aria-describedby": errId } : {})}
+          {...(props.onDateInvalid ? { onInvalid: props.onDateInvalid } : {})}
         />
       ) : (
         <input
@@ -873,4 +913,15 @@ function countFilled(
     n += 1;
   }
   return n;
+}
+
+function dateInvalidMessage(
+  reason: "invalid_date" | "out_of_range",
+): string {
+  switch (reason) {
+    case "invalid_date":
+      return "Use a valid date (MM/DD/YYYY).";
+    case "out_of_range":
+      return "Date is outside the allowed range.";
+  }
 }

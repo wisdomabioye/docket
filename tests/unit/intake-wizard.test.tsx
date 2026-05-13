@@ -393,6 +393,27 @@ describe("IntakeWizard — URL section param", () => {
   });
 });
 
+describe("IntakeWizard — DateInput onInvalid wiring", () => {
+  it("typing an invalid date and blurring surfaces an inline error before Next is clicked", () => {
+    render(<IntakeWizard {...baseProps} initial={{}} />);
+    const dob = screen.getByLabelText("Date of birth");
+    fireEvent.change(dob, { target: { value: "02/30/1990" } });
+    fireEvent.blur(dob);
+    expect(screen.getByText(/Use a valid date/i)).toBeInTheDocument();
+    expect(dob.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("typing an out-of-range date surfaces a range message", () => {
+    render(<IntakeWizard {...baseProps} initial={{}} />);
+    // DOB has max=today; type a date 50 years in the future.
+    const dob = screen.getByLabelText("Date of birth");
+    const futureYear = new Date().getFullYear() + 50;
+    fireEvent.change(dob, { target: { value: `01/15/${futureYear}` } });
+    fireEvent.blur(dob);
+    expect(screen.getByText(/outside the allowed range/i)).toBeInTheDocument();
+  });
+});
+
 describe("IntakeWizard — RecommenderListEditor visa copy", () => {
   beforeEach(() => {
     searchParamsMock.get.mockImplementation((k: string) =>

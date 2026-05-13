@@ -46,11 +46,24 @@ export type DateInputProps = {
   /** Forwarded to the typeable input for accessibility when no
    *  `<label htmlFor={id}>` is paired. */
   "aria-label"?: string;
+  /** ID of the element describing this input's error/hint, forwarded
+   *  to `aria-describedby` when present. Parent form is responsible
+   *  for rendering the message and matching the id. */
+  "aria-describedby"?: string;
   /** Override the input's class. Falls through to the same Tailwind
    *  classes used by the native input the IntakeWizard ships today. */
   className?: string;
   /** Forwarded to the input — for caller-controlled focus state. */
   autoFocus?: boolean;
+  /** Caller-managed error state. When truthy, flips `aria-invalid`
+   *  and colors the input border with `--danger`. The message text
+   *  itself is the parent's responsibility (see `aria-describedby`). */
+  invalid?: boolean;
+  /** Fires when a blur/Enter-committed value fails to parse or falls
+   *  outside `min`/`max`. The input still reverts to the last-valid
+   *  value (the form state is the source of truth), so this is purely
+   *  a signal the parent can surface as a transient error. */
+  onInvalid?: (reason: "invalid_date" | "out_of_range") => void;
 };
 
 /**
@@ -136,13 +149,20 @@ export function DateInput(props: DateInputProps): React.ReactElement {
       return;
     }
     const parsed = parseMaskedDate(masked);
-    if (parsed && isWithinRange(parsed, props.min, props.max)) {
-      props.onChange(format(parsed, "yyyy-MM-dd"));
+    if (parsed === null) {
+      // Couldn't be parsed at all (partial entry, Feb 30, etc.). Tell
+      // the parent so it can surface a hint, then revert the visible
+      // text — the form state never holds a half-typed string.
+      props.onInvalid?.("invalid_date");
+      setText(maskedFromIso(props.value));
       return;
     }
-    // Invalid or out-of-range — revert the input to the last good
-    // value so the form never holds a half-typed string.
-    setText(maskedFromIso(props.value));
+    if (!isWithinRange(parsed, props.min, props.max)) {
+      props.onInvalid?.("out_of_range");
+      setText(maskedFromIso(props.value));
+      return;
+    }
+    props.onChange(format(parsed, "yyyy-MM-dd"));
   }
 
   function onCalendarSelect(d: Date | undefined) {
@@ -173,6 +193,10 @@ export function DateInput(props: DateInputProps): React.ReactElement {
           required={props.required}
           autoFocus={props.autoFocus}
           aria-label={props["aria-label"]}
+          {...(props.invalid ? { "aria-invalid": true as const } : {})}
+          {...(props["aria-describedby"]
+            ? { "aria-describedby": props["aria-describedby"] }
+            : {})}
           onChange={(e) => setText(applyMask(e.target.value))}
           onBlur={(e) => commitText(e.target.value)}
           onKeyDown={(e) => {
@@ -189,7 +213,9 @@ export function DateInput(props: DateInputProps): React.ReactElement {
             props.className,
           )}
           style={{
-            borderColor: "var(--border, rgba(0,0,0,0.15))",
+            borderColor: props.invalid
+              ? "var(--danger, #b1330e)"
+              : "var(--border, rgba(0,0,0,0.15))",
             background: "var(--surface, white)",
             color: "var(--ink)",
           }}
