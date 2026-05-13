@@ -64,6 +64,7 @@ export default async function IntakePage({
 
       <IntakeWizard
         caseId={data.id}
+        visaType={data.visaType}
         initial={initial}
         rowRevision={data.rowRevision}
         currentStatus={data.status}

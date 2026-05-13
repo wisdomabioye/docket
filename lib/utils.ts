@@ -98,3 +98,36 @@ export function formatNumber(
   if (n === null || n === undefined) return "—";
   return new Intl.NumberFormat("en-US").format(n);
 }
+
+/**
+ * Today's date as a `yyyy-mm-dd` string in the browser's local
+ * timezone. Used to seed `DateInput`'s `min`/`max` bounds (e.g. DOB
+ * `max=today`, filing date `min=today`). Local-time on purpose — the
+ * native `<input type="date">` wire format is local-date semantics
+ * (it has no time-of-day or zone), so calling sites should match.
+ *
+ * Don't call this on the server during render: it's now-dependent and
+ * causes hydration drift. DateInput is a `"use client"` component, so
+ * call from there or from another client effect.
+ */
+export function isoToday(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * `isoToday()` offset by `years` years. Negative for past, positive
+ * for future. Returns a `yyyy-mm-dd` string. Handles month-end
+ * edge cases via the JS `Date` constructor's overflow rules.
+ */
+export function isoOffsetYears(years: number): string {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + years);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}

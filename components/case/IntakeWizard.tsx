@@ -18,6 +18,7 @@ import {
   BeneficiaryDataSchema,
   type BeneficiaryData,
 } from "@/server/db/schema/zod/beneficiary";
+import type { VisaType } from "@/lib/constants";
 import { RecommenderListEditor } from "./RecommenderListEditor";
 
 /**
@@ -136,7 +137,7 @@ const SECTIONS: ReadonlyArray<SectionDef> = [
     key: "recommenders",
     label: "Recommenders",
     blurb:
-      "Letter-writers for this case. The build pipeline drafts one recommendation letter per recommender — minimum three for O-1A.",
+      "Letter-writers for this case. The build pipeline drafts one recommendation letter per recommender. The visa-specific minimum (if any) is shown below.",
   },
   {
     kind: "fields",
@@ -198,6 +199,7 @@ type FieldErrors = Partial<Record<FieldKey, string>>;
 
 export type IntakeWizardProps = {
   caseId: string;
+  visaType: VisaType;
   initial: BeneficiaryData;
   rowRevision: number;
   currentStatus: string;
@@ -535,6 +537,7 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
           ) : (
             <RecommenderListEditor
               caseId={props.caseId}
+              visaType={props.visaType}
               locked={props.locked}
             />
           )}

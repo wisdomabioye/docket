@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc/react";
 import { formatTrpcError } from "@/lib/trpc/format-error";
 import { Card, EmptyState } from "@/components/ui";
@@ -8,6 +8,8 @@ import {
   RecommenderInputSchema,
   type RecommenderInput,
 } from "@/server/db/schema/zod/recommender";
+import type { VisaType } from "@/lib/constants";
+import { visaCriteriaConfig } from "@/lib/visa-criteria";
 
 /**
  * Per-case recommender roster editor. Lives inside the IntakeWizard's
@@ -30,6 +32,12 @@ import {
 export type RecommenderListEditorProps = {
   caseId: string;
   locked: boolean;
+  /** Visa type for the case. Drives the recommender minimum and the
+   *  copy that surfaces it. Passed through from the page (sourced from
+   *  `case.get`) — looked up in `lib/visa-criteria.ts` here so the
+   *  editor renders correctly even if the parent doesn't know the
+   *  per-visa numbers. */
+  visaType: VisaType;
 };
 
 type DraftMode =
@@ -72,6 +80,40 @@ export function RecommenderListEditor(
 
   const list = listQuery.data ?? [];
   const busy = create.isPending || update.isPending || remove.isPending;
+
+  // Per-visa recommender contract:
+  //   - Config present + minRecommenders defined → drive empty-state
+  //     copy, "X of Y added" counter, and a "below recommended" chip.
+  //   - Config present + minRecommenders undefined → neutral copy,
+  //     no counter or chip (visa has no formal minimum).
+  //   - Config null (visa exists in the enum but isn't supported by
+  //     Phase 1 — e.g. EB-1A pre-launch) → neutral copy + dev warn.
+  //     Phase 1 gates `case.create` to supported visas so this branch
+  //     is theoretically unreachable in prod; the warn surfaces it
+  //     during the next visa rollout if a config is missed.
+  const visaConfig = visaCriteriaConfig(props.visaType);
+  // Dev-only warn when the editor renders for a visa with no config —
+  // gated to once per visaType change so a re-render storm doesn't
+  // spam the console. Production builds never log; Phase 1 also gates
+  // `case.create` to supported visas, so this branch should be
+  // unreachable in prod regardless.
+  useEffect(() => {
+    if (visaConfig === null && process.env.NODE_ENV !== "production") {
+      console.warn(
+        `[RecommenderListEditor] No visa config for "${props.visaType}". Falling back to neutral copy. Add a config in lib/visa-criteria.ts.`,
+      );
+    }
+  }, [props.visaType, visaConfig]);
+  const minRecommenders = visaConfig?.minRecommenders;
+  const recommenderCount = list.length;
+  const belowMinimum =
+    minRecommenders !== undefined && recommenderCount < minRecommenders;
+  const emptyStateSubtitle =
+    minRecommenders !== undefined
+      ? `Add at least ${formatCount(minRecommenders)} letter-writer${
+          minRecommenders === 1 ? "" : "s"
+        } (${props.visaType} minimum). The build pipeline drafts one recommendation letter per recommender.`
+      : "Add letter-writers for this case. The build pipeline drafts one recommendation letter per recommender.";
 
   const submitError =
     draftError ??
@@ -131,15 +173,37 @@ export function RecommenderListEditor(
 
   return (
     <div className="space-y-4" data-component="recommender-list-editor">
+      {minRecommenders !== undefined && list.length > 0 ? (
+        <div
+          className="flex items-center gap-2 text-xs"
+          data-component="recommender-count"
+        >
+          <span
+            className="mono"
+            style={{ color: "var(--ink-muted)" }}
+          >
+            {recommenderCount} of {minRecommenders} added
+          </span>
+          {belowMinimum ? (
+            <span
+              role="status"
+              className="mono rounded-sm px-1.5 py-0.5 text-[10px] font-medium"
+              style={{
+                background: "var(--danger-soft, rgba(177,51,14,0.1))",
+                color: "var(--danger, #b1330e)",
+              }}
+            >
+              Below {props.visaType} minimum
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       {listQuery.isLoading ? (
         <p className="text-sm" style={{ color: "var(--ink-muted)" }}>
           Loading…
         </p>
       ) : list.length === 0 && mode.kind !== "adding" ? (
-        <EmptyState
-          title="No recommenders yet"
-          subtitle="Add at least three letter-writers (O-1A minimum). The build pipeline drafts one recommendation letter per recommender."
-        />
+        <EmptyState title="No recommenders yet" subtitle={emptyStateSubtitle} />
       ) : (
         <ul className="space-y-3">
           {list.map((r) => {
@@ -440,4 +504,12 @@ function Field(props: FieldProps): React.ReactElement {
 
 function slug(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+/** Spell small numbers for prose copy ("at least three letter-writers")
+ *  while keeping arithmetic-relevant numbers digit-form ("3 of 3
+ *  added"). Falls back to digits for unusual values. */
+function formatCount(n: number): string {
+  const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"] as const;
+  return n >= 0 && n < words.length ? words[n]! : String(n);
 }

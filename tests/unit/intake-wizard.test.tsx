@@ -46,8 +46,22 @@ const completeUseMutationMock = vi.hoisted(() =>
 // invokes create/update/remove) renders inside that section but is
 // only mounted when the section is active; mock the mutations as
 // no-op stubs so a future "switch to Recommenders" test doesn't crash.
+type RecommenderRow = {
+  id: string;
+  fullName: string;
+  relationship: string;
+  titleOrg: string | null;
+  email: string | null;
+  guidance: string | null;
+  displayOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
 const recommenderListUseQueryMock = vi.hoisted(() =>
-  vi.fn(() => ({ data: [], isLoading: false })),
+  vi.fn<() => { data: RecommenderRow[]; isLoading: boolean }>(() => ({
+    data: [] as RecommenderRow[],
+    isLoading: false,
+  })),
 );
 const recommenderNoopMutation = vi.hoisted(() => ({
   useMutation: () => ({
@@ -118,6 +132,7 @@ afterEach(() => {
 
 const baseProps = {
   caseId: "case-1",
+  visaType: "O-1A" as const,
   initial: {},
   rowRevision: 1,
   currentStatus: "intake",
@@ -375,5 +390,60 @@ describe("IntakeWizard — URL section param", () => {
     render(<IntakeWizard {...baseProps} />);
     // The Filing section blurb is unique and should be rendered.
     expect(screen.getByText(/Filing logistics/i)).toBeInTheDocument();
+  });
+});
+
+describe("IntakeWizard — RecommenderListEditor visa copy", () => {
+  beforeEach(() => {
+    searchParamsMock.get.mockImplementation((k: string) =>
+      k === "section" ? "recommenders" : null,
+    );
+  });
+
+  it("empty O-1A case renders 'at least three' (visa minimum) in the empty-state copy", () => {
+    recommenderListUseQueryMock.mockReturnValue({ data: [], isLoading: false });
+    render(<IntakeWizard {...baseProps} visaType="O-1A" />);
+    expect(screen.getByText(/at least three letter-writers/i)).toBeInTheDocument();
+    expect(screen.getByText(/\(O-1A minimum\)/)).toBeInTheDocument();
+  });
+
+  it("renders 'X of 3 added' counter when at least one recommender exists", () => {
+    recommenderListUseQueryMock.mockReturnValue({
+      data: [
+        { id: "r1", fullName: "Rec One", relationship: "Advisor", titleOrg: null, email: null, guidance: null, displayOrder: 0, createdAt: new Date(), updatedAt: new Date() },
+      ],
+      isLoading: false,
+    });
+    render(<IntakeWizard {...baseProps} visaType="O-1A" />);
+    expect(screen.getByText("1 of 3 added")).toBeInTheDocument();
+    expect(screen.getByText(/Below O-1A minimum/i)).toBeInTheDocument();
+  });
+
+  it("hides the 'Below minimum' chip once the visa minimum is met", () => {
+    recommenderListUseQueryMock.mockReturnValue({
+      data: [
+        { id: "r1", fullName: "A", relationship: "Advisor", titleOrg: null, email: null, guidance: null, displayOrder: 0, createdAt: new Date(), updatedAt: new Date() },
+        { id: "r2", fullName: "B", relationship: "Advisor", titleOrg: null, email: null, guidance: null, displayOrder: 1, createdAt: new Date(), updatedAt: new Date() },
+        { id: "r3", fullName: "C", relationship: "Advisor", titleOrg: null, email: null, guidance: null, displayOrder: 2, createdAt: new Date(), updatedAt: new Date() },
+      ],
+      isLoading: false,
+    });
+    render(<IntakeWizard {...baseProps} visaType="O-1A" />);
+    expect(screen.getByText("3 of 3 added")).toBeInTheDocument();
+    expect(screen.queryByText(/Below O-1A minimum/i)).toBeNull();
+  });
+
+  it("uses neutral copy + no counter for visas without a minimum (EB-1A)", () => {
+    // EB-1A has no `minRecommenders` set in lib/visa-criteria.ts today,
+    // so visaCriteriaConfig("EB-1A") returns null in Phase 1. The
+    // editor should still render (defensively) with neutral copy.
+    recommenderListUseQueryMock.mockReturnValue({ data: [], isLoading: false });
+    render(<IntakeWizard {...baseProps} visaType="EB-1A" />);
+    expect(screen.getByText(/Add letter-writers for this case/i)).toBeInTheDocument();
+    // Empty-state subtitle must not name a specific count for visas
+    // without a configured minimum.
+    expect(screen.queryByText(/at least \w+ letter-writers/i)).toBeNull();
+    // No "X of Y added" counter chip.
+    expect(screen.queryByText(/of \d+ added/i)).toBeNull();
   });
 });
