@@ -38,7 +38,7 @@ export function buildExhibitIndexPrompt(ctx: BuildContext): PromptSpec {
     ctx.documents
       .map(
         (d, i) =>
-          `${i + 1}. [${d.type}] ${d.originalFilename}${d.truncated ? " (truncated)" : ""}\n   Excerpt: ${snippet(d.extractedText, 400)}`,
+          `${i + 1}. documentId=${d.id}\n   [${d.type}] ${d.originalFilename}${d.truncated ? " (truncated)" : ""}\n   Excerpt: ${snippet(d.extractedText, 400)}`,
       )
       .join("\n\n"),
     "",
@@ -48,6 +48,7 @@ export function buildExhibitIndexPrompt(ctx: BuildContext): PromptSpec {
       .join("\n"),
     "",
     "Build the exhibit index. Assign each document an exhibit label (Exhibit A, Exhibit B, ...), describe the document briefly (one to two sentences), and list which criteria from the evidence plan it supports. Return JSON matching the provided schema.",
+    "CRITICAL: each entry's `documentId` MUST be copied verbatim from the `documentId=...` value on the corresponding numbered document above. These are UUIDs — do not invent, renumber, or shorten them. Returning a non-UUID will fail schema validation.",
   ].join("\n");
 
   return {
