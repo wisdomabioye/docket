@@ -13,6 +13,23 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #69 — `currentLocation` removal blanks any pre-existing beneficiary blobs
+
+Date: 2026-05-14.
+`BeneficiaryDataSchema` dropped `currentLocation` and added
+`currentCountry` + `currentCity` (intake now uses the country
+Combobox). Schema stays `.strict()`, so any DB row still carrying
+`currentLocation` will fail `safeParse` on the intake page, and the
+wizard silently falls back to `{}` — clearing every other field for
+the attorney. We honored the schema-file convention ("full DB wipe
+before re-test, so no migration is needed") but the next deploy must
+either wipe `cases.beneficiary_data` or ship a one-shot SQL migration
+that drops the old key.
+**How to apply:** before the next staging/prod deploy that ships this
+change, run a migration that strips `currentLocation` from the JSONB
+on every `cases` row, OR confirm the DB has been wiped since the
+field was last written.
+
 ### #68 — Sweep status-equality checks + relocate route-scoped status arrays
 
 Status: Resolved 2026-05-13.

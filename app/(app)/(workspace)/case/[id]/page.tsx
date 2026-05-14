@@ -1,10 +1,13 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { Card } from "@/components/ui";
-import { CaseHeader, CriteriaCoverageCard } from "@/components/case";
+import {
+  CaseHeader,
+  CaseHeaderActions,
+  CriteriaCoverageCard,
+} from "@/components/case";
 import { RevenuePanel } from "@/components/revenue/RevenuePanel";
 import { formatRelative } from "@/lib/utils";
 import { visaCriteriaConfig } from "@/lib/visa-criteria";
@@ -126,75 +129,5 @@ export default async function CaseDetailPage({
       </div>
     </div>
   );
-}
-
-/**
- * Stage 11 case-header actions row — `⇣ Package` (always available
- * deep-link) + status-aware primary CTA. Mockup `case-overview.html`
- * l. 110-114 renders both as static buttons; we make the primary
- * stage-aware so the wording matches the case's lifecycle position.
- *
- *   pre-build (intake → ready_to_build / build_failed)  → "Build →"
- *   post-build (building → approved)                    → "Review drafts →"
- *   terminal (package_ready → archived)                 → no primary
- */
-function CaseHeaderActions(props: {
-  caseId: string;
-  status: string;
-}): React.ReactElement {
-  const primary = primaryActionFor(props.status, props.caseId);
-  return (
-    <div className="flex items-center gap-2">
-      <Link
-        href={APP_ROUTES.casePackage(props.caseId)}
-        className="rounded-md border px-3 py-1.5 text-xs font-medium"
-        style={{
-          borderColor: "var(--border, rgba(0,0,0,0.15))",
-          color: "var(--ink)",
-          background: "var(--surface, white)",
-        }}
-      >
-        ⇣ Package
-      </Link>
-      {primary ? (
-        <Link
-          href={primary.href}
-          className="rounded-md border px-3 py-1.5 text-xs font-medium text-[var(--cream)]"
-          style={{
-            borderColor: "var(--ink)",
-            background: "var(--ink)",
-          }}
-        >
-          {primary.label}
-        </Link>
-      ) : null}
-    </div>
-  );
-}
-
-function primaryActionFor(
-  status: string,
-  caseId: string,
-): { label: string; href: string } | null {
-  switch (status) {
-    case "intake":
-    case "documents_pending":
-    case "extracting":
-    case "ready_to_build":
-    case "build_failed":
-      return { label: "Build →", href: APP_ROUTES.caseBuild(caseId) };
-    case "building":
-    case "draft_ready":
-    case "in_review":
-    case "needs_revision":
-    case "approved":
-      return { label: "Review drafts →", href: APP_ROUTES.caseOutputs(caseId) };
-    case "delivered":
-      return { label: "Mark as filed →", href: APP_ROUTES.casePackage(caseId) };
-    case "filed":
-      return { label: "View package", href: APP_ROUTES.casePackage(caseId) };
-    default:
-      return null;
-  }
 }
 

@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
-import { CaseHeader, IntakeWizard } from "@/components/case";
+import { CaseHeader, CaseHeaderActions, IntakeWizard } from "@/components/case";
 import {
   BeneficiaryDataSchema,
   type BeneficiaryData,
@@ -63,6 +63,7 @@ export default async function IntakePage({
         status={data.status}
         stage={stage}
         current="intake"
+        actions={<CaseHeaderActions caseId={data.id} status={data.status} />}
       />
 
       <IntakeWizard

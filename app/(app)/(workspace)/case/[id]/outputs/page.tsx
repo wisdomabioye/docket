@@ -3,11 +3,12 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
-import { CaseHeader } from "@/components/case";
+import { CaseHeader, CaseHeaderActions } from "@/components/case";
 import { OutputCard } from "@/components/output";
 import { EmptyState } from "@/components/ui";
 import { Filters, type Chip } from "@/components/table";
 import { deriveCaseStage } from "@/lib/case-stage";
+import { OutputsAutoRefresh } from "./OutputsAutoRefresh";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -114,6 +115,15 @@ export default async function OutputsPage({
           approvals: { approved: approvedCount, total: totalCount },
         })}
         current="outputs"
+        actions={
+          <CaseHeaderActions caseId={caseRow.id} status={caseRow.status} />
+        }
+      />
+
+      <OutputsAutoRefresh
+        caseId={caseRow.id}
+        initialStatus={caseRow.status}
+        initialOutputCount={outputs.length}
       />
 
       <header>
@@ -138,25 +148,7 @@ export default async function OutputsPage({
         </p>
       </header>
 
-      {totalCount > 0 ? (
-        <Filters
-          chips={chips}
-          right={
-            approvedCount > 0 ? (
-              <Link
-                href={APP_ROUTES.casePackage(id)}
-                className="rounded-sm border px-3 py-1.5 text-xs font-medium text-[var(--cream)]"
-                style={{
-                  borderColor: "var(--ink)",
-                  background: "var(--ink)",
-                }}
-              >
-                Package for filing →
-              </Link>
-            ) : null
-          }
-        />
-      ) : null}
+      {totalCount > 0 ? <Filters chips={chips} /> : null}
 
       {totalCount === 0 ? (
         caseRow.status === "building" ? (

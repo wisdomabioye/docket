@@ -30,7 +30,13 @@ export const BeneficiaryDataSchema = z
     fullName: safeName(200),
     dateOfBirth: z.iso.date().optional(), // ISO 8601 YYYY-MM-DD
     nationality: safeName(100),
-    currentLocation: safeText(200),
+    // Current residence. Split from the legacy single-string
+    // `currentLocation` so country is a code-backed enum (ISO 3166-1
+    // alpha-2 display name from `lib/locations/countries.ts`) and the
+    // city stays free-form. Prior dataset wipe between iterations per
+    // the file-header convention — no migration shim shipped.
+    currentCountry: safeName(100),
+    currentCity: safeText(120),
 
     // Practice / field section
     occupation: safeText(200),

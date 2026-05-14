@@ -13,7 +13,8 @@ import { trpc } from "@/lib/trpc/react";
 import { formatTrpcError } from "@/lib/trpc/format-error";
 import { APP_ROUTES } from "@/config";
 import { z } from "zod";
-import { Card, DateInput, EmptyState } from "@/components/ui";
+import { Card, Combobox, DateInput, EmptyState } from "@/components/ui";
+import { COUNTRIES } from "@/lib/locations";
 import { isoOffsetYears } from "@/lib/utils";
 import {
   BeneficiaryDataSchema,
@@ -51,7 +52,7 @@ type FieldKey = keyof BeneficiaryData;
 type FieldDef = {
   key: FieldKey;
   label: string;
-  control: "text" | "date" | "number" | "textarea" | "email";
+  control: "text" | "date" | "number" | "textarea" | "email" | "country";
   hint?: string;
   /** Date-bound offsets in years from `today`. Resolved at render
    *  into ISO `yyyy-mm-dd` strings on the DateInput. Negative for past
@@ -101,12 +102,17 @@ const SECTIONS: ReadonlyArray<SectionDef> = [
         // 1900 by default which is plenty.
         dateMaxOffsetYears: 0,
       },
-      { key: "nationality", label: "Nationality", control: "text" },
+      { key: "nationality", label: "Nationality", control: "country" },
       {
-        key: "currentLocation",
-        label: "Current location",
+        key: "currentCountry",
+        label: "Country of residence",
+        control: "country",
+      },
+      {
+        key: "currentCity",
+        label: "City of residence",
         control: "text",
-        hint: "City, country (or US state if currently in the US).",
+        hint: "If in the US, include the state (e.g. Brooklyn, NY).",
       },
     ],
   },
@@ -178,6 +184,12 @@ const SECTIONS: ReadonlyArray<SectionDef> = [
 const DEFAULT_SECTION_KEY = SECTIONS[0]!.key;
 
 const DEBOUNCE_MS = 800;
+
+/** Country picker options. Built once — the catalogue is static.
+ *  We persist the country name (not the ISO code) so existing AI
+ *  prompts that interpolate `nationality` keep producing natural
+ *  prose ("Nigeria", not "NG"). */
+const COUNTRY_OPTIONS = COUNTRIES.map((c) => ({ value: c.name, label: c.name }));
 
 /**
  * Per-section validation schemas, derived from `BeneficiaryDataSchema`
@@ -715,7 +727,18 @@ function FieldRow(props: {
       >
         {props.field.label}
       </label>
-      {props.field.control === "textarea" ? (
+      {props.field.control === "country" ? (
+        <Combobox
+          id={id}
+          options={COUNTRY_OPTIONS}
+          value={typeof props.value === "string" ? props.value : ""}
+          disabled={props.disabled}
+          onChange={(v) => props.onChange(v === "" ? undefined : v)}
+          placeholder="Select country…"
+          {...(props.error ? { invalid: true as const } : {})}
+          {...(errId ? { "aria-describedby": errId } : {})}
+        />
+      ) : props.field.control === "textarea" ? (
         <textarea
           id={id}
           rows={6}

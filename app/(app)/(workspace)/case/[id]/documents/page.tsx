@@ -4,6 +4,7 @@ import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import {
   CaseHeader,
+  CaseHeaderActions,
   RequiredDocsCard,
   StorageCard,
 } from "@/components/case";
@@ -58,6 +59,9 @@ export default async function DocumentsPage({
         status={caseRow.status}
         stage={deriveCaseStage({ status: caseRow.status })}
         current="documents"
+        actions={
+          <CaseHeaderActions caseId={caseRow.id} status={caseRow.status} />
+        }
       />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">

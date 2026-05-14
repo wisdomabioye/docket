@@ -218,7 +218,8 @@ const validProfile = {
   fullName: "Test Beneficiary",
   dateOfBirth: "1990-01-01",
   nationality: "Canada",
-  currentLocation: "Toronto",
+  currentCountry: "Canada",
+  currentCity: "Toronto",
 } as const;
 
 // Fully populated across every fields-section. Submit now runs a

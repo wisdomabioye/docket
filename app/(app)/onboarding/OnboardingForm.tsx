@@ -6,6 +6,14 @@ import { trpc } from "@/lib/trpc/react";
 import { formatTrpcError } from "@/lib/trpc/format-error";
 import { APP_ROUTES } from "@/config";
 import { TERMS_VERSION, type TermsVersion } from "@/server/auth/terms";
+import { Combobox } from "@/components/ui";
+import { US_STATES } from "@/lib/locations";
+
+/** USPS-code options for the bar-states multi-select. Built once. */
+const US_STATE_OPTIONS = US_STATES.map((s) => ({
+  value: s.code,
+  label: `${s.code} — ${s.name}`,
+}));
 
 type Props = {
   defaults: {
@@ -34,19 +42,15 @@ export function OnboardingForm(props: Props): React.ReactElement {
   const downloadUrl = trpc.signature.getDownloadUrl.useMutation();
 
   const [barNumber, setBarNumber] = useState(props.defaults.barNumber);
-  const [barStatesInput, setBarStatesInput] = useState(
-    props.defaults.barStates.join(", "),
-  );
+  const [barStates, setBarStates] = useState<string[]>([
+    ...props.defaults.barStates,
+  ]);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [, startTransition] = useTransition();
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!termsAccepted || !barNumber) return;
-    const barStates = barStatesInput
-      .split(",")
-      .map((s) => s.trim().toUpperCase())
-      .filter(Boolean);
+    if (!termsAccepted || !barNumber || barStates.length === 0) return;
     submit.mutate(
       {
         barNumber,
@@ -93,14 +97,14 @@ export function OnboardingForm(props: Props): React.ReactElement {
         />
       </Field>
 
-      <Field label="Bar states (comma-separated, e.g. NY, CA)" htmlFor="barStates">
-        <input
+      <Field label="Bar states" htmlFor="barStates" hint="Pick every state where you’re admitted.">
+        <Combobox
           id="barStates"
-          required
-          value={barStatesInput}
-          onChange={(e) => setBarStatesInput(e.target.value)}
-          className="w-full rounded-md border border-[var(--color-ink)] bg-white px-3 py-2 uppercase"
-          placeholder="NY"
+          mode="multi"
+          options={US_STATE_OPTIONS}
+          value={barStates}
+          onChange={setBarStates}
+          placeholder="Select states…"
         />
       </Field>
 

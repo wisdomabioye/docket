@@ -4,6 +4,11 @@
 
 export { Badge, type BadgeVariant } from "./Badge";
 export { Card } from "./Card";
+export {
+  Combobox,
+  type ComboboxOption,
+  type ComboboxProps,
+} from "./Combobox";
 export { DateInput, type DateInputProps } from "./DateInput";
 export {
   Checklist,
