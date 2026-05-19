@@ -280,17 +280,23 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
   // stale errors into another section's view.
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
-  // Track the row revision so we always pass the latest expected
-  // version to the mutation (the procedure bumps it on each save).
+  // Track the row revision. Synced from the server's response on every
+  // successful save — the procedure now returns the post-trigger value
+  // so we never guess `+= 1`.
   const revisionRef = useRef(props.rowRevision);
   // Track the patch we last submitted so we don't re-fire the same
   // payload on tab focus / clock tick.
   const lastPatchRef = useRef<string>("");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Serial promise chain. Every flushSave appends here, so two
+  // back-to-back saves can never reach the server in parallel with the
+  // same stale `expectedRowRevision`. `onSubmit` awaits the chain to
+  // drain pending + in-flight saves before firing `complete.mutate`.
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const flushSave = useCallback(
-    (patchSource: BeneficiaryData) => {
-      if (props.locked) return;
+    (patchSource: BeneficiaryData): Promise<void> => {
+      if (props.locked) return saveQueueRef.current;
       // Build the patch from non-empty values only — empty strings
       // would fail Zod's `.min(1)` on inputs that have it.
       const patch: Partial<BeneficiaryData> = {};
@@ -307,27 +313,27 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
       }
       // Empty patch = nothing to save (e.g. user opened a fresh
       // section then navigated away). Server rejects `{}` with
-      // BAD_REQUEST; bail before the round-trip.
-      if (Object.keys(patch).length === 0) return;
+      // BAD_REQUEST; bail before the round-trip but still return the
+      // queue promise so callers awaiting drain don't short-circuit.
+      if (Object.keys(patch).length === 0) return saveQueueRef.current;
       const serialized = JSON.stringify(patch);
-      if (serialized === lastPatchRef.current) return;
+      if (serialized === lastPatchRef.current) return saveQueueRef.current;
       lastPatchRef.current = serialized;
 
-      update.mutate(
-        {
+      const next = saveQueueRef.current.then(async () => {
+        const res = await update.mutateAsync({
           caseId: props.caseId,
           patch,
           expectedRowRevision: revisionRef.current,
-        },
-        {
-          onSuccess: () => {
-            // Server bumps the revision per save; assume +1 to keep
-            // subsequent debounced saves in sync without a refetch.
-            revisionRef.current += 1;
-            setSavedAt(new Date());
-          },
-        },
-      );
+        });
+        revisionRef.current = res.rowRevision;
+        setSavedAt(new Date());
+      });
+      // Swallow errors on the *chain* (so a single failed save doesn't
+      // poison every subsequent flush) but propagate them on the
+      // returned promise so callers can `await` and react.
+      saveQueueRef.current = next.catch(() => {});
+      return next;
     },
     [props.caseId, props.locked, update],
   );
@@ -458,7 +464,7 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
     navigateToSection(nextKey);
   }
 
-  function onSubmit() {
+  async function onSubmit() {
     if (props.currentStatus !== "intake") return;
     // Cross-section gate. Filling only the narrative section and
     // clicking Submit must not bypass profile/practice/filing — the
@@ -474,12 +480,21 @@ export function IntakeWizard(props: IntakeWizardProps): React.ReactElement {
       }
       return;
     }
-    // Make sure pending edits land before completing.
+    // Drain the save chain (in-flight + pending + this final flush)
+    // before completing. Without the await, `complete.mutate` would
+    // race ahead with a stale `expectedRowRevision` and 409.
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    flushSave(values);
+    try {
+      await flushSave(values);
+    } catch {
+      // Save failure already surfaces via `update.error`; abort the
+      // submit so the user can resolve it instead of pushing the case
+      // forward with unsaved edits.
+      return;
+    }
     complete.mutate(
       {
         caseId: props.caseId,

@@ -13,6 +13,26 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #70 — Same OCC-race class lives in output editing (`case_outputs.row_revision`)
+
+Date: 2026-05-19.
+Fixed the intake wizard's "case was modified (revision N, expected N-1)"
+loop by (a) returning the post-trigger `row_revision` from
+`case.updateBeneficiary`, (b) replacing the client's `+= 1` guess with a
+synced ref, and (c) serializing saves through a single promise chain so
+`onSubmit` can drain in-flight + pending writes before firing
+`completeIntake`. See `components/case/IntakeWizard.tsx` (`saveQueueRef`)
+and `server/api/routers/case.ts:354-373`.
+`case_outputs` carries the same `row_revision` trigger
+(`migrations/0004_row_revision_trigger.sql:30`) and the output editor
+(Tiptap autosave) has the same shape — debounced saves + an OCC token
+on a row that other writers (status flips, compute-spend bumps) also
+touch. Same race is latent there.
+**How to apply:** when the next user reports "output was modified
+(revision …)" on the editor, port the same three changes to
+`output.update*` mutations + the editor's save flow. Don't preemptively
+refactor — wait for the reproducible report.
+
 ### #69 — `currentLocation` removal blanks any pre-existing beneficiary blobs
 
 Date: 2026-05-14.

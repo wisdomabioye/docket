@@ -351,11 +351,16 @@ export const caseRouter = router({
       // Mutations on owner connection: case_events has no participant
       // INSERT policy, so user-scoped writes would fail RLS. Authz
       // already validated by the RLS-engaged read above.
-      await ownerDb.transaction(async (tx) => {
-        await tx
+      // Returning the post-trigger `row_revision` lets the client sync
+      // its OCC token from server truth instead of guessing `+= 1`.
+      // Without this, two debounced saves crossing the wire race the
+      // trigger and the slower one 409s on a stale token.
+      const newRevision = await ownerDb.transaction(async (tx) => {
+        const [updated] = await tx
           .update(cases)
           .set({ beneficiaryData: merged })
-          .where(eq(cases.id, input.caseId));
+          .where(eq(cases.id, input.caseId))
+          .returning({ rowRevision: cases.rowRevision });
 
         await tx.insert(caseEvents).values({
           caseId: input.caseId,
@@ -364,9 +369,11 @@ export const caseRouter = router({
           eventType: "case.beneficiary_updated",
           details: { fields: Object.keys(input.patch) },
         });
+
+        return updated!.rowRevision;
       });
 
-      return { ok: true as const };
+      return { ok: true as const, rowRevision: newRevision };
     }),
 
   completeIntake: protectedProcedure

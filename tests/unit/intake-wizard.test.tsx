@@ -24,11 +24,19 @@ import "@testing-library/jest-dom/vitest";
  *   6. completeIntake fires only when status === 'intake'.
  */
 
-const updateMutateMock = vi.hoisted(() => vi.fn());
+// updateBeneficiary now uses `mutateAsync` so the wizard can serialize
+// saves and await the chain on submit. Back both `mutate` and
+// `mutateAsync` with the same recorder so existing call-args assertions
+// keep working; `.mockResolvedValue` makes the async path return a
+// post-trigger `rowRevision` like the real procedure does.
+const updateMutateMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ ok: true, rowRevision: 2 }),
+);
 const completeMutateMock = vi.hoisted(() => vi.fn());
 const updateUseMutationMock = vi.hoisted(() =>
   vi.fn(() => ({
     mutate: updateMutateMock,
+    mutateAsync: updateMutateMock,
     isPending: false,
     error: null,
   })),
@@ -112,6 +120,7 @@ afterEach(() => {
   vi.useRealTimers();
   cleanup();
   updateMutateMock.mockReset();
+  updateMutateMock.mockResolvedValue({ ok: true, rowRevision: 2 });
   completeMutateMock.mockReset();
   searchParamsMock.get.mockReset();
   searchParamsMock.get.mockImplementation(() => null as string | null);
@@ -119,6 +128,7 @@ afterEach(() => {
   updateUseMutationMock.mockReset();
   updateUseMutationMock.mockReturnValue({
     mutate: updateMutateMock,
+    mutateAsync: updateMutateMock,
     isPending: false,
     error: null,
   });
@@ -140,39 +150,39 @@ const baseProps = {
 };
 
 describe("IntakeWizard — auto-save", () => {
-  it("trims string fields and forwards non-empty values to updateBeneficiary", () => {
+  it("trims string fields and forwards non-empty values to updateBeneficiary", async () => {
     render(<IntakeWizard {...baseProps} />);
     fireEvent.change(screen.getByLabelText("Full name"), {
       target: { value: "  Test Beneficiary 001  " },
     });
-    act(() => {
+    // Async act drains the debounce timer AND the save chain's
+    // microtask hop (`saveQueueRef.current.then(...)` defers the actual
+    // mutateAsync call to the next tick).
+    await act(async () => {
       vi.advanceTimersByTime(900);
     });
     expect(updateMutateMock).toHaveBeenCalledTimes(1);
-    expect(updateMutateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        caseId: "case-1",
-        expectedRowRevision: 1,
-        patch: { fullName: "Test Beneficiary 001" },
-      }),
-      expect.any(Object),
-    );
+    expect(updateMutateMock).toHaveBeenCalledWith({
+      caseId: "case-1",
+      expectedRowRevision: 1,
+      patch: { fullName: "Test Beneficiary 001" },
+    });
   });
 
-  it("does NOT fire the mutation when every field is empty (regression: BAD_REQUEST on nav)", () => {
+  it("does NOT fire the mutation when every field is empty (regression: BAD_REQUEST on nav)", async () => {
     render(<IntakeWizard {...baseProps} />);
     // Type then clear → field returns to empty string. The debounced
     // save must skip rather than send `{}`.
     const input = screen.getByLabelText("Full name");
     fireEvent.change(input, { target: { value: "X" } });
     fireEvent.change(input, { target: { value: "" } });
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(900);
     });
     expect(updateMutateMock).not.toHaveBeenCalled();
   });
 
-  it("flushes the pending save when the user navigates to another section", () => {
+  it("flushes the pending save when the user navigates to another section", async () => {
     render(<IntakeWizard {...baseProps} />);
     fireEvent.change(screen.getByLabelText("Full name"), {
       target: { value: "Test Beneficiary 001" },
@@ -185,12 +195,44 @@ describe("IntakeWizard — auto-save", () => {
       .getAllByRole("button", { name: /practice/i })
       .find((btn) => btn.textContent?.includes("/"));
     if (!sidebarLink) throw new Error("sidebar Practice button not found");
-    fireEvent.click(sidebarLink);
+    await act(async () => {
+      fireEvent.click(sidebarLink);
+    });
     expect(updateMutateMock).toHaveBeenCalledTimes(1);
     expect(routerPushMock).toHaveBeenCalledWith(
       expect.stringContaining("?section=practice"),
       expect.objectContaining({ scroll: false }),
     );
+  });
+
+  it("serializes back-to-back saves so the second never sends a stale expectedRowRevision", async () => {
+    render(<IntakeWizard {...baseProps} />);
+    const fullName = screen.getByLabelText("Full name");
+
+    // First edit + debounce flush → first save fires with rev 1.
+    fireEvent.change(fullName, { target: { value: "First" } });
+    await act(async () => {
+      vi.advanceTimersByTime(900);
+    });
+
+    // Second edit + debounce flush → second save must observe the
+    // rev (2) returned by the first save, not reuse rev 1.
+    fireEvent.change(fullName, { target: { value: "Second" } });
+    await act(async () => {
+      vi.advanceTimersByTime(900);
+    });
+
+    expect(updateMutateMock).toHaveBeenCalledTimes(2);
+    expect(updateMutateMock).toHaveBeenNthCalledWith(1, {
+      caseId: "case-1",
+      expectedRowRevision: 1,
+      patch: { fullName: "First" },
+    });
+    expect(updateMutateMock).toHaveBeenNthCalledWith(2, {
+      caseId: "case-1",
+      expectedRowRevision: 2,
+      patch: { fullName: "Second" },
+    });
   });
 });
 
@@ -202,12 +244,12 @@ describe("IntakeWizard — locked", () => {
     }
   });
 
-  it("never fires the mutation when locked, even on field change", () => {
+  it("never fires the mutation when locked, even on field change", async () => {
     render(<IntakeWizard {...baseProps} locked currentStatus="extracting" />);
     fireEvent.change(screen.getByLabelText("Full name"), {
       target: { value: "Test Beneficiary 001" },
     });
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(900);
     });
     expect(updateMutateMock).not.toHaveBeenCalled();
@@ -247,14 +289,21 @@ describe("IntakeWizard — per-section CTA", () => {
     expect(completeMutateMock).not.toHaveBeenCalled();
   });
 
-  it("final section renders the Submit intake CTA, which fires completeIntake", () => {
+  it("final section renders the Submit intake CTA, which fires completeIntake", async () => {
     searchParamsMock.get.mockImplementation((k: string) =>
       k === "section" ? "narrative" : null,
     );
     render(<IntakeWizard {...baseProps} initial={validIntake} />);
-    fireEvent.click(screen.getByRole("button", { name: /submit intake/i }));
+    // onSubmit awaits the save-chain drain before firing completeIntake.
+    // Async act flushes both microtask hops (chain `.then` + the awaited
+    // `mutateAsync` resolution) so the assertion sees the call.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /submit intake/i }));
+    });
     expect(completeMutateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ caseId: "case-1", expectedRowRevision: 1 }),
+      // The chained flush returned `rowRevision: 2`, so completeIntake
+      // must see the synced value — not the initial `1` from props.
+      expect.objectContaining({ caseId: "case-1", expectedRowRevision: 2 }),
       expect.any(Object),
     );
   });
