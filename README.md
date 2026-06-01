@@ -188,8 +188,8 @@ success — so a fresh dev environment runs without configuration.
 
 ```bash
 POSTMARK_API_KEY=server-token-xxxxxxxxxxxx
-POSTMARK_FROM_EMAIL=hello@docket.law      # MUST be a verified sender signature
-POSTMARK_REPLY_TO=support@docket.law      # optional; reply-to override
+POSTMARK_FROM_EMAIL=hello@trydocketapp.com      # MUST be a verified sender signature
+POSTMARK_REPLY_TO=support@trydocketapp.com      # optional; reply-to override
 ```
 
 Both `POSTMARK_API_KEY` and `POSTMARK_FROM_EMAIL` must be set for any
@@ -201,18 +201,18 @@ deploy at boot.
 Postmark won't sign outgoing mail until the sender domain's DKIM and
 Return-Path records are verified. Steps:
 
-1. **Postmark dashboard** → Sender Signatures → add `docket.law` (or
+1. **Postmark dashboard** → Sender Signatures → add `trydocketapp.com` (or
    the domain matching `POSTMARK_FROM_EMAIL`).
 2. Postmark generates two DNS records — copy them verbatim:
-   - `<selector>._domainkey.docket.law  TXT  "k=rsa; p=…"` (DKIM)
-   - `pm-bounces.docket.law  CNAME  pm.mtasv.net` (Return-Path / DMARC alignment)
+   - `<selector>._domainkey.trydocketapp.com  TXT  "k=rsa; p=…"` (DKIM)
+   - `pm-bounces.trydocketapp.com  CNAME  pm.mtasv.net` (Return-Path / DMARC alignment)
 3. **Cloudflare DNS** (or your provider) → add both records. **Disable
    the orange-cloud proxy** on the CNAME — Cloudflare's proxy
    intercepts the DNS lookup Postmark needs.
 4. **SPF**: add or update the apex `TXT` record to include Postmark:
 
    ```
-   docket.law  TXT  "v=spf1 include:spf.mtasv.net ~all"
+   trydocketapp.com  TXT  "v=spf1 include:spf.mtasv.net ~all"
    ```
 
    If the domain already has an SPF record, merge `include:spf.mtasv.net`
@@ -222,14 +222,14 @@ Return-Path records are verified. Steps:
    reported, not dropped, until the alignment is confirmed:
 
    ```
-   _dmarc.docket.law  TXT  "v=DMARC1; p=none; rua=mailto:dmarc-reports@docket.law"
+   _dmarc.trydocketapp.com  TXT  "v=DMARC1; p=none; rua=mailto:dmarc-reports@trydocketapp.com"
    ```
 
    Tighten to `p=quarantine` then `p=reject` once the Postmark dashboard
    shows 100% DMARC pass for a week.
 6. **Verify**: Postmark's Sender Signatures page shows `Verified` on
    both DKIM and Return-Path within ~5 minutes. `dig TXT
-   <selector>._domainkey.docket.law +short` from a shell should return
+   <selector>._domainkey.trydocketapp.com +short` from a shell should return
    the DKIM key.
 
 The `/api/health` endpoint's `postmark` field reports `connected` once

@@ -6,9 +6,9 @@ export const APP_INFO = {
   name: "Docket",
   displayName: "Docket.",
   tagline: "AI-powered case prep for U.S. immigration attorneys.",
-  productionDomain: "docket.law",
-  productionUrl: "https://docket.law",
-  supportEmail: "support@docket.law",
+  productionDomain: "trydocketapp.com",
+  productionUrl: "https://trydocketapp.com",
+  supportEmail: "support@trydocketapp.com",
 } as const;
 
 export type AppInfo = typeof APP_INFO;

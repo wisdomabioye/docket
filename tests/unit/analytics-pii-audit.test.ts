@@ -220,10 +220,10 @@ describe("analytics sanitize — sanitizeProperties", () => {
 
   it("scrubs URL query params on `$current_url`", () => {
     const out = sanitizeProperties({
-      $current_url: "https://docket.law/cases/abc?email=foo@bar.com",
+      $current_url: "https://trydocketapp.com/cases/abc?email=foo@bar.com",
     });
     expect(out.$current_url).toBe(
-      "https://docket.law/cases/abc?email=%5Bredacted%5D",
+      "https://trydocketapp.com/cases/abc?email=%5Bredacted%5D",
     );
   });
 

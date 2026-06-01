@@ -58,8 +58,8 @@ const URL_PROPERTY_KEYS: ReadonlySet<string> = new Set([
  *      → `/cases/abc?tab=outputs`         (no change)
  *    `/?email=foo@bar.com&tab=docs`
  *      → `/?email=%5Bredacted%5D&tab=docs`
- *    `https://docket.law/?beneficiary_name=Maria%20G`
- *      → `https://docket.law/?beneficiary_name=%5Bredacted%5D`
+ *    `https://trydocketapp.com/?beneficiary_name=Maria%20G`
+ *      → `https://trydocketapp.com/?beneficiary_name=%5Bredacted%5D`
  *
  *  Returns the input unchanged when:
  *    - the value is not a string

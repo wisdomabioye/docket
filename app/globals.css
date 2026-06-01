@@ -135,6 +135,17 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Tailwind v4 dropped the default `cursor: pointer` on buttons (its
+   Preflight now uses `cursor: default`). Restore it app-wide for enabled
+   buttons so every clickable button shows the pointer — `@layer base` so
+   per-element `cursor-*` utilities (e.g. disabled `cursor-not-allowed`)
+   still win. Disabled buttons keep the default cursor. */
+@layer base {
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
 /* Utility helpers used by ported markup. Tailwind covers most cases;
    these are the few classes that map 1:1 to mockup names so we don't
    rewrite every `class="serif"` we port. */

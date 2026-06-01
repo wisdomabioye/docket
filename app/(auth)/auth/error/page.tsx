@@ -41,7 +41,7 @@ const COPY: Record<string, { title: string; body: React.ReactNode; cta: { href: 
     body: (
       <>
         Access to this account is paused. Contact{" "}
-        <a className="underline" href="mailto:hello@docket.law">hello@docket.law</a>{" "}
+        <a className="underline" href="mailto:hello@trydocketapp.com">hello@trydocketapp.com</a>{" "}
         if you believe this is in error.
       </>
     ),
