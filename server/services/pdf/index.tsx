@@ -4,6 +4,10 @@ import type { Db } from "@/server/db/client";
 import { caseParticipants, cases, users } from "@/server/db/schema";
 import { AppError } from "@/lib/errors";
 import {
+  RECOMMENDER_LETTER_DRAFT_BADGE,
+  RECOMMENDER_LETTER_WATERMARK,
+} from "@/lib/recommender-letter";
+import {
   OUTPUT_TYPE_DISPLAY,
   isInternalOutputType,
   readRecommenderName,
@@ -97,9 +101,10 @@ async function loadCoverFields(args: {
 }
 
 /** Stamp shown on every page of an unsigned recommendation-letter
- *  template. Wording is deliberate — "Do not file" makes the failure
- *  mode explicit; "DRAFT — UNSIGNED" signals why. */
-const UNSIGNED_LETTER_WATERMARK = "DRAFT — UNSIGNED · Do not file";
+ *  template. The shared `RECOMMENDER_LETTER_WATERMARK` phrase (which the
+ *  UI copy promises) plus a PDF-only "· Do not file" to make the failure
+ *  mode explicit. */
+const UNSIGNED_LETTER_WATERMARK = `${RECOMMENDER_LETTER_WATERMARK} · Do not file`;
 
 function bodyDescriptorFor(args: {
   outputType: OutputType;
@@ -161,7 +166,7 @@ function buildPendingNotice(
     headline: "PENDING SIGNED LETTERS",
     lines: [
       `${coverage.signedLetterCount} of ${coverage.recommenderCount} signed recommendation letters uploaded.`,
-      `${missing} recommendation letter${missing === 1 ? "" : "s"} still pending signed return — drafts in this bundle are watermarked DRAFT — UNSIGNED and must not be filed.`,
+      `${missing} recommendation letter${missing === 1 ? "" : "s"} still pending signed return — drafts in this bundle are watermarked ${RECOMMENDER_LETTER_WATERMARK} and must not be filed.`,
       coverage.recommenderNames.length > 0
         ? `Recommenders on this case: ${coverage.recommenderNames.join(", ")}.`
         : "No recommenders are recorded on this case yet.",
@@ -246,7 +251,9 @@ export async function renderPerOutputPdf(
         cover={{
           title: OUTPUT_TYPE_DISPLAY[target.outputType],
           ...cover,
-          ...(watermarkUnsignedLetters ? { draftBadge: "DRAFT" } : {}),
+          ...(watermarkUnsignedLetters
+            ? { draftBadge: RECOMMENDER_LETTER_DRAFT_BADGE }
+            : {}),
         }}
         body={renderOutputBody(body, "body")}
       />
@@ -370,7 +377,9 @@ export async function compileFullPackagePdf(
         cover={{
           title: "Filing Package",
           ...cover,
-          ...(watermarkUnsignedLetters ? { draftBadge: "DRAFT" } : {}),
+          ...(watermarkUnsignedLetters
+            ? { draftBadge: RECOMMENDER_LETTER_DRAFT_BADGE }
+            : {}),
           ...(pendingNotice ? { pendingNotice } : {}),
         }}
         bodies={bodies}

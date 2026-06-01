@@ -8,6 +8,7 @@ import {
 } from "@/server/db/schema";
 import type { Db } from "@/server/db/client";
 import { AppError } from "@/lib/errors";
+import { RECOMMENDER_LETTER_DRAFT_CONSEQUENCE } from "@/lib/recommender-letter";
 import { computeCriteriaCoverage } from "./criteria-coverage";
 import { computeRecommenderLetterCoverage } from "./recommender-coverage";
 import { visaCriteriaConfig } from "@/lib/visa-criteria";
@@ -188,7 +189,7 @@ export async function computePreflight(args: {
           ? "No recommenders on this case yet — nothing to collect."
           : letterCoverage.allSigned
             ? `${letterCoverage.signedLetterCount} of ${letterCoverage.recommenderCount} signed letters uploaded.`
-            : `${letterCoverage.signedLetterCount} of ${letterCoverage.recommenderCount} signed letters uploaded — unsigned drafts in the package will be watermarked DRAFT.`,
+            : `${letterCoverage.signedLetterCount} of ${letterCoverage.recommenderCount} signed letters uploaded. ${RECOMMENDER_LETTER_DRAFT_CONSEQUENCE}`,
     },
   ];
 

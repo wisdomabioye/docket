@@ -8,6 +8,7 @@ import { RequestBuildButton } from "./RequestBuildButton";
 import { deriveCaseStage } from "@/lib/case-stage";
 import { visaCriteriaConfig } from "@/lib/visa-criteria";
 import { StoredBeneficiaryDataSchema } from "@/server/db/schema/zod/beneficiary";
+import { RECOMMENDER_LETTER_HINT } from "@/lib/recommender-letter";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -254,7 +255,7 @@ const OUTPUT_PREVIEW: ReadonlyArray<{
   },
   {
     title: "Recommendation templates",
-    body: "One tailored draft per recommender — emailable, with redline instructions.",
+    body: `One tailored draft per recommender. ${RECOMMENDER_LETTER_HINT}`,
     pages: "2–3 pp ea.",
   },
 ];

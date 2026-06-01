@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { APP_ROUTES } from "@/config";
+import { RECOMMENDER_LETTER_DRAFT_CONSEQUENCE } from "@/lib/recommender-letter";
 
 /**
  * Amber notice banner shown on the package page when the case has
@@ -52,12 +53,8 @@ export function PackageDraftNotice(
         style={{ color: "var(--ink-soft, var(--ink))" }}
       >
         {props.signedLetterCount} of {props.recommenderCount} signed letter
-        {props.recommenderCount === 1 ? "" : "s"} uploaded.{" "}
-        {missing} recommendation letter
-        {missing === 1 ? "" : "s"} still pending. Until every signed letter
-        is uploaded on the Documents tab, downloaded packages will include
-        the AI-drafted templates with a <b>DRAFT — UNSIGNED</b> watermark
-        and a <b>DRAFT</b> badge on the cover.
+        {props.recommenderCount === 1 ? "" : "s"} uploaded — {missing} still
+        pending. {RECOMMENDER_LETTER_DRAFT_CONSEQUENCE}
       </p>
       <div className="mt-3 flex flex-wrap gap-4 text-xs">
         <Link

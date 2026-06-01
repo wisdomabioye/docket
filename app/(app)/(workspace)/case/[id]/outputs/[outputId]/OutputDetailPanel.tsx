@@ -21,6 +21,7 @@ import type { OutputType } from "@/server/services/computer/types";
 import { isStructuredOutputType } from "@/lib/output-types";
 import { computeReviewQueue } from "@/lib/review-queue";
 import { parseHeadings } from "@/lib/toc";
+import { recommenderLetterInstruction } from "@/lib/recommender-letter";
 import { track } from "@/lib/analytics/client";
 
 /**
@@ -649,6 +650,24 @@ export function OutputDetailPanel(
           </div>
 
           <DisclaimerBanner />
+
+          {/* Start of the recommendation-letter loop: this is where the
+           *  attorney first holds the draft, so spell out send → sign →
+           *  upload. Copy is the single source in lib/recommender-letter. */}
+          {props.initialOutput.outputType ===
+          "recommendation_letter_template" ? (
+            <div
+              role="note"
+              className="mx-10 mb-3 rounded-sm border px-3 py-2 text-xs leading-relaxed"
+              style={{
+                borderColor: "var(--border)",
+                background: "var(--surface-sunken, rgba(0,0,0,0.03))",
+                color: "var(--ink-soft, var(--ink))",
+              }}
+            >
+              {recommenderLetterInstruction()}
+            </div>
+          ) : null}
 
           <div className="flex-1 overflow-y-auto">
             {/* Doc card. Width + chrome mirror `Docket-Meridian-UI/hifi/output-detail.html`

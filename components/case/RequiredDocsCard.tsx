@@ -5,6 +5,7 @@ import {
   ProgressBar,
   type ChecklistItem,
 } from "@/components/ui";
+import { RECOMMENDER_LETTER_HINT } from "@/lib/recommender-letter";
 
 /**
  * Stage 11 β required-documents checklist for the Documents right
@@ -61,7 +62,7 @@ const GROUP_META: Record<
   },
   post_build: {
     title: "After drafts go out",
-    hint: "Collected after recommenders return their signed letters.",
+    hint: RECOMMENDER_LETTER_HINT,
   },
 };
 
