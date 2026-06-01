@@ -13,6 +13,66 @@ When a gap is identified but not fixed in the same response, it goes here.
 
 ## Active
 
+### #73 — Integration suite occasionally flakes (shared DB across parallel workers)
+
+Date: 2026-06-01.
+Observed once during Stage-13 #72 work: a full `pnpm vitest run` reported
+`case-router.test.ts > case.archive > a soft-deleted case is hidden from
+case.list` failing, but the file passes 36/36 in isolation and the change in
+flight (an outputs-page presentational beneficiary-parse) cannot touch
+`case.archive`/`case.list`. Vitest runs test FILES in parallel workers against
+ONE shared Postgres test DB, so files can intermittently interfere (e.g. rows
+from a concurrent file leaking into a `case.list` count/visibility assertion).
+Pre-existing, not introduced by #72; low frequency.
+**How to apply:** options — (a) run integration tests with a single worker
+(`--poolOptions.threads.singleThread` / `fileParallelism: false`) so DB state is
+serial; (b) scope each integration file to its own schema/namespace or unique
+ids + transactional rollback; (c) accept + retry flaky integration files. Pick
+when it recurs or before relying on the suite as a hard CI gate.
+
+### #72 — Stage 13 Track B: remaining mockup-fidelity visual refresh
+
+Date: 2026-06-01.
+Stage 13 (lifecycle guidance UX) shipped Track A in full — the next-action
+resolver (`lib/case-stage.ts` `deriveCasePrimaryAction` + `server/services/cases/guidance.ts`),
+the unified `CaseNextAction` card + `CaseActionBar` header bar + in-progress
+auto-refresh, and the editor review queue — plus one Track-B win (build page
+reuses `CriteriaCoverageCard`). Progress (2026-06-01):
+- DONE Overview: `CaseSummaryCard` (visa·field/country/residence/target-filing +
+  recommender·doc·output counts via existing `storageUsage` + `recommender.list`)
+  + humanized activity via shared `lib/case-event.ts` `describeCaseEvent` (also
+  fixed a pre-existing dashboard humanizer drift). No "All →" — no activity-archive
+  page exists (a link would be dead).
+- DONE Outputs: `BundleStats` cluster (Outputs/Approved/Awaiting/Criteria — real
+  counts). NOT done: output snippets (needs a bounded SQL content preview +
+  markdown-strip + structured-type handling) and per-card drafting state (no
+  per-output in-progress signal or ETA exists → would be fabrication; the
+  "building" message stays).
+- DONE Documents: file-type icon, human type label, upload date, status PILLS
+  (`Badge` via `lib/document-display.ts`), section summary line, dropzone icon.
+- DONE Dashboard urgent due-date color (was already built in `TodayCard`).
+
+- DONE Output snippets: bounded SQL `left(content,300)` preview on
+  `getCurrentOutputsForList` → `snippetSource`; `lib/snippet.ts` `toSnippet`
+  strips markdown; `OutputCard` renders it (skipped for structured/JSON types).
+- DONE Editor "Sections" TOC: `lib/toc.ts` `parseHeadings` + a right-rail list
+  in `OutputDetailPanel` that scrolls the rendered doc to the matching `<h*>` by
+  text (no ProseMirror id-injection). Placed in the right rail (not the mockup's
+  left rail) to avoid a fragile 3-column responsive change — functional parity.
+
+ALL honestly-buildable Track-B items are now DONE. Not built (would be dead
+controls / fabrication — need new data, Phase 2):
+- Dashboard Today checkbox + done state: `me.todayTasks` returns only OPEN
+  actionable items; there is no task-completion flag. A checkbox would persist
+  nothing. Needs a completion model (Phase 2).
+- Per-output drafting card + ETA: no per-output in-progress signal or ETA exists.
+**Explicitly OUT (verified):** numeric readiness score, build output-selection
+table + per-output ETA/cost, per-document criterion column, package fees/e-filing/
+attestation, dashboard assignee column — fabrication or Phase-2/spec-excluded
+(spec §175/§206/§1424). See `build_stages/13_lifecycle_guidance_ux.md`.
+**How to apply:** pick a page, match its `Docket-Meridian-UI/hifi/*.html` mockup
+using existing `app.css` tokens; data-back every element (no fabrication).
+
 ### #70 — Same OCC-race class lives in output editing (`case_outputs.row_revision`)
 
 Date: 2026-05-19.

@@ -3,6 +3,8 @@ import { Badge, type BadgeVariant } from "@/components/ui";
 import { APP_ROUTES } from "@/config";
 import { shortCaseId } from "@/lib/case-id";
 import type { CaseStage } from "@/lib/case-stage";
+import type { CaseStatus } from "@/lib/case-status";
+import { CaseActionBar } from "./CaseActionBar";
 import { CaseStageRail } from "./CaseStageRail";
 
 /**
@@ -23,7 +25,10 @@ export type CaseTab =
   | "intake"
   | "documents"
   | "outputs"
-  | "package";
+  | "package"
+  // Non-tab pages reached via a CTA, not the tab strip (e.g. /build).
+  // Matches no tab key → nothing is highlighted.
+  | "build";
 
 export type CaseHeaderProps = {
   caseId: string;
@@ -31,7 +36,7 @@ export type CaseHeaderProps = {
   visaType: string;
   /** Optional sub-line under the name (nationality, criteria count). */
   meta?: string;
-  status: string;
+  status: CaseStatus;
   /** Active tab — drives the underline. */
   current: CaseTab;
   /** Right-aligned action slot (e.g. Build button). */
@@ -79,6 +84,7 @@ export function CaseHeader(props: CaseHeaderProps): React.ReactElement {
         </div>
       </div>
       <CaseStageRail stage={props.stage} />
+      <CaseActionBar caseId={props.caseId} initialStatus={props.status} />
       <CaseTabs caseId={props.caseId} current={props.current} />
     </header>
   );
@@ -136,7 +142,7 @@ function CaseTabs(props: {
   );
 }
 
-function StatusBadge(props: { status: string }): React.ReactElement {
+function StatusBadge(props: { status: CaseStatus }): React.ReactElement {
   return (
     <Badge variant={badgeVariantFor(props.status)}>
       {props.status.replace(/_/g, " ")}
@@ -144,11 +150,12 @@ function StatusBadge(props: { status: string }): React.ReactElement {
   );
 }
 
-function badgeVariantFor(status: string): BadgeVariant {
+function badgeVariantFor(status: CaseStatus): BadgeVariant {
   switch (status) {
     case "filed":
     case "delivered":
     case "approved":
+    case "package_ready":
       return "success";
     case "build_failed":
     case "needs_revision":

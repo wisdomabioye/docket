@@ -274,6 +274,10 @@ export type CurrentOutputListItem = {
   costCents: bigint | null;
   contentLength: number;
   hasContentHtml: boolean;
+  /** Bounded prefix of `content` (max 300 chars) for the grid card
+   *  preview — NOT the full body. Empty for outputs with no content.
+   *  Markdown is stripped client-side via `toSnippet`. */
+  snippetSource: string;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -296,6 +300,9 @@ export async function getCurrentOutputsForList(args: {
       // SQL-side length to avoid shipping the prose just to count chars.
       contentLength: sql<number>`coalesce(length(${caseOutputs.content}), 0)::int`,
       hasContentHtml: sql<boolean>`${caseOutputs.contentHtml} is not null`,
+      // Bounded prefix only — keeps the payload small (≤300 chars/output)
+      // while giving the grid a prose preview. Markdown stripped in the UI.
+      snippetSource: sql<string>`left(coalesce(${caseOutputs.content}, ''), 300)`,
       createdAt: caseOutputs.createdAt,
       updatedAt: caseOutputs.updatedAt,
     })

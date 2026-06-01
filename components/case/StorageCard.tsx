@@ -1,4 +1,5 @@
 import { Card, ProgressBar, type ProgressTone } from "@/components/ui";
+import { formatMb } from "@/lib/utils";
 
 /**
  * Stage 11 β storage card for the Documents right rail. Mockup
@@ -12,8 +13,6 @@ import { Card, ProgressBar, type ProgressTone } from "@/components/ui";
  * Tooltip / hint copy stays terse — the cap rationale lives in
  * `lib/visa-criteria.ts:PER_CASE_STORAGE_BYTES`.
  */
-
-const MB = 1024 * 1024;
 
 export type StorageCardProps = {
   usedBytes: bigint;
@@ -55,14 +54,6 @@ export function StorageCard(props: StorageCardProps): React.ReactElement {
       </p>
     </Card>
   );
-}
-
-/** Bytes → MB rounded to one decimal, returned as a string ("48.2"). */
-function formatMb(bytes: bigint): string {
-  // Use Number for the division — safe because per-case cap is bounded
-  // (500 MB ≪ 2^53). Round to one decimal to avoid jittery long values.
-  const mb = Number(bytes) / MB;
-  return (Math.round(mb * 10) / 10).toFixed(1);
 }
 
 function computePercent(used: bigint, cap: bigint): number {

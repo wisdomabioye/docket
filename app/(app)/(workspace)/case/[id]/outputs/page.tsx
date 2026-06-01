@@ -4,11 +4,12 @@ import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { CaseHeader, CaseHeaderActions } from "@/components/case";
-import { OutputCard } from "@/components/output";
+import { BundleStats, OutputCard } from "@/components/output";
 import { EmptyState } from "@/components/ui";
 import { Filters, type Chip } from "@/components/table";
 import { deriveCaseStage } from "@/lib/case-stage";
 import { OutputsAutoRefresh } from "./OutputsAutoRefresh";
+import { StoredBeneficiaryDataSchema } from "@/server/db/schema/zod/beneficiary";
 
 type Props = {
   params: Promise<{ id: string }>;
@@ -61,13 +62,17 @@ export default async function OutputsPage({
   const caseRow = await api.case.get({ caseId: id });
   if (!caseRow) notFound();
 
-  const outputs = await api.output.list({ caseId: id });
-  const beneficiary =
-    (caseRow.beneficiaryData as {
-      fullName?: string;
-      nationality?: string;
-    } | null) ?? {};
-  const meta = beneficiary.nationality ? beneficiary.nationality : undefined;
+  const [outputs, coverage] = await Promise.all([
+    api.output.list({ caseId: id }),
+    api.case.criteriaCoverage({ caseId: id }),
+  ]);
+  // Read-tolerant parse (consistent with the overview; handles legacy
+  // keys per open_issues #69) rather than a loose cast.
+  const parsedBeneficiary = StoredBeneficiaryDataSchema.safeParse(
+    caseRow.beneficiaryData ?? {},
+  );
+  const beneficiary = parsedBeneficiary.success ? parsedBeneficiary.data : {};
+  const meta = beneficiary.nationality;
 
   const approvedCount = outputs.filter((o) => o.attorneyApproved).length;
   const reviewCount = outputs.length - approvedCount;
@@ -146,6 +151,23 @@ export default async function OutputsPage({
               ? "Build in progress — drafts will appear here as Computer finishes each one."
               : "No outputs yet — kick off a build to draft this case."}
         </p>
+        {totalCount > 0 ? (
+          <BundleStats
+            items={[
+              { value: totalCount, label: "Outputs" },
+              { value: approvedCount, label: "Approved" },
+              { value: reviewCount, label: "Awaiting review" },
+              ...(coverage.rows.length > 0
+                ? [
+                    {
+                      value: `${coverage.metCount}/${coverage.rows.length}`,
+                      label: "Criteria",
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        ) : null}
       </header>
 
       {totalCount > 0 ? <Filters chips={chips} /> : null}

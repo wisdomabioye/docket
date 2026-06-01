@@ -75,6 +75,10 @@ const CASE_BUILDING = "70a00000-0000-4000-8000-cccc00000003";
 const CASE_NO_NAME = "70a00000-0000-4000-8000-cccc00000004";
 const CASE_NO_DOCS = "70a00000-0000-4000-8000-cccc00000005";
 const CASE_PENDING_EXTRACTION = "70a00000-0000-4000-8000-cccc00000006";
+// Stage 13 guidance: an extracted doc present AND a doc still extracting
+// → content is ready but a wait-only blocker remains, exercising the
+// disabled-primary branch of getCaseGuidance.
+const CASE_WAIT_ONLY = "70a00000-0000-4000-8000-cccc00000007";
 
 const callerFactory = createCallerFactory(appRouter);
 const callAs = (userId: string | null) =>
@@ -319,6 +323,81 @@ describe("case.requestBuild", () => {
   });
 });
 
+describe("case.guidance", () => {
+  it("ready case: primary 'Build case', enabled, no blockers", async (ctx) => {
+    gate(ctx);
+    const g = await callAs(ATTORNEY).case.guidance({ caseId: CASE_READY });
+    expect(g.primary?.label).toBe("Build case");
+    expect(g.primary?.enabled).toBe(true);
+    expect(g.primary?.href).toMatch(/\/build$/);
+    expect(g.blockers).toEqual([]);
+    expect(g.progress.indeterminate).toBe(false);
+  });
+
+  it("intake case: primary retargets to the recommender fix action", async (ctx) => {
+    gate(ctx);
+    const g = await callAs(ATTORNEY).case.guidance({ caseId: CASE_INTAKE });
+    expect(g.primary?.label).toBe("Add recommenders");
+    expect(g.primary?.enabled).toBe(true);
+    expect(g.primary?.href).toMatch(/\/intake$/);
+    expect(g.blockers[0]?.label).toMatch(/recommenders/i);
+    expect(g.blockers[0]?.resolveHref).toMatch(/\/intake$/);
+  });
+
+  it("no-docs case: primary retargets to 'Upload a document'", async (ctx) => {
+    gate(ctx);
+    const g = await callAs(ATTORNEY).case.guidance({ caseId: CASE_NO_DOCS });
+    expect(g.primary?.label).toBe("Upload a document");
+    expect(g.primary?.enabled).toBe(true);
+    expect(g.primary?.href).toMatch(/\/documents$/);
+    expect(g.blockers[0]?.resolveHref).toMatch(/\/documents$/);
+  });
+
+  it("missing-name case: primary retargets to intake (fullName blocker)", async (ctx) => {
+    gate(ctx);
+    const g = await callAs(ATTORNEY).case.guidance({ caseId: CASE_NO_NAME });
+    expect(g.primary?.label).toBe("Complete intake");
+    expect(g.primary?.href).toMatch(/\/intake$/);
+    expect(g.blockers.some((b) => /full name/i.test(b.label))).toBe(true);
+  });
+
+  it("wait-only case: primary stays 'Build case' but DISABLED, no fix link", async (ctx) => {
+    gate(ctx);
+    const g = await callAs(ATTORNEY).case.guidance({ caseId: CASE_WAIT_ONLY });
+    expect(g.primary?.label).toBe("Build case");
+    expect(g.primary?.enabled).toBe(false);
+    expect(g.blockers).toHaveLength(1);
+    expect(g.blockers[0]?.resolveHref).toBeNull();
+  });
+
+  it("actionable beats wait-only: pending+no-text → enabled upload fix", async (ctx) => {
+    gate(ctx);
+    const g = await callAs(ATTORNEY).case.guidance({
+      caseId: CASE_PENDING_EXTRACTION,
+    });
+    expect(g.primary?.label).toBe("Upload a document");
+    expect(g.primary?.enabled).toBe(true);
+    // Both the actionable upload blocker and the wait-only blocker show.
+    expect(g.blockers.length).toBeGreaterThanOrEqual(2);
+    expect(g.blockers.some((b) => b.resolveHref === null)).toBe(true);
+  });
+
+  it("in-progress (building): no primary, indeterminate progress", async (ctx) => {
+    gate(ctx);
+    const g = await callAs(ATTORNEY).case.guidance({ caseId: CASE_BUILDING });
+    expect(g.primary).toBeNull();
+    expect(g.progress.indeterminate).toBe(true);
+    expect(g.stage.label).toBe("Building drafts");
+  });
+
+  it("NOT_FOUND for a non-participant (admin RLS bypass guard)", async (ctx) => {
+    gate(ctx);
+    await expect(
+      callAs(STRANGER).case.guidance({ caseId: CASE_READY }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
 async function seed(d: TestDb): Promise<void> {
   await d.insert(users).values([
     { id: ATTORNEY, name: "Attorney", email: "rb-att@docket.local" },
@@ -376,6 +455,7 @@ async function seed(d: TestDb): Promise<void> {
     }),
     baseCase(CASE_NO_DOCS, { status: "ready_to_build" }),
     baseCase(CASE_PENDING_EXTRACTION, { status: "ready_to_build" }),
+    baseCase(CASE_WAIT_ONLY, { status: "ready_to_build" }),
   ]);
 
   await d.insert(caseParticipants).values(
@@ -386,6 +466,7 @@ async function seed(d: TestDb): Promise<void> {
       CASE_NO_NAME,
       CASE_NO_DOCS,
       CASE_PENDING_EXTRACTION,
+      CASE_WAIT_ONLY,
     ].map((cid) => ({
       caseId: cid,
       userId: ATTORNEY,
@@ -401,6 +482,7 @@ async function seed(d: TestDb): Promise<void> {
     { caseId: CASE_INTAKE, suffix: "02" },
     { caseId: CASE_BUILDING, suffix: "03" },
     { caseId: CASE_NO_NAME, suffix: "04" },
+    { caseId: CASE_WAIT_ONLY, suffix: "07" },
   ];
   await d.insert(caseDocuments).values(
     docsWithText.map(({ caseId, suffix }) => ({
@@ -416,24 +498,40 @@ async function seed(d: TestDb): Promise<void> {
       extractedText: "extracted prose",
     })),
   );
-  await d.insert(caseDocuments).values({
-    caseId: CASE_PENDING_EXTRACTION,
-    uploadedBy: ATTORNEY,
-    documentType: "cv_resume",
-    originalFilename: "pending.pdf",
-    mimeType: "application/pdf",
-    sizeBytes: 1000n,
-    sha256: "b".repeat(64),
-    storagePath: "/test/pending.pdf",
-    extractionStatus: "pending",
-    extractedText: null,
-  });
+  // A still-extracting doc for both the pending-only case and the
+  // wait-only case (the latter also has a completed doc above).
+  await d.insert(caseDocuments).values([
+    {
+      caseId: CASE_PENDING_EXTRACTION,
+      uploadedBy: ATTORNEY,
+      documentType: "cv_resume",
+      originalFilename: "pending.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1000n,
+      sha256: "b".repeat(64),
+      storagePath: "/test/pending.pdf",
+      extractionStatus: "pending",
+      extractedText: null,
+    },
+    {
+      caseId: CASE_WAIT_ONLY,
+      uploadedBy: ATTORNEY,
+      documentType: "cv_resume",
+      originalFilename: "pending2.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 1000n,
+      sha256: "c".repeat(64),
+      storagePath: "/test/pending2.pdf",
+      extractionStatus: "pending",
+      extractedText: null,
+    },
+  ]);
 }
 
 async function teardown(d: TestDb): Promise<void> {
   await d.execute(
     /* sql */ `delete from case_documents where case_id in (
-      '${CASE_READY}', '${CASE_INTAKE}', '${CASE_BUILDING}', '${CASE_NO_NAME}', '${CASE_NO_DOCS}', '${CASE_PENDING_EXTRACTION}'
+      '${CASE_READY}', '${CASE_INTAKE}', '${CASE_BUILDING}', '${CASE_NO_NAME}', '${CASE_NO_DOCS}', '${CASE_PENDING_EXTRACTION}', '${CASE_WAIT_ONLY}'
     )` as never,
   );
   await d.execute(

@@ -79,14 +79,15 @@ export const documentRouter = router({
 
       const bytes = decodeBase64(input.contentBase64);
       try {
-        const { documentId } = await uploadAndExtract({
-          caseId: input.caseId,
-          uploadedBy: userId,
-          filename: input.filename,
-          mimeType: input.mimeType,
-          documentType: input.documentType,
-          bytes,
-        });
+        const { documentId, extractionStatus, extractionError } =
+          await uploadAndExtract({
+            caseId: input.caseId,
+            uploadedBy: userId,
+            filename: input.filename,
+            mimeType: input.mimeType,
+            documentType: input.documentType,
+            bytes,
+          });
         emitFromCtx(ctx, {
           name: "document.uploaded",
           properties: {
@@ -97,7 +98,7 @@ export const documentRouter = router({
             mime_type: input.mimeType,
           },
         });
-        return { ok: true as const, documentId };
+        return { ok: true as const, documentId, extractionStatus, extractionError };
       } catch (err) {
         if (isAppError(err)) {
           throw new TRPCError({

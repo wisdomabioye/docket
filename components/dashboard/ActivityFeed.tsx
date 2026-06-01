@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui";
 import { APP_ROUTES } from "@/config";
 import { formatRelative } from "@/lib/utils";
+import { describeCaseEvent, type CaseEventActor } from "@/lib/case-event";
 
 /**
  * Stage 11 right-rail activity feed. Renders the newest case_events
@@ -16,7 +17,7 @@ import { formatRelative } from "@/lib/utils";
 export type ActivityItem = {
   id: string;
   caseId: string;
-  actorType: "user" | "system" | "computer";
+  actorType: CaseEventActor;
   eventType: string;
   beneficiary: string | null;
   createdAt: Date;
@@ -48,7 +49,7 @@ export function ActivityFeed(
                 className="min-w-0 flex-1 leading-snug"
               >
                 <span className="block">
-                  {humanizeEvent(item.eventType, item.actorType)}
+                  {describeCaseEvent(item.eventType, item.actorType)}
                 </span>
                 <span
                   className="mono mt-0.5 block text-[10px] uppercase tracking-wider"
@@ -66,7 +67,7 @@ export function ActivityFeed(
 }
 
 function ActorDot(props: {
-  actorType: "user" | "system" | "computer";
+  actorType: CaseEventActor;
 }): React.ReactElement {
   const color =
     props.actorType === "computer"
@@ -81,42 +82,4 @@ function ActorDot(props: {
       style={{ background: color }}
     />
   );
-}
-
-function humanizeEvent(
-  type: string,
-  actorType: "user" | "system" | "computer",
-): string {
-  const subject =
-    actorType === "computer"
-      ? "Docket"
-      : actorType === "system"
-        ? "System"
-        : "You";
-  switch (type) {
-    case "case.created":
-      return `${subject} created a case`;
-    case "case.fee_logged":
-      return `${subject} logged the case fee`;
-    case "output.generated":
-      return `${subject} generated an output`;
-    case "output.approved":
-      return `${subject} approved an output`;
-    case "output.regenerated":
-      return `${subject} regenerated an output`;
-    case "build.requested":
-      return `${subject} requested a build`;
-    case "build.completed":
-      return `${subject} finished the build`;
-    case "build.failed":
-      return `${subject} hit a build failure`;
-    case "document.uploaded":
-      return `${subject} uploaded a document`;
-    case "extraction.failed":
-      return `${subject} hit an extraction failure`;
-    default:
-      // Unknown event — surface the raw token so a developer can fix
-      // the humanizer without losing visibility.
-      return `${subject} · ${type}`;
-  }
 }

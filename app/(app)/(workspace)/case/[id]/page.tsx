@@ -6,12 +6,16 @@ import { Card } from "@/components/ui";
 import {
   CaseHeader,
   CaseHeaderActions,
+  CaseNextAction,
+  CaseSummaryCard,
   CriteriaCoverageCard,
 } from "@/components/case";
 import { RevenuePanel } from "@/components/revenue/RevenuePanel";
 import { formatRelative } from "@/lib/utils";
+import { describeCaseEvent } from "@/lib/case-event";
 import { visaCriteriaConfig } from "@/lib/visa-criteria";
 import { deriveCaseStage } from "@/lib/case-stage";
+import { StoredBeneficiaryDataSchema } from "@/server/db/schema/zod/beneficiary";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -44,19 +48,30 @@ export default async function CaseDetailPage({
     api.output.summarize({ caseIds: [id] }),
   ]);
   if (!data) notFound();
+  // Fetched AFTER the notFound guard so a non-participant's NOT_FOUND from
+  // these doesn't mask the clean 404 above. Parallel — independent reads.
+  const [guidance, storage, recommenders] = await Promise.all([
+    api.case.guidance({ caseId: id }),
+    api.case.storageUsage({ caseId: id }),
+    api.recommender.list({ caseId: id }),
+  ]);
   const approvals = approvalsMap[id];
   const stage = deriveCaseStage({
     status: data.status,
     ...(approvals ? { approvals } : {}),
   });
 
-  const beneficiary =
-    (data.beneficiaryData as {
-      fullName?: string;
-      nationality?: string;
-    } | null) ?? {};
-
-  const meta = beneficiary.nationality ? beneficiary.nationality : undefined;
+  // Read-tolerant parse (handles legacy keys — see open_issues #69) for
+  // typed access to the beneficiary fields the summary card needs.
+  const parsedBeneficiary = StoredBeneficiaryDataSchema.safeParse(
+    data.beneficiaryData ?? {},
+  );
+  const beneficiary = parsedBeneficiary.success ? parsedBeneficiary.data : {};
+  const meta = beneficiary.nationality;
+  const residence =
+    [beneficiary.currentCity, beneficiary.currentCountry]
+      .filter(Boolean)
+      .join(", ") || undefined;
   const config = visaCriteriaConfig(data.visaType);
 
   return (
@@ -100,9 +115,11 @@ export default async function CaseDetailPage({
                       borderColor: "var(--border, rgba(0,0,0,0.06))",
                     }}
                   >
-                    <span className="mono text-xs">{e.eventType}</span>
+                    <span className="text-xs" style={{ color: "var(--ink)" }}>
+                      {describeCaseEvent(e.eventType, e.actorType, e.details)}
+                    </span>
                     <span
-                      className="text-xs"
+                      className="mono shrink-0 text-[11px]"
                       style={{ color: "var(--ink-muted)" }}
                       suppressHydrationWarning
                     >
@@ -116,6 +133,23 @@ export default async function CaseDetailPage({
         </div>
 
         <aside className="space-y-6">
+          <CaseSummaryCard
+            visaType={data.visaType}
+            {...(beneficiary.field ? { field: beneficiary.field } : {})}
+            {...(beneficiary.nationality
+              ? { nationality: beneficiary.nationality }
+              : {})}
+            {...(residence ? { residence } : {})}
+            {...(beneficiary.targetFilingDate
+              ? { targetFilingDate: beneficiary.targetFilingDate }
+              : {})}
+            recommenderCount={recommenders.length}
+            documentCount={storage.documentCount}
+            usedBytes={storage.usedBytes}
+            outputsApproved={approvals?.approved ?? 0}
+            outputsTotal={approvals?.total ?? 0}
+          />
+          <CaseNextAction guidance={guidance} variant="card" />
           <RevenuePanel
             caseId={data.id}
             initial={{

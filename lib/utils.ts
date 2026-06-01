@@ -123,6 +123,18 @@ export function isoToday(): string {
  * for future. Returns a `yyyy-mm-dd` string. Handles month-end
  * edge cases via the JS `Date` constructor's overflow rules.
  */
+const BYTES_PER_MB = 1024 * 1024;
+
+/**
+ * Bytes → megabytes, one decimal, as a string ("48.2"). Accepts bigint
+ * (DB `bigint` columns) or number. Number division is safe — the
+ * per-case storage cap (≤500 MB) is far below 2^53.
+ */
+export function formatMb(bytes: bigint | number): string {
+  const mb = Number(bytes) / BYTES_PER_MB;
+  return (Math.round(mb * 10) / 10).toFixed(1);
+}
+
 export function isoOffsetYears(years: number): string {
   const d = new Date();
   d.setFullYear(d.getFullYear() + years);

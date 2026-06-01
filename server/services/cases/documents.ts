@@ -36,7 +36,11 @@ export async function uploadAndExtract(args: {
   filename: string;
   mimeType: string;
   bytes: Buffer;
-}): Promise<{ documentId: string }> {
+}): Promise<{
+  documentId: string;
+  extractionStatus: "completed" | "failed";
+  extractionError: string | null;
+}> {
   const sizeBytes = args.bytes.length;
   if (sizeBytes === 0) throw new AppError("BAD_REQUEST", "file is empty");
   if (sizeBytes > MAX_FILE_BYTES) {
@@ -116,9 +120,15 @@ export async function uploadAndExtract(args: {
   // Extract OUTSIDE the transaction — extraction can take seconds for big
   // PDFs, and we don't want to hold the DB row lock that long. The result
   // updates the row independently.
-  await extractAndPersist(documentId, args.caseId, args.bytes, args.mimeType, db);
+  const extraction = await extractAndPersist(
+    documentId,
+    args.caseId,
+    args.bytes,
+    args.mimeType,
+    db,
+  );
 
-  return { documentId };
+  return { documentId, ...extraction };
 }
 
 /** Re-runnable: idempotent based on extractionStatus. */
@@ -128,7 +138,10 @@ export async function extractAndPersist(
   bytes: Buffer,
   mimeType: string,
   conn: Db,
-): Promise<void> {
+): Promise<{
+  extractionStatus: "completed" | "failed";
+  extractionError: string | null;
+}> {
   await conn
     .update(caseDocuments)
     .set({ extractionStatus: "processing" })
@@ -141,6 +154,8 @@ export async function extractAndPersist(
 
   const result = await extract({ bytes, mimeType });
 
+  const extractionStatus = "error" in result ? "failed" : "completed";
+  const extractionError = "error" in result ? result.error : null;
   if ("error" in result) {
     await conn
       .update(caseDocuments)
@@ -166,6 +181,11 @@ export async function extractAndPersist(
   // `extracting → ready_to_build` (or `build_failed`) once every
   // doc has finished. Runs for both success and failure paths.
   await reconcileCaseAfterExtraction({ conn, caseId });
+
+  // Return the final state so synchronous callers (`uploadAndExtract` →
+  // `document.upload`) can show the real outcome instead of assuming
+  // "completed".
+  return { extractionStatus, extractionError };
 }
 
 function isAllowedMime(mime: string): boolean {

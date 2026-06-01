@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { deriveCaseStage } from "@/lib/case-stage";
+import {
+  deriveCasePrimaryAction,
+  deriveCaseStage,
+  isInProgressStatus,
+} from "@/lib/case-stage";
 import {
   CASE_STATUSES,
+  type CaseStatus,
   TODAY_ACTIONABLE_STATUSES,
 } from "@/lib/case-status";
 
@@ -93,13 +98,13 @@ describe("deriveCaseStage", () => {
 
   it("actionable states surface a CTA", () => {
     expect(deriveCaseStage({ status: "intake" }).nextAction).toBe(
-      "Complete intake form",
+      "Complete intake",
     );
     expect(deriveCaseStage({ status: "draft_ready" }).nextAction).toBe(
       "Review drafts",
     );
     expect(deriveCaseStage({ status: "delivered" }).nextAction).toBe(
-      "Mark filed",
+      "Mark as filed",
     );
   });
 
@@ -127,5 +132,90 @@ describe("deriveCaseStage", () => {
     expect(stage.pipelineKey).toBe("filed");
     expect(stage.label).toBe("Archived");
     expect(stage.progressPct).toBe(100);
+  });
+});
+
+describe("deriveCasePrimaryAction", () => {
+  const CASE_ID = "case-xyz";
+
+  // Statuses with NO attorney action: in-progress (extracting, building)
+  // and terminal (filed, archived). Everything else must resolve.
+  const NO_ACTION: ReadonlyArray<CaseStatus> = [
+    "extracting",
+    "building",
+    "filed",
+    "archived",
+  ];
+
+  it("returns null for in-progress and terminal statuses", () => {
+    for (const status of NO_ACTION) {
+      expect(
+        deriveCasePrimaryAction(status, CASE_ID),
+        `${status} should have no primary action`,
+      ).toBeNull();
+    }
+  });
+
+  it("resolves a label, href, and kind for every actionable status", () => {
+    const expected: Partial<
+      Record<CaseStatus, { label: string; href: string; kind: string }>
+    > = {
+      intake: { label: "Complete intake", href: `/case/${CASE_ID}/intake`, kind: "intake" },
+      documents_pending: {
+        label: "Upload evidence",
+        href: `/case/${CASE_ID}/documents`,
+        kind: "documents",
+      },
+      ready_to_build: { label: "Build case", href: `/case/${CASE_ID}/build`, kind: "build" },
+      build_failed: { label: "Retry build", href: `/case/${CASE_ID}/build`, kind: "build" },
+      draft_ready: { label: "Review drafts", href: `/case/${CASE_ID}/outputs`, kind: "review" },
+      in_review: { label: "Continue review", href: `/case/${CASE_ID}/outputs`, kind: "review" },
+      needs_revision: { label: "Apply revisions", href: `/case/${CASE_ID}/outputs`, kind: "review" },
+      approved: { label: "Download package", href: `/case/${CASE_ID}/package`, kind: "package" },
+      package_ready: { label: "Download package", href: `/case/${CASE_ID}/package`, kind: "package" },
+      delivered: { label: "Mark as filed", href: `/case/${CASE_ID}/package`, kind: "package" },
+    };
+    for (const [status, want] of Object.entries(expected)) {
+      expect(
+        deriveCasePrimaryAction(status as CaseStatus, CASE_ID),
+        `${status} primary action`,
+      ).toEqual(want);
+    }
+  });
+
+  it("covers every enum value (resolved or explicitly null) — no gaps", () => {
+    for (const status of CASE_STATUSES) {
+      const action = deriveCasePrimaryAction(status, CASE_ID);
+      if (NO_ACTION.includes(status)) {
+        expect(action, `${status}`).toBeNull();
+      } else {
+        expect(action, `${status}`).not.toBeNull();
+      }
+    }
+  });
+
+  it("is the single source for deriveCaseStage.nextAction (no drift)", () => {
+    // The rail hint and the header CTA must never disagree — both read
+    // this one table. nextAction === the primary action's label, or
+    // undefined when there is no action.
+    for (const status of CASE_STATUSES) {
+      const action = deriveCasePrimaryAction(status, CASE_ID);
+      const { nextAction } = deriveCaseStage({ status });
+      expect(nextAction, `${status}`).toBe(action?.label);
+    }
+  });
+});
+
+describe("isInProgressStatus", () => {
+  it("true only for extracting and building", () => {
+    expect(isInProgressStatus("extracting")).toBe(true);
+    expect(isInProgressStatus("building")).toBe(true);
+  });
+
+  it("false for every other status", () => {
+    for (const status of CASE_STATUSES) {
+      if (status === "extracting" || status === "building") continue;
+      expect(isInProgressStatus(status), `${status}`).toBe(false);
+    }
   });
 });

@@ -20,6 +20,7 @@ const baseItem = {
   metadata: null as unknown,
   attorneyApproved: false,
   contentLength: 500,
+  snippetSource: "",
   updatedAt: new Date("2026-04-29T12:00:00Z"),
 };
 
@@ -163,5 +164,45 @@ describe("OutputCard — link target", () => {
     expect(link?.getAttribute("href")).toBe(
       "/case/case-9/outputs/00000000-0000-4000-8000-aaaa00000001",
     );
+  });
+});
+
+describe("OutputCard — snippet preview", () => {
+  it("renders a markdown-stripped snippet when content is present", () => {
+    render(
+      <OutputCard
+        caseId="case-1"
+        item={{
+          ...baseItem,
+          snippetSource: "## Intro\n\nI, **Dr. Gonzalez**, respectfully submit…",
+        }}
+        sequence={1}
+      />,
+    );
+    expect(
+      screen.getByText(/Intro I, Dr\. Gonzalez, respectfully submit/),
+    ).toBeInTheDocument();
+  });
+
+  it("omits the snippet for structured (JSON) output types", () => {
+    render(
+      <OutputCard
+        caseId="case-1"
+        item={{
+          ...baseItem,
+          outputType: "exhibit_index",
+          snippetSource: '{"exhibits":[{"label":"EX-A"}]}',
+        }}
+        sequence={1}
+      />,
+    );
+    expect(screen.queryByText(/exhibits/)).toBeNull();
+  });
+
+  it("omits the snippet when content is empty", () => {
+    const { container } = render(
+      <OutputCard caseId="case-1" item={baseItem} sequence={1} />,
+    );
+    expect(container.querySelector("p.italic")).toBeNull();
   });
 });

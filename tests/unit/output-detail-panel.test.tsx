@@ -131,6 +131,12 @@ vi.mock("@/lib/trpc/react", () => ({
       unapprove: { useMutation: vi.fn(() => ({ mutate: vi.fn(), isPending: false })) },
       downloadPdf: { useMutation: vi.fn(() => ({ mutate: vi.fn(), isPending: false })) },
       restoreVersion: { useMutation: vi.fn(() => ({ mutate: vi.fn(), isPending: false })) },
+      // Stage 13 review-queue: the panel reads `output.list` to compute
+      // "N of M · K awaiting" + the next-unreviewed target. Empty here so
+      // the queue UI stays out of these orchestrator tests.
+      list: {
+        useQuery: vi.fn(() => ({ data: [], isLoading: false, isError: false })),
+      },
       listVersions: {
         useQuery: vi.fn(() => ({ data: [], isLoading: false, isError: false })),
       },

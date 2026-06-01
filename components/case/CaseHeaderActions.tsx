@@ -1,33 +1,30 @@
 import Link from "next/link";
 import { APP_ROUTES } from "@/config";
+import { deriveCasePrimaryAction } from "@/lib/case-stage";
+import type { CaseStatus } from "@/lib/case-status";
 
 /**
- * Case-header right-side action row — `⇣ Package` deep-link plus a
- * status-aware primary CTA (Build → / Review drafts → / Mark filed →).
+ * Case-header right-side action row — `⇣ Package` deep-link plus the
+ * single status-aware primary CTA.
  *
- * Slotted into `<CaseHeader actions={...}>` on every tab so the
- * attorney can launch a build or jump to review without bouncing back
- * to the Overview tab. Identical visual to mockup
- * `case-overview.html` l. 110-114.
- *
- *   pre-build  (intake → ready_to_build / build_failed) → "Build →"
- *   post-build (building → approved)                    → "Review drafts →"
- *   terminal   (delivered/filed)                        → mark/view-only
- *
- * The list of statuses that map to each CTA mirrors the case-status
- * lifecycle in `lib/case-status.ts` — extend both files together when
- * adding statuses so the header stays in sync.
+ * The primary action comes from `deriveCasePrimaryAction` (the ONE
+ * source shared with the rail hint, the dashboard column, and the
+ * Stage-13 action card) — this component no longer keeps its own
+ * status→action map. In-progress (extracting/building) and terminal
+ * (filed/archived) statuses resolve to `null`, so only the `⇣ Package`
+ * deep-link shows; the action card surfaces the in-progress/blocked
+ * detail.
  */
 
 export type CaseHeaderActionsProps = {
   caseId: string;
-  status: string;
+  status: CaseStatus;
 };
 
 export function CaseHeaderActions(
   props: CaseHeaderActionsProps,
 ): React.ReactElement {
-  const primary = primaryActionFor(props.status, props.caseId);
+  const primary = deriveCasePrimaryAction(props.status, props.caseId);
   return (
     <div className="flex items-center gap-2">
       <Link
@@ -50,35 +47,9 @@ export function CaseHeaderActions(
             background: "var(--ink)",
           }}
         >
-          {primary.label}
+          {primary.label} →
         </Link>
       ) : null}
     </div>
   );
-}
-
-function primaryActionFor(
-  status: string,
-  caseId: string,
-): { label: string; href: string } | null {
-  switch (status) {
-    case "intake":
-    case "documents_pending":
-    case "extracting":
-    case "ready_to_build":
-    case "build_failed":
-      return { label: "Build →", href: APP_ROUTES.caseBuild(caseId) };
-    case "building":
-    case "draft_ready":
-    case "in_review":
-    case "needs_revision":
-    case "approved":
-      return { label: "Review drafts →", href: APP_ROUTES.caseOutputs(caseId) };
-    case "delivered":
-      return { label: "Mark as filed →", href: APP_ROUTES.casePackage(caseId) };
-    case "filed":
-      return { label: "View package", href: APP_ROUTES.casePackage(caseId) };
-    default:
-      return null;
-  }
 }

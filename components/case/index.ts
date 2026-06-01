@@ -7,6 +7,12 @@ export {
   type CaseHeaderActionsProps,
 } from "./CaseHeaderActions";
 export { CaseStageRail, type CaseStageRailProps } from "./CaseStageRail";
+export { CaseActionBar, type CaseActionBarProps } from "./CaseActionBar";
+export { CaseNextAction, type CaseNextActionProps } from "./CaseNextAction";
+export {
+  CaseSummaryCard,
+  type CaseSummaryCardProps,
+} from "./CaseSummaryCard";
 export {
   CriteriaCoverageCard,
   type CriteriaCoverageCardProps,

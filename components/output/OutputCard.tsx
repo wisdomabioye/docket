@@ -1,7 +1,12 @@
 import Link from "next/link";
 import type { ReactElement } from "react";
 import { Badge } from "@/components/ui";
-import { OUTPUT_TYPE_DISPLAY, readRecommenderName } from "@/lib/output-types";
+import {
+  isStructuredOutputType,
+  OUTPUT_TYPE_DISPLAY,
+  readRecommenderName,
+} from "@/lib/output-types";
+import { toSnippet } from "@/lib/snippet";
 import { APP_ROUTES } from "@/config";
 import type { OutputType } from "@/server/services/computer/types";
 
@@ -30,6 +35,8 @@ export type OutputCardProps = {
     metadata: unknown;
     attorneyApproved: boolean;
     contentLength: number;
+    /** Bounded prose prefix for the preview (markdown, ≤300 chars). */
+    snippetSource: string;
     updatedAt: Date;
   };
   /** 1-based sequence label rendered top-left ("01", "02", …). The grid
@@ -44,6 +51,12 @@ export function OutputCard(props: OutputCardProps): ReactElement {
     outputType: props.item.outputType,
     metadata: props.item.metadata,
   });
+  // Structured types (e.g. exhibit_index) store JSON in `content` — a raw
+  // prefix would be JSON noise, so no prose preview for them.
+  const snippet =
+    isStructuredOutputType(props.item.outputType) || !props.item.snippetSource
+      ? null
+      : toSnippet(props.item.snippetSource);
 
   return (
     <Link
@@ -77,6 +90,15 @@ export function OutputCard(props: OutputCardProps): ReactElement {
       >
         {subtitle ?? display}
       </h3>
+
+      {snippet ? (
+        <p
+          className="line-clamp-2 text-[12px] italic leading-snug"
+          style={{ color: "var(--ink-muted)" }}
+        >
+          {snippet}
+        </p>
+      ) : null}
 
       <div className="flex-1" />
 

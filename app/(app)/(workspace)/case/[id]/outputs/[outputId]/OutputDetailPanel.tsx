@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { Badge } from "@/components/ui";
 import {
@@ -19,6 +19,8 @@ import { trpc } from "@/lib/trpc/react";
 import { APP_ROUTES } from "@/config";
 import type { OutputType } from "@/server/services/computer/types";
 import { isStructuredOutputType } from "@/lib/output-types";
+import { computeReviewQueue } from "@/lib/review-queue";
+import { parseHeadings } from "@/lib/toc";
 import { track } from "@/lib/analytics/client";
 
 /**
@@ -92,6 +94,25 @@ export function OutputDetailPanel(
   );
   const live = outputQuery.data ?? null;
   const liveContent = live?.content ?? props.initialOutput.content;
+
+  // Review queue (Stage 13): position + how many still need review, and
+  // where "Next unreviewed →" goes. Filtered to the SAME set the grid and
+  // the approvals tally use (current, non-deleted via `output.list`, and
+  // non-internal) so the count never disagrees with the dashboard.
+  // `staleTime: 0` + the post-approve `output.list` invalidation mean the
+  // next-unreviewed target is recomputed from fresh data at click time —
+  // no stale navigation after the approve flushes a new version id.
+  const reviewQueueQuery = trpc.output.list.useQuery(
+    { caseId: props.caseId },
+    { staleTime: 0 },
+  );
+  const reviewQueue = useMemo(
+    () =>
+      computeReviewQueue(reviewQueueQuery.data ?? [], props.initialOutput.id),
+    [reviewQueueQuery.data, props.initialOutput.id],
+  );
+  // Local const so TS narrows it to `string` inside the click handler.
+  const nextUnreviewedId = reviewQueue.nextUnreviewedId;
   // Prefer LIVE when the query has resolved — even when the live value
   // is explicitly `null` (e.g., a Save just committed and cleared the
   // draft on the server). A naive `live?.draftContent ?? initial`
@@ -121,6 +142,26 @@ export function OutputDetailPanel(
       ? liveDraft
       : liveContent;
   const currentVersion = live?.outputVersion ?? props.initialOutput.outputVersion;
+
+  // Section TOC (Stage 13 / #72) — parsed from the committed prose. The
+  // right-rail list scrolls the rendered document to the matching <h*> by
+  // text (no id injection / ProseMirror internals). Structured types have
+  // no prose headings → empty toc → the rail section is hidden.
+  const docRef = useRef<HTMLDivElement>(null);
+  const toc = useMemo(
+    () => (isStructuredType ? [] : parseHeadings(liveContent)),
+    [isStructuredType, liveContent],
+  );
+  function scrollToSection(text: string): void {
+    const root = docRef.current;
+    if (!root) return;
+    for (const h of root.querySelectorAll("h1, h2, h3")) {
+      if (h.textContent?.trim() === text) {
+        h.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+    }
+  }
   const attorneyApproved =
     live?.attorneyApproved ?? props.initialOutput.attorneyApproved;
   const approvedAt =
@@ -449,6 +490,41 @@ export function OutputDetailPanel(
             ← All outputs
           </Link>
         </div>
+        {reviewQueue.total > 0 ? (
+          <div
+            className="mt-2 flex flex-wrap items-center gap-3 text-[11px]"
+            style={{ color: "var(--ink-muted)" }}
+            data-component="output-review-queue"
+          >
+            <span className="mono uppercase tracking-wider">
+              {reviewQueue.position
+                ? `${reviewQueue.position} of ${reviewQueue.total}`
+                : `${reviewQueue.total} outputs`}
+              {" · "}
+              {reviewQueue.awaiting} awaiting review
+            </span>
+            {nextUnreviewedId ? (
+              <button
+                type="button"
+                onClick={() =>
+                  router.push(APP_ROUTES.output(props.caseId, nextUnreviewedId))
+                }
+                className="font-medium underline underline-offset-2"
+                style={{ color: "var(--accent, var(--ink))" }}
+              >
+                Next unreviewed →
+              </button>
+            ) : reviewQueue.awaiting === 0 ? (
+              <Link
+                href={APP_ROUTES.casePackage(props.caseId)}
+                className="font-medium underline underline-offset-2"
+                style={{ color: "var(--accent, var(--ink))" }}
+              >
+                All approved — Package for filing →
+              </Link>
+            ) : null}
+          </div>
+        ) : null}
       </header>
 
       <div
@@ -582,6 +658,7 @@ export function OutputDetailPanel(
              *  the toolbar (TiptapEditor's first sibling) sits flush at
              *  the top of the card, no nested chrome. */}
             <div
+              ref={docRef}
               className="mx-auto my-4 max-w-[640px] overflow-hidden rounded-sm border bg-white"
               style={{
                 borderColor: "var(--border)",
@@ -645,6 +722,29 @@ export function OutputDetailPanel(
               </RailKv>
             ) : null}
           </section>
+
+          {toc.length > 0 ? (
+            <section className="space-y-2">
+              <RailSectionHeader>Sections</RailSectionHeader>
+              <ul className="space-y-1">
+                {toc.map((entry, i) => (
+                  <li key={`${i}-${entry.text}`}>
+                    <button
+                      type="button"
+                      onClick={() => scrollToSection(entry.text)}
+                      className="block w-full truncate text-left text-xs hover:underline"
+                      style={{
+                        paddingLeft: `${(entry.level - 1) * 10}px`,
+                        color: "var(--ink-soft, var(--ink))",
+                      }}
+                    >
+                      {entry.text}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
 
           <section className="space-y-2">
             <RailSectionHeader>Actions</RailSectionHeader>

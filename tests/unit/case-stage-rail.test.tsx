@@ -31,15 +31,9 @@ describe("CaseStageRail", () => {
     expect(current?.textContent).toContain("Drafting");
   });
 
-  it("shows the next-action CTA when defined", () => {
-    render(<CaseStageRail stage={deriveCaseStage({ status: "draft_ready" })} />);
-    expect(screen.getByText(/Next: Review drafts/i)).toBeInTheDocument();
-  });
-
-  it("hides the next-action CTA on no-action states (filed)", () => {
-    render(<CaseStageRail stage={deriveCaseStage({ status: "filed" })} />);
-    expect(screen.queryByText(/^Next:/i)).toBeNull();
-  });
+  // The next-action CTA moved out of the rail into `CaseActionBar` /
+  // `CaseNextAction` (Stage 13) — the rail now shows progress + sub only.
+  // CTA behavior is covered in `case-next-action.test.tsx`.
 
   it("renders the stage sub copy", () => {
     render(

@@ -1,7 +1,24 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
+
+// CaseHeader embeds the client `CaseActionBar` (Stage 13), which uses
+// `useRouter` + `trpc.case.guidance`. Stub both so these header-chrome
+// tests render without the app-router / tRPC providers. The bar returns
+// null when its query has no data, so it stays out of the assertions.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
+vi.mock("@/lib/trpc/react", () => ({
+  trpc: {
+    case: {
+      guidance: {
+        useQuery: () => ({ data: undefined, refetch: vi.fn() }),
+      },
+    },
+  },
+}));
 
 import { CaseHeader } from "@/components/case/CaseHeader";
 import { deriveCaseStage } from "@/lib/case-stage";

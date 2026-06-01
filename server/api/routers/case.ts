@@ -6,7 +6,6 @@ import {
   caseDocuments,
   caseEvents,
   caseParticipants,
-  caseRecommenders,
   cases,
   organizationMembers,
   visaTypeEnum,
@@ -26,20 +25,23 @@ import {
   markBuildStarted,
   transitionCase,
 } from "@/server/services/cases/transition";
-import { meetsBuildRequirements } from "@/server/services/cases/readiness";
+import {
+  meetsBuildRequirements,
+  meetsIntakeRequirements,
+} from "@/server/services/cases/readiness";
 import {
   reconcileCaseStatus,
   type ReconcileResult,
 } from "@/server/services/cases/reconcile-status";
 import { computeCriteriaCoverage } from "@/server/services/cases/criteria-coverage";
 import { computePreflight } from "@/server/services/cases/preflight";
+import { getCaseGuidance } from "@/server/services/cases/guidance";
 import { computeRecommenderLetterCoverage } from "@/server/services/cases/recommender-coverage";
 import { isUserCaseParticipant } from "@/server/services/cases/visibility";
 import { canEditIntake, canRequestBuild } from "@/lib/case-status";
 import {
   PER_CASE_STORAGE_BYTES,
   requiredDocsFor,
-  visaCriteriaConfig,
 } from "@/lib/visa-criteria";
 import { isSupportedVisaType } from "@/lib/constants";
 import { rateLimit } from "@/server/services/ratelimit";
@@ -415,32 +417,23 @@ export const caseRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
       }
 
-      // Visa-specific recommender minimum (e.g. O-1A: 3). Visas without
-      // an explicit minimum (`undefined`) skip this check. Only enforced
-      // while the case is still in `intake` — `transitionCase` will
-      // reject any post-intake status with the CONFLICT it deserves,
-      // and we don't want to mask that with our own BAD_REQUEST.
-      // Counted via RLS-engaged `ctx.db` so a forged caller can't
-      // bypass it; the count runs AFTER authz so a non-participant
-      // gets NOT_FOUND rather than the more revealing
-      // "recommenders missing" error.
-      const visaConfig = visaCriteriaConfig(authz.visaType);
-      if (authz.status === "intake" && visaConfig?.minRecommenders) {
-        const [{ count: recommenderCount = 0 } = { count: 0 }] = await db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(caseRecommenders)
-          .where(
-            and(
-              eq(caseRecommenders.caseId, input.caseId),
-              isNull(caseRecommenders.deletedAt),
-            ),
-          );
-        if (recommenderCount < visaConfig.minRecommenders) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `${authz.visaType} requires at least ${visaConfig.minRecommenders} recommenders before submitting intake — currently ${recommenderCount}.`,
-          });
-        }
+      // Visa-specific recommender minimum (e.g. O-1A: 3) — the same
+      // `meetsIntakeRequirements` gate the Stage-13 guidance layer reads,
+      // so what blocks submission and what the UI shows can't drift. Only
+      // gates while status is `intake` (the helper checks internally);
+      // `transitionCase` rejects post-intake statuses with its own
+      // CONFLICT, which we don't want to mask. RLS-engaged `ctx.db` runs
+      // AFTER authz, so a non-participant gets NOT_FOUND, not the more
+      // revealing "recommenders missing" error.
+      const intakeReq = await meetsIntakeRequirements({
+        db,
+        caseId: input.caseId,
+      });
+      if (!intakeReq.ok) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: intakeReq.reasons.join(" "),
+        });
       }
 
       // transitionCase writes case_events; needs owner role.
@@ -508,6 +501,33 @@ export const caseRouter = router({
           statusOk,
           reasons: [...r.reasons],
         };
+      } catch (err) {
+        if (err instanceof AppError) {
+          throw new TRPCError({
+            code: appErrorToTrpcCode(err.code),
+            message: err.message,
+          });
+        }
+        throw err;
+      }
+    }),
+
+  /**
+   * Unified next-action guidance for a single case (Stage 13): the stage,
+   * the one primary action (retargeted to a fix when blocked), the
+   * blocker checklist, and progress. Single-case only — lists use the
+   * pure `deriveCasePrimaryAction` to avoid N+1.
+   */
+  guidance: protectedProcedure
+    .input(GetInput)
+    .query(async ({ ctx, input }) => {
+      // Participant gate — admin RLS bypass would otherwise expose
+      // guidance for cases the admin is not on.
+      if (!(await isUserCaseParticipant(ctx.db, input.caseId, ctx.userId))) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "case not found" });
+      }
+      try {
+        return await getCaseGuidance({ db: ctx.db, caseId: input.caseId });
       } catch (err) {
         if (err instanceof AppError) {
           throw new TRPCError({

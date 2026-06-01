@@ -3,9 +3,11 @@ import { auth } from "@/server/auth/config";
 import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { Card, EmptyState } from "@/components/ui";
-import { CaseHeader } from "@/components/case";
+import { CaseHeader, CriteriaCoverageCard } from "@/components/case";
 import { RequestBuildButton } from "./RequestBuildButton";
 import { deriveCaseStage } from "@/lib/case-stage";
+import { visaCriteriaConfig } from "@/lib/visa-criteria";
+import { StoredBeneficiaryDataSchema } from "@/server/db/schema/zod/beneficiary";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -39,14 +41,19 @@ export default async function CaseBuildPage({
   const caseRow = await api.case.get({ caseId: id });
   if (!caseRow) notFound();
 
-  const readiness = await api.case.readiness({ caseId: id });
+  const [readiness, coverage] = await Promise.all([
+    api.case.readiness({ caseId: id }),
+    api.case.criteriaCoverage({ caseId: id }),
+  ]);
+  const config = visaCriteriaConfig(caseRow.visaType);
 
-  const beneficiary =
-    (caseRow.beneficiaryData as {
-      fullName?: string;
-      nationality?: string;
-    } | null) ?? {};
-  const meta = beneficiary.nationality ? beneficiary.nationality : undefined;
+  // Read-tolerant parse (consistent with the overview/outputs pages;
+  // handles legacy keys per open_issues #69) rather than a loose cast.
+  const parsedBeneficiary = StoredBeneficiaryDataSchema.safeParse(
+    caseRow.beneficiaryData ?? {},
+  );
+  const beneficiary = parsedBeneficiary.success ? parsedBeneficiary.data : {};
+  const meta = beneficiary.nationality;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -57,9 +64,9 @@ export default async function CaseBuildPage({
         {...(meta ? { meta } : {})}
         status={caseRow.status}
         stage={deriveCaseStage({ status: caseRow.status })}
-        // No active tab — `Build` isn't in the tab list. The header
-        // still renders the row so the user can navigate sideways.
-        current="overview"
+        // Build isn't a tab (reached via the "Build case →" CTA), so no
+        // tab is highlighted — `"build"` matches no tab key.
+        current="build"
       />
 
       <header>
@@ -105,6 +112,43 @@ export default async function CaseBuildPage({
         )}
       </Card>
 
+      {/* Primary action sits directly under the readiness check (not at the
+       *  bottom of the page) so the attorney sees it without scrolling past
+       *  the supporting detail below. */}
+      <Card title="Build" flush>
+        <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm" style={{ color: "var(--ink-soft)" }}>
+            {readiness.ok ? (
+              <>
+                Pipeline runs in the background — you can leave this page.
+                We&rsquo;ll surface progress on the Outputs tab as each draft
+                lands.
+              </>
+            ) : (
+              <>
+                Resolve the gaps above before building.{" "}
+                <span style={{ color: "var(--ink-muted)" }}>
+                  The button stays disabled until every check is green.
+                </span>
+              </>
+            )}
+          </div>
+          <RequestBuildButton caseId={caseRow.id} disabled={!readiness.ok} />
+        </div>
+      </Card>
+
+      {/* Qualitative criteria coverage (Stage 13) — reuses the Overview's
+       *  CriteriaCoverageCard so the build page shows evidence strength
+       *  (strong/moderate/weak from the evidence plan) instead of an
+       *  invented readiness score. */}
+      <CriteriaCoverageCard
+        visaType={caseRow.visaType}
+        visaSupported={coverage.visaSupported}
+        rows={coverage.rows}
+        metCount={coverage.metCount}
+        minRequired={config?.minCriteriaMet ?? 0}
+      />
+
       <Card title="What Docket will produce">
         <ul className="space-y-3 text-sm">
           {OUTPUT_PREVIEW.map((out, idx) => (
@@ -137,28 +181,6 @@ export default async function CaseBuildPage({
             </li>
           ))}
         </ul>
-      </Card>
-
-      <Card title="Build" flush>
-        <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm" style={{ color: "var(--ink-soft)" }}>
-            {readiness.ok ? (
-              <>
-                Pipeline runs in the background — you can leave this page.
-                We&rsquo;ll surface progress on the Outputs tab as each draft
-                lands.
-              </>
-            ) : (
-              <>
-                Resolve the gaps above before building.{" "}
-                <span style={{ color: "var(--ink-muted)" }}>
-                  The button stays disabled until every check is green.
-                </span>
-              </>
-            )}
-          </div>
-          <RequestBuildButton caseId={caseRow.id} disabled={!readiness.ok} />
-        </div>
       </Card>
 
       {!readiness.ok && readiness.reasons.length > 0 ? (

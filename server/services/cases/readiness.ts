@@ -1,10 +1,29 @@
 import "server-only";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { caseDocuments, cases } from "@/server/db/schema";
+import { caseDocuments, caseRecommenders, cases } from "@/server/db/schema";
 import type { Db } from "@/server/db/client";
 import { AppError } from "@/lib/errors";
 import type { CaseStatus } from "@/lib/case-status";
+import { visaCriteriaConfig } from "@/lib/visa-criteria";
 import { transitionCase } from "@/server/services/cases/transition";
+
+/**
+ * Where a readiness blocker is resolved. A *semantic* destination kind,
+ * NOT a URL — the guidance layer (`guidance.ts`) maps it to a route via
+ * `APP_ROUTES`, so these data-gates stay UI-agnostic. `null` = wait-only
+ * (nothing the attorney can do but wait, e.g. extraction in progress).
+ */
+export type BlockerResolve = "intake" | "documents" | "review" | null;
+
+/** A structured readiness blocker. `message` is the human reason;
+ *  `action` is the short fix-button label when `resolve` is non-null,
+ *  `null` for wait-only blockers. Stage 13 added this so the UI can
+ *  build a fix-action without string-matching free-text reasons. */
+export type GateBlocker = {
+  message: string;
+  resolve: BlockerResolve;
+  action: string | null;
+};
 
 /**
  * Checks whether a case has the data the build pipeline needs. Called
@@ -29,10 +48,14 @@ import { transitionCase } from "@/server/services/cases/transition";
 export type BuildRequirementResult = {
   /** Current case status — caller applies `canRequestBuild` to decide. */
   status: CaseStatus;
-} & (
-  | { ok: true; reasons: readonly [] }
-  | { ok: false; reasons: string[] }
-);
+  ok: boolean;
+  /** Structured blockers (Stage 13) — used by the guidance layer. */
+  blockers: GateBlocker[];
+  /** Flattened blocker messages — derived from `blockers`. Kept for
+   *  existing consumers (`case.requestBuild` error string, the build-page
+   *  readiness checklist). Empty when `ok`. */
+  reasons: string[];
+};
 
 export async function meetsBuildRequirements(args: {
   /** Pass the RLS-engaged tx (`ctx.db`) so unauthorized callers see a
@@ -67,27 +90,100 @@ export async function meetsBuildRequirements(args: {
       ),
     );
 
-  const reasons: string[] = [];
+  const blockers: GateBlocker[] = [];
   const fullName = caseRow.beneficiaryData?.fullName?.trim() ?? "";
   if (!fullName) {
-    reasons.push("Beneficiary full name is required.");
+    blockers.push({
+      message: "Beneficiary full name is required.",
+      resolve: "intake",
+      action: "Complete intake",
+    });
   }
   const extracted = docCounts?.extracted ?? 0;
   const pendingExtraction = docCounts?.pendingExtraction ?? 0;
   if (extracted === 0) {
-    reasons.push(
-      "Upload at least one document with extractable text (CV, publications, evidence).",
-    );
+    blockers.push({
+      message:
+        "Upload at least one document with extractable text (CV, publications, evidence).",
+      resolve: "documents",
+      action: "Upload a document",
+    });
   }
   if (pendingExtraction > 0) {
-    reasons.push(
-      `${pendingExtraction} document${pendingExtraction === 1 ? " is" : "s are"} still being processed — wait for extraction to finish before building.`,
-    );
+    // Wait-only: extraction runs async; nothing for the attorney to do
+    // but wait — so `resolve`/`action` are null (no fix button).
+    blockers.push({
+      message: `${pendingExtraction} document${pendingExtraction === 1 ? " is" : "s are"} still being processed — wait for extraction to finish before building.`,
+      resolve: null,
+      action: null,
+    });
   }
 
-  return reasons.length === 0
-    ? { ok: true, status: caseRow.status, reasons: [] }
-    : { ok: false, status: caseRow.status, reasons };
+  return {
+    status: caseRow.status,
+    ok: blockers.length === 0,
+    blockers,
+    reasons: blockers.map((b) => b.message),
+  };
+}
+
+export type IntakeRequirementResult = {
+  status: CaseStatus;
+  ok: boolean;
+  blockers: GateBlocker[];
+  reasons: string[];
+};
+
+/**
+ * Intake-submission gate: the visa-specific recommender minimum that
+ * `case.completeIntake` enforces before `intake → documents_pending`.
+ * Extracted from the mutation so the guidance layer and the mutation
+ * share ONE gate — no drift between what blocks submission and what the
+ * UI surfaces. Only gates while status is `intake`; `ok` elsewhere.
+ *
+ * Pass the RLS-engaged tx so a non-participant gets NOT_FOUND, not a
+ * content-leak via the blocker message.
+ */
+export async function meetsIntakeRequirements(args: {
+  db: Db;
+  caseId: string;
+}): Promise<IntakeRequirementResult> {
+  const [caseRow] = await args.db
+    .select({ status: cases.status, visaType: cases.visaType })
+    .from(cases)
+    .where(and(eq(cases.id, args.caseId), isNull(cases.deletedAt)))
+    .limit(1);
+  if (!caseRow) {
+    throw new AppError("NOT_FOUND", `case ${args.caseId} not found`);
+  }
+
+  const blockers: GateBlocker[] = [];
+  const config = visaCriteriaConfig(caseRow.visaType);
+  if (caseRow.status === "intake" && config?.minRecommenders) {
+    const [{ count: recommenderCount = 0 } = { count: 0 }] = await args.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(caseRecommenders)
+      .where(
+        and(
+          eq(caseRecommenders.caseId, args.caseId),
+          isNull(caseRecommenders.deletedAt),
+        ),
+      );
+    if (recommenderCount < config.minRecommenders) {
+      blockers.push({
+        message: `${caseRow.visaType} requires at least ${config.minRecommenders} recommenders before submitting intake — currently ${recommenderCount}.`,
+        resolve: "intake",
+        action: "Add recommenders",
+      });
+    }
+  }
+
+  return {
+    status: caseRow.status,
+    ok: blockers.length === 0,
+    blockers,
+    reasons: blockers.map((b) => b.message),
+  };
 }
 
 /**

@@ -6,9 +6,9 @@ import type { CaseStage } from "@/lib/case-stage";
  * every case/[id]/* page. Mirrors the dashboard sidebar's pipeline
  * vocabulary (`PIPELINE_KEYS`): intake → documents → drafting →
  * review → filed. The active step is bold-inked, completed steps are
- * inked, future steps are muted. Sub-line under the rail surfaces the
- * stage's `sub` copy + `nextAction` CTA so new attorneys see "what
- * comes next" without having to guess.
+ * inked, future steps are muted. The sub-line surfaces the stage's `sub`
+ * copy only — the next-action CTA moved to the adjacent `CaseActionBar`
+ * (Stage 13) so there's a single actionable surface.
  *
  * Pure presentational — derives nothing. The page server-component
  * computes `deriveCaseStage(...)` (with approvals data if available)
@@ -70,19 +70,11 @@ export function CaseStageRail(props: CaseStageRailProps): React.ReactElement {
           );
         })}
       </ol>
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <p className="text-sm" style={{ color: "var(--ink-muted)" }}>
-          {props.stage.sub}
-        </p>
-        {props.stage.nextAction ? (
-          <p
-            className="mono text-[11px] uppercase tracking-wider"
-            style={{ color: "var(--ink)" }}
-          >
-            Next: {props.stage.nextAction}
-          </p>
-        ) : null}
-      </div>
+      {/* Sub-copy only. The next-action CTA lives in the adjacent
+       *  `CaseActionBar` (Stage 13) so there's one actionable surface. */}
+      <p className="text-sm" style={{ color: "var(--ink-muted)" }}>
+        {props.stage.sub}
+      </p>
     </div>
   );
 }

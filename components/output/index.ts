@@ -5,6 +5,11 @@
 export { ApprovalActions } from "./ApprovalActions";
 export { DisclaimerBanner } from "./DisclaimerBanner";
 export { OutputCard } from "./OutputCard";
+export {
+  BundleStats,
+  type BundleStat,
+  type BundleStatsProps,
+} from "./BundleStats";
 export { RegeneratePanel } from "./RegeneratePanel";
 export {
   TiptapEditor,
