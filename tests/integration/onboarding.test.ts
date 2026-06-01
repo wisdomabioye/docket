@@ -1,5 +1,13 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { eq, sql } from "drizzle-orm";
 import {
   attorneyProfiles,
@@ -8,6 +16,24 @@ import {
   userRoles,
   users,
 } from "@/server/db/schema";
+
+// `onSignIn` fires a fire-and-forget welcome-email event after the
+// provisioning tx commits; these tests assert only the DB side effects,
+// so stub the client to keep the suite hermetic (no Inngest dev server
+// on :8288 required). Matches the idiom in output-router.test.ts et al.
+const sendMock = vi.hoisted(() =>
+  vi.fn(async () => ({ ids: ["evt-test-id"] })),
+);
+vi.mock("@/server/jobs/client", async () => {
+  const actual = await vi.importActual<typeof import("@/server/jobs/client")>(
+    "@/server/jobs/client",
+  );
+  return {
+    ...actual,
+    inngest: { ...actual.inngest, send: sendMock },
+  };
+});
+
 import { onSignIn } from "@/server/auth/onboarding";
 import { closeTestDb, getTestDb, type TestDb } from "../helpers/db";
 

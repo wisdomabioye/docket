@@ -6,6 +6,7 @@ import {
   DocumentChecklistSchema,
   EvidencePlanSchema,
   OutputMetadataSchema,
+  StoredBeneficiaryDataSchema,
 } from "@/server/db/schema/zod";
 
 /**
@@ -56,6 +57,65 @@ describe("BeneficiaryDataSchema", () => {
       const r = BeneficiaryDataSchema.safeParse({ fullName });
       expect(r.success, `expected accept: ${fullName}`).toBe(true);
     }
+  });
+});
+
+describe("StoredBeneficiaryDataSchema (read-tolerant variant)", () => {
+  // Guards open_issues #69: a stored row carrying a since-removed key
+  // must still load instead of failing the parse and blanking the form.
+  it("strips a legacy `currentLocation` key instead of failing", () => {
+    const r = StoredBeneficiaryDataSchema.safeParse({
+      fullName: "Test Beneficiary",
+      nationality: "Canada",
+      currentLocation: "London, UK", // removed in the country-Combobox migration
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data).toEqual({
+        fullName: "Test Beneficiary",
+        nationality: "Canada",
+      });
+      expect(r.data).not.toHaveProperty("currentLocation");
+    }
+  });
+
+  it("strips a legacy `recommendersCount` key (moved to case_recommenders)", () => {
+    const r = StoredBeneficiaryDataSchema.safeParse({
+      fullName: "Test Beneficiary",
+      recommendersCount: 3,
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).not.toHaveProperty("recommendersCount");
+  });
+
+  it("strips any future unknown key (whole-class fix, not just known keys)", () => {
+    const r = StoredBeneficiaryDataSchema.safeParse({
+      fullName: "Test Beneficiary",
+      someFieldRemovedInPhase2: "x",
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).not.toHaveProperty("someFieldRemovedInPhase2");
+  });
+
+  it("still enforces field-value contracts on known keys (rejects digit name)", () => {
+    const r = StoredBeneficiaryDataSchema.safeParse({
+      fullName: "Test Beneficiary 001",
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("still enforces angle-bracket rejection on known keys", () => {
+    const r = StoredBeneficiaryDataSchema.safeParse({
+      occupation: "<script>alert(1)</script>",
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts a clean partial object unchanged", () => {
+    const input = { fullName: "Maria Gonzalez", occupation: "Engineer" };
+    const r = StoredBeneficiaryDataSchema.safeParse(input);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).toEqual(input);
   });
 });
 

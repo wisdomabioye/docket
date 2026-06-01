@@ -18,6 +18,21 @@ vi.mock("@/server/auth/slug", async (importOriginal) => {
   return { ...real, randomSuffix: suffixMock };
 });
 
+// Stub the welcome-email send so the suite stays hermetic (no Inngest dev
+// server on :8288). This test asserts org/membership state, not delivery.
+const sendMock = vi.hoisted(() =>
+  vi.fn(async () => ({ ids: ["evt-test-id"] })),
+);
+vi.mock("@/server/jobs/client", async () => {
+  const actual = await vi.importActual<typeof import("@/server/jobs/client")>(
+    "@/server/jobs/client",
+  );
+  return {
+    ...actual,
+    inngest: { ...actual.inngest, send: sendMock },
+  };
+});
+
 import { onSignIn } from "@/server/auth/onboarding";
 
 /**

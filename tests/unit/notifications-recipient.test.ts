@@ -43,6 +43,20 @@ describe("buildCaseLabel", () => {
     ).toBe("Untitled case · O-1A");
   });
 
+  it("keeps the real name when a stored blob carries a legacy key (#69)", () => {
+    // A row written before `currentLocation` was removed must not collapse
+    // to "Untitled case" — the read-tolerant schema strips the dead key.
+    expect(
+      recipient.buildCaseLabel({
+        beneficiaryData: {
+          fullName: "Maria Gonzalez",
+          currentLocation: "London, UK",
+        },
+        visaType: "O-1A",
+      }),
+    ).toBe("Maria Gonzalez · O-1A");
+  });
+
   it("trims whitespace from fullName", () => {
     expect(
       recipient.buildCaseLabel({

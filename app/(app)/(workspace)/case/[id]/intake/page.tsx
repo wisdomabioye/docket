@@ -4,7 +4,7 @@ import { api } from "@/lib/trpc/server";
 import { APP_ROUTES, pageTitle } from "@/config";
 import { CaseHeader, CaseHeaderActions, IntakeWizard } from "@/components/case";
 import {
-  BeneficiaryDataSchema,
+  StoredBeneficiaryDataSchema,
   type BeneficiaryData,
 } from "@/server/db/schema/zod/beneficiary";
 import { deriveCaseStage } from "@/lib/case-stage";
@@ -43,11 +43,15 @@ export default async function IntakePage({
   if (!data) notFound();
 
   const locked = !canEditIntake(data.status);
-  // Parse the persisted blob through the schema so the wizard receives
-  // a typed `BeneficiaryData`. Unknown / extra keys are stripped by
-  // `.strict()`; an unparseable blob falls back to empty (the wizard
-  // still renders so the attorney can re-fill).
-  const parsed = BeneficiaryDataSchema.safeParse(data.beneficiaryData ?? {});
+  // Parse the persisted blob through the read-tolerant schema: unknown /
+  // since-removed keys (e.g. legacy `currentLocation`) are stripped so a
+  // pre-existing row still loads populated. The strict schema is for the
+  // write boundary, not stored reads — strict here would fail the parse
+  // and blank the attorney's form (open_issues #69). A genuinely
+  // unparseable blob still falls back to empty so the wizard renders.
+  const parsed = StoredBeneficiaryDataSchema.safeParse(
+    data.beneficiaryData ?? {},
+  );
   const initial: BeneficiaryData = parsed.success ? parsed.data : {};
   const beneficiary = initial;
   const meta = beneficiary.nationality ? beneficiary.nationality : undefined;

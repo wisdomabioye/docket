@@ -12,7 +12,10 @@ import {
   visaTypeEnum,
   caseStatusEnum,
 } from "@/server/db/schema";
-import { BeneficiaryDataSchema } from "@/server/db/schema/zod";
+import {
+  BeneficiaryDataSchema,
+  StoredBeneficiaryDataSchema,
+} from "@/server/db/schema/zod";
 import { db as ownerDb, type Db } from "@/server/db/client";
 import {
   attorneyProcedure,
@@ -343,10 +346,17 @@ export const caseRouter = router({
         });
       }
 
-      // Merge: existing jsonb + patch (patch wins). `BeneficiaryDataSchema`
-      // is `.partial().strict()` so unknown fields would have already
-      // been rejected at the boundary.
-      const merged = { ...(row.beneficiaryData ?? {}), ...input.patch };
+      // Merge: existing jsonb + patch (patch wins). The patch arrived
+      // through the strict `BeneficiaryDataSchema` boundary, so it carries
+      // no unknown keys. The STORED row, however, may still hold a legacy
+      // key (`currentLocation`, `recommendersCount`); strip it through the
+      // read-tolerant schema before merging so each save self-heals the
+      // blob — no data migration needed (open_issues #69).
+      const existing = StoredBeneficiaryDataSchema.safeParse(
+        row.beneficiaryData ?? {},
+      );
+      const base = existing.success ? existing.data : {};
+      const merged = { ...base, ...input.patch };
 
       // Mutations on owner connection: case_events has no participant
       // INSERT policy, so user-scoped writes would fail RLS. Authz

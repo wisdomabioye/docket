@@ -432,6 +432,46 @@ describe("case.updateBeneficiary", () => {
     });
   });
 
+  it("self-heals a legacy key out of the stored blob on save (#69)", async (ctx) => {
+    const db = gate(ctx);
+    const { id } = await callAs(ALICE).case.create({
+      visaType: "O-1A",
+      beneficiaryData: { fullName: "Original Name" },
+    });
+    // Inject a since-removed key directly, bypassing the strict create
+    // path, to simulate a row written before the country-Combobox
+    // migration. `as never` mirrors the unknown-field seed idiom below.
+    await db
+      .update(cases)
+      .set({
+        beneficiaryData: {
+          fullName: "Original Name",
+          currentLocation: "London, UK",
+        } as never,
+      })
+      .where(eq(cases.id, id));
+    const [seeded] = await db
+      .select({ rev: cases.rowRevision })
+      .from(cases)
+      .where(eq(cases.id, id));
+
+    await callAs(ALICE).case.updateBeneficiary({
+      caseId: id,
+      patch: { occupation: "Engineer" },
+      expectedRowRevision: seeded!.rev,
+    });
+
+    const [after] = await db
+      .select({ data: cases.beneficiaryData })
+      .from(cases)
+      .where(eq(cases.id, id));
+    expect(after?.data).toEqual({
+      fullName: "Original Name",
+      occupation: "Engineer",
+    });
+    expect(after?.data).not.toHaveProperty("currentLocation");
+  });
+
   it("CONFLICT on stale rowRevision (optimistic concurrency)", async (ctx) => {
     gate(ctx);
     const { id } = await callAs(ALICE).case.create({ visaType: "O-1A" });

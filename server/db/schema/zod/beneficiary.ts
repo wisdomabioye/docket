@@ -46,9 +46,10 @@ export const BeneficiaryDataSchema = z
     // Filing target section. Recommenders moved out of beneficiary_data:
     // they now live in `case_recommenders` (one row per letter-writer)
     // and the count derives from that table — see `_context.ts` and
-    // `IntakeWizard`'s Recommenders section. `.strict()` would reject
-    // a legacy `recommendersCount` field on read; the rollout plan is a
-    // full DB wipe before re-test, so no migration is needed.
+    // `IntakeWizard`'s Recommenders section. A legacy `recommendersCount`
+    // (or `currentLocation`) on an old row trips `.strict()` on READ —
+    // that's why reads go through `StoredBeneficiaryDataSchema` below,
+    // which strips unknown keys instead of failing. See open_issues #69.
     targetFilingDate: z.iso.date().optional(),
 
     // Contact + narrative. `notes` stays free-form by design — it's
@@ -61,3 +62,21 @@ export const BeneficiaryDataSchema = z
   .strict();
 
 export type BeneficiaryData = z.infer<typeof BeneficiaryDataSchema>;
+
+/**
+ * Read-tolerant variant for parsing blobs already PERSISTED in
+ * `cases.beneficiary_data`. Identical field set (derived via `.strip()`
+ * — no duplication, same inferred type), but unknown keys are dropped
+ * instead of failing the parse.
+ *
+ * Use this on every READ of stored data; use the strict
+ * `BeneficiaryDataSchema` on every WRITE/input boundary (client patches)
+ * where an unexpected key is a real validation error to reject.
+ *
+ * Why two schemas: a strict read silently fell back to `{}` when a row
+ * carried a since-removed key (`currentLocation`, `recommendersCount`),
+ * blanking the attorney's intake form and the email case label. Stripping
+ * on read neutralizes the whole field-removal bug class, not just the two
+ * known keys. See open_issues #69.
+ */
+export const StoredBeneficiaryDataSchema = BeneficiaryDataSchema.strip();

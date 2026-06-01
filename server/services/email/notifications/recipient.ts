@@ -17,7 +17,7 @@ import { users } from "@/server/db/schema/auth";
 import { env } from "@/config/env";
 import { APP_ROUTES } from "@/config/app.routes";
 import {
-  BeneficiaryDataSchema,
+  StoredBeneficiaryDataSchema,
   type BeneficiaryData,
 } from "@/server/db/schema/zod/beneficiary";
 import { OUTPUT_TYPE_DISPLAY } from "@/lib/output-types";
@@ -45,7 +45,9 @@ export function buildCaseLabel(args: {
 
 function parseBeneficiary(raw: unknown): BeneficiaryData | null {
   if (!raw) return null;
-  const result = BeneficiaryDataSchema.safeParse(raw);
+  // Read-tolerant: a legacy key on a stored row must not collapse the
+  // label to "Untitled case" (open_issues #69).
+  const result = StoredBeneficiaryDataSchema.safeParse(raw);
   return result.success ? result.data : null;
 }
 

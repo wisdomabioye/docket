@@ -35,20 +35,31 @@ refactor — wait for the reproducible report.
 
 ### #69 — `currentLocation` removal blanks any pre-existing beneficiary blobs
 
-Date: 2026-05-14.
-`BeneficiaryDataSchema` dropped `currentLocation` and added
-`currentCountry` + `currentCity` (intake now uses the country
-Combobox). Schema stays `.strict()`, so any DB row still carrying
-`currentLocation` will fail `safeParse` on the intake page, and the
-wizard silently falls back to `{}` — clearing every other field for
-the attorney. We honored the schema-file convention ("full DB wipe
-before re-test, so no migration is needed") but the next deploy must
-either wipe `cases.beneficiary_data` or ship a one-shot SQL migration
-that drops the old key.
-**How to apply:** before the next staging/prod deploy that ships this
-change, run a migration that strips `currentLocation` from the JSONB
-on every `cases` row, OR confirm the DB has been wiped since the
-field was last written.
+Status: Resolved 2026-06-01.
+`BeneficiaryDataSchema` dropped `currentLocation`/`recommendersCount`
+and added `currentCountry` + `currentCity`. The schema stays
+`.strict()`, so any DB row still carrying a removed key failed
+`safeParse` on READ — and both read sites (`intake/page.tsx`,
+`notifications/recipient.ts`) silently fell back to `{}`/`null`,
+blanking the attorney's intake form and the email case label.
+
+Root cause was one schema doing two opposite jobs: strict is correct
+for the WRITE/input boundary (reject unexpected client keys) but
+destructive on stored READS (own data with legacy keys).
+
+Fix (no SQL migration needed — production data self-heals):
+- Added `StoredBeneficiaryDataSchema = BeneficiaryDataSchema.strip()`
+  in `server/db/schema/zod/beneficiary.ts` — same field set, drops
+  unknown keys instead of failing. Kills the whole field-removal bug
+  class, not just the two known keys.
+- Read sites use the tolerant schema; input sites keep `.strict()`.
+- `case.updateBeneficiary` parse-strips the existing row before the
+  merge, so every save drops dead keys → blobs converge to clean as
+  attorneys edit.
+Tests: `tests/unit/zod-schemas.test.ts` (strip behavior + value
+contracts still enforced), `tests/unit/notifications-recipient.test.ts`
+(legacy key still yields the real name), `tests/integration/case-router.test.ts`
+(self-heal on save).
 
 ### #68 — Sweep status-equality checks + relocate route-scoped status arrays
 

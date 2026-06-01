@@ -41,6 +41,22 @@ vi.mock("@/server/auth/config", () => ({
   auth: vi.fn(() => Promise.resolve(null)),
 }));
 
+// Stub the welcome-email send so the suite stays hermetic (no Inngest dev
+// server on :8288). These tests assert role/profile/audit state, not
+// event delivery.
+const sendMock = vi.hoisted(() =>
+  vi.fn(async () => ({ ids: ["evt-test-id"] })),
+);
+vi.mock("@/server/jobs/client", async () => {
+  const actual = await vi.importActual<typeof import("@/server/jobs/client")>(
+    "@/server/jobs/client",
+  );
+  return {
+    ...actual,
+    inngest: { ...actual.inngest, send: sendMock },
+  };
+});
+
 import { isInvitePermitted } from "@/server/auth/invite-gate";
 import { onSignIn } from "@/server/auth/onboarding";
 import {
